@@ -64,7 +64,7 @@ app.use('/api/purchases', purchases);
 app.use('/api/invoices', invoices);
 
 // 404 handler for API routes
-app.use('*', (req, res) => {
+app.use((req, res) => {
     res.status(404).json({
         success: false,
         message: `Route ${req.originalUrl} not found`
