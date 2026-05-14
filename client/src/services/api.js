@@ -1,13 +1,22 @@
 import axios from 'axios';
 import { offlineDB } from './offlineDB';
 
-// Create axios instance with base URL as empty so we can use full relative paths
+const BASE_URL = import.meta.env.VITE_API_URL || '';
+
+// Create axios instance
 const api = axios.create({
-    baseURL: '', 
+    baseURL: BASE_URL, 
     headers: {
         'Content-Type': 'application/json'
     }
 });
+
+// Helper to get full API URL for redirects
+export const getFullApiUrl = (path) => {
+    const base = BASE_URL.endsWith('/') ? BASE_URL.slice(0, -1) : BASE_URL;
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${cleanPath}`;
+};
 
 // Set the AUTH token for any request
 api.interceptors.request.use((config) => {
