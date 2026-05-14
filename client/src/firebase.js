@@ -25,12 +25,8 @@ export const provider = new GoogleAuthProvider();
 
 export const signInWithGoogle = async () => {
     try {
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        if (isMobile) {
-            await signInWithRedirect(auth, provider);
-        } else {
-            return await signInWithPopup(auth, provider);
-        }
+        // Force signInWithPopup as requested for production stability
+        return await signInWithPopup(auth, provider);
     } catch (error) {
         console.error("Google Login Error:", error);
         throw error;

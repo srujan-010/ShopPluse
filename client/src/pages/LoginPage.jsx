@@ -28,7 +28,13 @@ const LoginPage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    const { login: authLogin } = useAuth();
+    const { login: authLogin, user } = useAuth();
+    
+    React.useEffect(() => {
+        if (user) {
+            navigate('/shops');
+        }
+    }, [user, navigate]);
 
     const handleGoogleLogin = async () => {
         setLoading(true);
