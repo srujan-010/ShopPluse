@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { offlineDB } from '../services/offlineDB';
-import axios from 'axios';
+import api from '../services/api';
 
 const SyncContext = createContext();
 
@@ -33,7 +33,7 @@ export const SyncProvider = ({ children }) => {
 
             for (const item of queue) {
                 try {
-                    await axios({
+                    await api({
                         method: item.method,
                         url: item.url,
                         data: item.data,

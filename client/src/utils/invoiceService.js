@@ -1,8 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import axios from 'axios';
+import api from '../services/api';
 
-const API_URL = '/api';
 
 /**
  * Professional Invoice Service
@@ -212,7 +211,7 @@ export const invoiceService = {
                 reader.readAsDataURL(pdfBlob);
             });
 
-            const uploadRes = await axios.post(`${API_URL}/invoices/upload`, {
+            const uploadRes = await api.post('/api/invoices/upload', {
                 pdfBase64,
                 filename: fileName
             });
