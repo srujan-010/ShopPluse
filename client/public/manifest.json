@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "short_name": "ShopPulse",
+  "name": "ShopPulse Management App",
+  "description": "Premium Offline-First Shop Management System",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "theme_color": "#1E6BFF",
+  "background_color": "#F6F8FC",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
