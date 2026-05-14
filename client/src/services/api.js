@@ -1,7 +1,21 @@
 import axios from 'axios';
 import { offlineDB } from './offlineDB';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://shoppluse.onrender.com';
+const getBaseUrl = () => {
+    // 1. Check for environment variable
+    if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+    
+    // 2. Default to Render for production if on netlify
+    if (typeof window !== 'undefined' && window.location.hostname.includes('netlify.app')) {
+        return 'https://shoppluse.onrender.com';
+    }
+    
+    // 3. Fallback to empty string for local proxying
+    return '';
+};
+
+const BASE_URL = getBaseUrl();
+console.log('ShopPulse API Base URL:', BASE_URL);
 
 // Create axios instance
 const api = axios.create({
