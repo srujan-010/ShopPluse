@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { offlineDB } from './offlineDB';
 
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://shoppluse.onrender.com';
 
 // Create axios instance
 const api = axios.create({
