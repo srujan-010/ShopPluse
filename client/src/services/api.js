@@ -152,6 +152,7 @@ export const productService = {
     update: (id, data) => api.put(`/api/products/${id}`, data),
     delete: (id) => api.delete(`/api/products/${id}`),
     getRestockHistory: (id) => api.get(`/api/products/${id}/restock-history`),
+    getInventoryHistory: (id) => api.get(`/api/products/${id}/inventory-history`),
     restock: (id, data) => api.post(`/api/products/${id}/restock`, data)
 };
 
@@ -177,6 +178,12 @@ export const purchaseService = {
     getPurchase: (id) => api.get(`/api/purchases/${id}`),
     create: (data) => api.post('/api/purchases', data),
     addPayment: (id, paymentData) => api.post(`/api/purchases/${id}/payment`, paymentData)
+};
+
+export const govSaleService = {
+    getAll: (shopId) => api.get(`/api/gov-sales${shopId ? `?shop=${shopId}` : ''}`),
+    getSale: (id) => api.get(`/api/gov-sales/${id}`),
+    getStats: (shopId) => api.get(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`)
 };
 
 export default api;

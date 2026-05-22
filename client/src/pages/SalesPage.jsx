@@ -217,30 +217,32 @@ const SalesPage = () => {
 
                     {/* Desktop Log Table */}
                     <div className="desktop-only-ledger table-wrapper-v2">
-                        <table className="ledger-table-v2">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Bill No</th>
-                                    <th>Customer</th>
-                                    <th>Products</th>
-                                    <th>Method</th>
-                                    <th>Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredSales.map((sale) => (
-                                    <tr key={sale._id} className="ledger-row-v2" onClick={() => setSelectedSale(sale)}>
-                                        <td>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                                        <td className="td-bold">#{sale._id.slice(-6).toUpperCase()}</td>
-                                        <td className="td-bold">{sale.customerName || 'Walk-in Customer'}</td>
-                                        <td>{(sale.items || []).map(i => `${i.productName} (${i.soldQtyEntered || i.quantity} ${i.soldUnit || i.unit || 'Piece'})`).join(', ')}</td>
-                                        <td><span className={`sc-method-v2 ${sale.paymentMethod.toLowerCase()}`}>{sale.paymentMethod}</span></td>
-                                        <td className="td-bold-amt">₹{(sale.totalAmount || 0).toLocaleString()}</td>
+                        <div className="table-responsive-wrapper">
+                            <table className="ledger-table-v2">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Bill No</th>
+                                        <th>Customer</th>
+                                        <th>Products</th>
+                                        <th>Method</th>
+                                        <th>Total</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {filteredSales.map((sale) => (
+                                        <tr key={sale._id} className="ledger-row-v2" onClick={() => setSelectedSale(sale)}>
+                                            <td>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                                            <td className="td-bold">#{sale._id.slice(-6).toUpperCase()}</td>
+                                            <td className="td-bold">{sale.customerName || 'Walk-in Customer'}</td>
+                                            <td>{(sale.items || []).map(i => `${i.productName} (${i.soldQtyEntered || i.quantity} ${i.soldUnit || i.unit || 'Piece'})`).join(', ')}</td>
+                                            <td><span className={`sc-method-v2 ${sale.paymentMethod.toLowerCase()}`}>{sale.paymentMethod}</span></td>
+                                            <td className="td-bold-amt">₹{(sale.totalAmount || 0).toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </>
             )}

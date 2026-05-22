@@ -47,6 +47,11 @@ const productSchema = new mongoose.Schema({
         min: 0,
         max: 10000000
     },
+    governmentPrice: {
+        type: Number,
+        min: 0,
+        max: 10000000
+    },
     lowStockLimit: {
         type: Number,
         default: 5,

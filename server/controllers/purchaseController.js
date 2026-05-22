@@ -1,6 +1,7 @@
 const Purchase = require('../models/Purchase');
 const Product = require('../models/Product');
 const RestockHistory = require('../models/RestockHistory');
+const InventoryHistory = require('../models/InventoryHistory');
 const mongoose = require('mongoose');
 
 // @desc    Get all purchases for owner/shop
@@ -92,6 +93,22 @@ exports.createPurchase = async (req, res) => {
                         shop,
                         owner: ownerId,
                         date: date || new Date()
+                    }], { session });
+
+                    // Create Inventory History entry
+                    await InventoryHistory.create([{
+                        productId: product._id,
+                        productName: product.name,
+                        actionType: 'PURCHASE_ENTRY',
+                        quantity: item.quantity,
+                        unit: product.unit || 'Piece',
+                        previousStock: product.quantity - item.quantity,
+                        newStock: product.quantity,
+                        source: supplierName || 'Unknown',
+                        referenceId: billNo,
+                        notes: `Added ${item.quantity} ${product.unit || 'Piece'} from Purchase Bill`,
+                        shop,
+                        owner: ownerId
                     }], { session });
                 }
             }

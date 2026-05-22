@@ -1,5 +1,6 @@
 const Product = require('../models/Product');
 const RestockHistory = require('../models/RestockHistory');
+const InventoryHistory = require('../models/InventoryHistory');
 
 // @desc    Get all products for owner (optionally filter by shop)
 // @route   GET /api/products
@@ -89,6 +90,21 @@ exports.createProduct = async (req, res) => {
                 shop: product.shop,
                 owner: product.owner
             });
+
+            await InventoryHistory.create({
+                productId: product._id,
+                productName: product.name,
+                actionType: 'STOCK_ADDED',
+                quantity: product.quantity,
+                unit: product.unit || 'Piece',
+                previousStock: 0,
+                newStock: product.quantity,
+                source: supplierName,
+                referenceId: billNo,
+                notes: `Initial stock addition${req.body.entryType ? ` via ${req.body.entryType}` : ''}`,
+                shop: product.shop,
+                owner: req.user.id
+            });
         }
 
         res.status(201).json({ success: true, data: product });
@@ -119,14 +135,34 @@ exports.updateProduct = async (req, res) => {
             runValidators: true
         });
 
-        if (product.quantity > oldQuantity) {
-            await RestockHistory.create({
-                product: product._id,
+        if (product.quantity !== oldQuantity) {
+            const difference = product.quantity - oldQuantity;
+            const actionType = difference > 0 ? 'STOCK_ADDED' : 'STOCK_ADJUSTED';
+            
+            if (product.quantity > oldQuantity) {
+                await RestockHistory.create({
+                    product: product._id,
+                    productName: product.name,
+                    quantityAdded: difference,
+                    supplier: product.supplier || req.body.supplier || 'Unknown',
+                    shop: product.shop,
+                    owner: product.owner
+                });
+            }
+
+            await InventoryHistory.create({
+                productId: product._id,
                 productName: product.name,
-                quantityAdded: product.quantity - oldQuantity,
-                supplier: product.supplier || req.body.supplier || 'Unknown',
+                actionType: actionType,
+                quantity: Math.abs(difference),
+                unit: product.unit || 'Piece',
+                previousStock: oldQuantity,
+                newStock: product.quantity,
+                source: 'System',
+                referenceId: 'Manual Edit',
+                notes: `Stock updated manually from ${oldQuantity} to ${product.quantity}`,
                 shop: product.shop,
-                owner: product.owner
+                owner: req.user.id
             });
         }
 
@@ -159,6 +195,22 @@ exports.deleteProduct = async (req, res) => {
     }
 };
 
+// @desc    Get inventory history for a product
+// @route   GET /api/products/:id/inventory-history
+// @access  Private
+exports.getProductInventoryHistory = async (req, res) => {
+    try {
+        const history = await InventoryHistory.find({
+            productId: req.params.id,
+            owner: req.user.id
+        }).sort('-createdAt');
+
+        res.status(200).json({ success: true, data: history });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
 // @desc    Get restock history for a product
 // @route   GET /api/products/:id/restock-history
 // @access  Private
@@ -183,6 +235,7 @@ exports.restockProduct = async (req, res) => {
         const Product = require('../models/Product');
         const Purchase = require('../models/Purchase');
         const RestockHistory = require('../models/RestockHistory');
+        const InventoryHistory = require('../models/InventoryHistory');
 
         const product = await Product.findById(req.params.id);
 
@@ -267,6 +320,21 @@ exports.restockProduct = async (req, res) => {
             purchasePrice: costPrice,
             shop: product.shop,
             owner: product.owner
+        });
+
+        await InventoryHistory.create({
+            productId: product._id,
+            productName: product.name,
+            actionType: 'STOCK_ADDED',
+            quantity: quantityAdded,
+            unit: product.unit || 'Piece',
+            previousStock: product.quantity - quantityAdded,
+            newStock: product.quantity,
+            source: supplierName,
+            referenceId: billNo,
+            notes: `Stock added${req.body.entryType ? ` via ${req.body.entryType}` : ''}`,
+            shop: product.shop,
+            owner: req.user.id
         });
 
         res.status(200).json({ success: true, data: product });

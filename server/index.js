@@ -45,6 +45,7 @@ const sales = require('./routes/saleRoutes');
 const khata = require('./routes/khataRoutes');
 const purchases = require('./routes/purchaseRoutes');
 const invoices = require('./routes/invoiceRoutes');
+const govSales = require('./routes/govSaleRoutes');
 const errorHandler = require('./middleware/errorMiddleware');
 
 // Mount routers
@@ -55,6 +56,7 @@ app.use('/api/sales', sales);
 app.use('/api/khata', khata);
 app.use('/api/purchases', purchases);
 app.use('/api/invoices', invoices);
+app.use('/api/gov-sales', govSales);
 
 // 404 handler for API routes
 app.use((req, res) => {

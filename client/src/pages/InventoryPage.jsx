@@ -12,6 +12,9 @@ import {
     X,
     ArrowUpRight,
     Tag,
+    History,
+    Clock,
+    FileText,
     Box,
     Info,
     MoreVertical,
@@ -57,8 +60,13 @@ const InventoryPage = () => {
     const [deleteConfirm, setDeleteConfirm] = useState({ open: false, id: null });
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
 
+    // History Modal State
+    const [showHistoryModal, setShowHistoryModal] = useState(false);
+    const [inventoryHistory, setInventoryHistory] = useState([]);
+    const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
     // Lock body scroll when main modals are open
-    useScrollLock(showModal || showRestockModal);
+    useScrollLock(showModal || showRestockModal || showHistoryModal);
 
     const getLocalToday = () => {
         const d = new Date();
@@ -80,6 +88,7 @@ const InventoryPage = () => {
         unit: 'Piece',
         buyPrice: 0,
         sellPrice: 0,
+        governmentPrice: 0,
         lowStockLimit: 5,
         expiryDate: '',
         notes: '',
@@ -131,6 +140,24 @@ const InventoryPage = () => {
         }
     }, [products]);
 
+    useEffect(() => {
+        if (formData.isFullPaid) {
+            const total = parseFloat(((Number(formData.quantity) || 0) * (Number(formData.buyPrice) || 0)).toFixed(2));
+            if (Number(formData.amountPaid) !== total) {
+                setFormData(prev => ({...prev, amountPaid: total}));
+            }
+        }
+    }, [formData.isFullPaid, formData.quantity, formData.buyPrice]);
+
+    useEffect(() => {
+        if (restockData.isFullPaid) {
+            const total = parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2));
+            if (Number(restockData.amountPaid) !== total) {
+                setRestockData(prev => ({...prev, amountPaid: total}));
+            }
+        }
+    }, [restockData.isFullPaid, restockData.quantityAdded, restockData.costPrice]);
+
     const categoryList = useMemo(() => {
         const cats = new Set(products.map(p => p.category).filter(Boolean));
         return Array.from(cats).sort();
@@ -140,6 +167,7 @@ const InventoryPage = () => {
         ...p,
         buyPrice: Number(p.buyPrice || 0),
         sellPrice: Number(p.sellPrice || 0),
+        governmentPrice: Number(p.governmentPrice || 0),
         quantity: Number(p.quantity || 0),
         lowStockLimit: Number(p.lowStockLimit || 5)
     });
@@ -221,6 +249,7 @@ const InventoryPage = () => {
                 ...product,
                 buyPrice: Number(product.buyPrice || 0),
                 sellPrice: Number(product.sellPrice || 0),
+                governmentPrice: Number(product.governmentPrice || 0),
                 quantity: Number(product.quantity || 0),
                 lowStockLimit: Number(product.lowStockLimit || 5),
                 expiryDate: product.expiryDate ? getLocalFromDate(product.expiryDate) : '',
@@ -254,6 +283,7 @@ const InventoryPage = () => {
                 unit: 'Piece',
                 buyPrice: 0,
                 sellPrice: 0,
+                governmentPrice: 0,
                 lowStockLimit: 5,
                 expiryDate: '',
                 notes: '',
@@ -307,6 +337,21 @@ const InventoryPage = () => {
         setShowRestockModal(true);
     };
 
+    const handleOpenHistoryModal = async (product) => {
+        setCurrentProduct(product);
+        setShowHistoryModal(true);
+        setIsHistoryLoading(true);
+        try {
+            const res = await productService.getInventoryHistory(product._id);
+            setInventoryHistory(res.data.data || []);
+        } catch (err) {
+            console.error('Failed to fetch inventory history:', err);
+            setAlertConfig({ open: true, title: 'Error', message: 'Failed to load item history.', type: 'error' });
+        } finally {
+            setIsHistoryLoading(false);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         
@@ -314,6 +359,7 @@ const InventoryPage = () => {
             ...formData,
             buyPrice: Number(formData.buyPrice || 0),
             sellPrice: Number(formData.sellPrice || 0),
+            governmentPrice: Number(formData.governmentPrice || 0),
             quantity: Number(formData.quantity || 0),
             lowStockLimit: Number(formData.lowStockLimit || 5)
         };
@@ -524,27 +570,21 @@ const InventoryPage = () => {
                                 <div className="opc-cat-badge">{product.category || 'GENERAL'}</div>
                                 
                                 <div className="opc-middle">
-                                    <div className="opc-pricing">
-                                        <span className="opc-price">₹{(product.sellPrice || 0).toLocaleString()}</span>
-                                        {product.buyPrice && (
-                                            <span className="opc-profit">+₹{((product.sellPrice || 0) - (product.buyPrice || 0)).toLocaleString()}</span>
-                                        )}
+                                    <div className="opc-stock-focus" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <span style={{ fontSize: '12px', fontWeight: '800', color: '#98A2B3', textTransform: 'uppercase' }}>Available Stock</span>
+                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                                            <span className="opc-price" style={{ color: product.quantity === 0 ? '#DC2626' : product.quantity <= (product.lowStockLimit || 5) ? '#EA580C' : '#059669', fontSize: '28px' }}>
+                                                {product.quantity}
+                                            </span>
+                                            <span style={{ fontWeight: '800', color: '#475467' }}>{product.unit}</span>
+                                        </div>
                                     </div>
-                                    
-                                    {product.quantity <= (product.lowStockLimit || 5) ? (
-                                        <div className="opc-low-badge">🔴 {product.quantity} left</div>
-                                    ) : (
-                                        <div className="opc-stock-info-muted">{product.quantity} {product.unit} left</div>
-                                    )}
+                                    <button className="btn-history-mobile" onClick={() => handleOpenHistoryModal(product)} style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '8px 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '800', color: '#059669', cursor: 'pointer' }}>
+                                        <History size={16} /> History
+                                    </button>
                                 </div>
 
-                                {product.buyPrice ? (
-                                    <div style={{ fontSize: '11px', color: '#98A2B3', fontWeight: '700', marginTop: '-8px' }}>
-                                        Last Bought: <span style={{ color: '#475467' }}>₹{product.buyPrice}</span>
-                                    </div>
-                                ) : null}
-
-                                <div className="opc-footer-btns" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                                <div className="opc-footer-btns" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '8px' }}>
                                     <button className="btn-old-sell" onClick={() => navigate(`/shop/${shopId}/pos?search=${product.name}`)}>
                                         Sell ↗
                                     </button>
@@ -591,56 +631,63 @@ const InventoryPage = () => {
                                 />
                             </div>
                         ) : (
-                            <table className="radical-desktop-table">
-                                <thead>
-                                    <tr>
-                                        <th>Product Details</th>
-                                        <th>Category</th>
-                                        <th>Current Stock</th>
-                                        <th>Purchase Price</th>
-                                        <th>Sell Price</th>
-                                        <th style={{ textAlign: 'center' }}>Margin</th>
-                                        <th style={{ textAlign: 'right' }}>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredProducts.map((product) => (
-                                        <tr key={product._id} className="sl-desktop-row">
-                                            <td className="sld-cust">
-                                                <div className="cust-main">{product.name}</div>
-                                                {product.brand && <div className="cust-sub" style={{color: '#667085', fontWeight: '600'}}>{product.brand}</div>}
-                                                {product.barcode && <div className="cust-sub">#{product.barcode}</div>}
-                                            </td>
-                                            <td className="sld-time">
-                                                <span className="cat-pill">{product.category || 'General'}</span>
-                                            </td>
-                                            <td className="sld-stock">
-                                                <div className={`stock-level ${product.quantity <= (product.lowStockLimit || 5) ? 'low' : 'healthy'}`}>
-                                                    {product.quantity} {product.unit}
-                                                    {product.quantity <= (product.lowStockLimit || 5) && <AlertTriangle size={14} style={{ marginLeft: '4px' }} />}
-                                                </div>
-                                            </td>
-                                            <td className="sld-time">₹{product.buyPrice?.toLocaleString() || 0}</td>
-                                            <td className="sld-amt" style={{ textAlign: 'left' }}>
-                                                <div className="amt-val">₹{product.sellPrice?.toLocaleString() || 0}</div>
-                                            </td>
-                                            <td style={{ textAlign: 'center' }}>
-                                                <span className="profit-badge">
-                                                    +{product.sellPrice > 0 ? Math.round(((product.sellPrice - (product.buyPrice || 0)) / product.sellPrice) * 100) : 0}%
-                                                </span>
-                                            </td>
-                                            <td className="sld-actions" style={{ textAlign: 'right' }}>
-                                                <div className="table-action-group">
-                                                    <button className="t-btn edit" title="Edit Product" onClick={() => handleOpenModal(product)}><Edit3 size={16} /></button>
-                                                    <button className="t-btn restock" title="Add Stock" onClick={() => handleOpenRestockModal(product)}><PackageOpen size={16} /></button>
-                                                    <button className="t-btn sell" title="Sell" onClick={() => navigate(`/shop/${shopId}/pos?search=${product.name}`)}><ShoppingCart size={16} /></button>
-                                                    <button className="t-btn delete" title="Delete" onClick={() => handleDelete(product._id)}><Trash2 size={16} /></button>
-                                                </div>
-                                            </td>
+                            <div className="table-responsive-wrapper">
+                                <table className="radical-desktop-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Product Details</th>
+                                            <th>Category</th>
+                                            <th style={{ width: '25%' }}>Available Stock</th>
+                                            <th>Sell Price</th>
+                                            <th style={{ textAlign: 'right' }}>Actions</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {filteredProducts.map((product) => (
+                                            <tr key={product._id} className="sl-desktop-row">
+                                                <td className="sld-cust">
+                                                    <div className="cust-main" style={{ fontSize: '16px' }}>{product.name}</div>
+                                                    {product.brand && <div className="cust-sub" style={{color: '#667085', fontWeight: '600'}}>{product.brand}</div>}
+                                                    {product.barcode && <div className="cust-sub">#{product.barcode}</div>}
+                                                </td>
+                                                <td className="sld-time">
+                                                    <span className="cat-pill">{product.category || 'General'}</span>
+                                                </td>
+                                                <td className="sld-stock">
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                        <span style={{ 
+                                                            fontSize: '24px', 
+                                                            fontWeight: '900', 
+                                                            color: product.quantity === 0 ? '#DC2626' : product.quantity <= (product.lowStockLimit || 5) ? '#EA580C' : '#059669' 
+                                                        }}>
+                                                            {product.quantity}
+                                                        </span>
+                                                        <span style={{ fontSize: '14px', fontWeight: '700', color: '#475467' }}>{product.unit}</span>
+                                                        {product.quantity <= (product.lowStockLimit || 5) && (
+                                                            <span style={{ background: product.quantity === 0 ? '#FEE2E2' : '#FFEDD5', color: product.quantity === 0 ? '#DC2626' : '#EA580C', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '800' }}>
+                                                                {product.quantity === 0 ? 'OUT OF STOCK' : 'LOW STOCK'}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                <td className="sld-amt" style={{ textAlign: 'left' }}>
+                                                    <div className="amt-val" style={{ color: '#64748B', fontWeight: '600' }}>₹{product.sellPrice?.toLocaleString() || 0}</div>
+                                                </td>
+                                                <td className="sld-actions" style={{ textAlign: 'right' }}>
+                                                    <div className="table-action-group">
+                                                        <button className="t-btn history-btn" title="Item History" onClick={() => handleOpenHistoryModal(product)} style={{ background: '#F0FDF4', color: '#059669', borderColor: '#BBF7D0', width: 'auto', padding: '0 12px', gap: '6px' }}>
+                                                            <History size={16} /> <span style={{ fontWeight: 700 }}>History</span>
+                                                        </button>
+                                                        <button className="t-btn edit" title="Edit Product" onClick={() => handleOpenModal(product)}><Edit3 size={16} /></button>
+                                                        <button className="t-btn restock" title="Add Stock" onClick={() => handleOpenRestockModal(product)}><PackageOpen size={16} /></button>
+                                                        <button className="t-btn delete" title="Delete" onClick={() => handleDelete(product._id)}><Trash2 size={16} /></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         )}
                     </div>
                 </>
@@ -725,7 +772,34 @@ const InventoryPage = () => {
                                         />
                                         <div className="old-field">
                                             <label>Amount Paid</label>
-                                            <input type="number" min="0" step="0.01" value={formData.amountPaid} onChange={(e) => setFormData({...formData, amountPaid: e.target.value})} placeholder="Amount paid" />
+                                            <input 
+                                                type="number" 
+                                                min="0" step="0.01" 
+                                                value={formData.amountPaid} 
+                                                disabled={formData.isFullPaid}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    const total = parseFloat(((Number(formData.quantity) || 0) * (Number(formData.buyPrice) || 0)).toFixed(2));
+                                                    setFormData({...formData, amountPaid: val, isFullPaid: Number(val) === total && total > 0});
+                                                }} 
+                                                placeholder="Amount paid" 
+                                            />
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', cursor: 'pointer', fontSize: '13px', color: '#475569', fontWeight: '600', flexDirection: 'row' }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={formData.isFullPaid || false}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            const total = parseFloat(((Number(formData.quantity) || 0) * (Number(formData.buyPrice) || 0)).toFixed(2));
+                                                            setFormData({...formData, isFullPaid: true, amountPaid: total});
+                                                        } else {
+                                                            setFormData({...formData, isFullPaid: false, amountPaid: ''});
+                                                        }
+                                                    }} 
+                                                    style={{ width: '16px', height: '16px', margin: 0, cursor: 'pointer', display: 'inline-block' }} 
+                                                />
+                                                Mark as full paid
+                                            </label>
                                         </div>
                                     </div>
 
@@ -789,6 +863,15 @@ const InventoryPage = () => {
                                             <input type="number" required min="0" max="10000000" step="0.01" value={formData.sellPrice} onChange={(e) => setFormData({...formData, sellPrice: e.target.value})} />
                                         </div>
                                     </div>
+
+                                    {shop?.type === 'Fertilizers' && (
+                                        <div className="old-field-row-mobile-2">
+                                            <div className="old-field">
+                                                <label style={{color: '#059669'}}>Government Price (per unit)</label>
+                                                <input type="number" min="0" max="10000000" step="0.01" value={formData.governmentPrice} onChange={(e) => setFormData({...formData, governmentPrice: e.target.value})} />
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div className="old-field-row-mobile-2">
                                         <div className="old-field">
@@ -933,7 +1016,34 @@ const InventoryPage = () => {
                                         </div>
                                         <div className="old-field">
                                             <label>Amount Paid</label>
-                                            <input type="number" min="0" step="0.01" value={restockData.amountPaid} onChange={(e) => setRestockData({...restockData, amountPaid: e.target.value})} placeholder="Amount paid" />
+                                            <input 
+                                                type="number" 
+                                                min="0" step="0.01" 
+                                                value={restockData.amountPaid} 
+                                                disabled={restockData.isFullPaid}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    const total = parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2));
+                                                    setRestockData({...restockData, amountPaid: val, isFullPaid: Number(val) === total && total > 0});
+                                                }} 
+                                                placeholder="Amount paid" 
+                                            />
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', cursor: 'pointer', fontSize: '13px', color: '#475569', fontWeight: '600', flexDirection: 'row' }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={restockData.isFullPaid || false}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            const total = parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2));
+                                                            setRestockData({...restockData, isFullPaid: true, amountPaid: total});
+                                                        } else {
+                                                            setRestockData({...restockData, isFullPaid: false, amountPaid: ''});
+                                                        }
+                                                    }} 
+                                                    style={{ width: '16px', height: '16px', margin: 0, cursor: 'pointer', display: 'inline-block' }} 
+                                                />
+                                                Mark as full paid
+                                            </label>
                                         </div>
                                     </div>
 
@@ -948,6 +1058,124 @@ const InventoryPage = () => {
                                     </button>
                                 </div>
                             </form>
+                        </motion.div>
+                    </div>
+                )}
+
+                {/* History Modal */}
+                {showHistoryModal && (
+                    <div className="old-modal-overlay">
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => setShowHistoryModal(false)} />
+                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="old-m-sheet" style={{ height: '90vh', display: 'flex', flexDirection: 'column' }}>
+                            <div className="old-m-header" style={{ paddingBottom: '0' }}>
+                                <div className="old-m-line"></div>
+                                <h2>Stock History</h2>
+                                <p style={{ margin: '4px 0 16px 0', color: '#667085', fontWeight: 600 }}>{currentProduct?.name}</p>
+                            </div>
+                            
+                            {/* Sticky Stock Summary */}
+                            <div style={{ padding: '0 24px 16px 24px', borderBottom: '1px solid #F2F4F7' }}>
+                                <div style={{ background: '#F9FAFB', border: '1.5px solid #E4E7EC', borderRadius: '16px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <div style={{ fontSize: '12px', fontWeight: 800, color: '#667085', textTransform: 'uppercase' }}>Current Available Stock</div>
+                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '4px' }}>
+                                            <span style={{ fontSize: '32px', fontWeight: 900, color: currentProduct?.quantity === 0 ? '#DC2626' : currentProduct?.quantity <= (currentProduct?.lowStockLimit || 5) ? '#EA580C' : '#059669' }}>
+                                                {currentProduct?.quantity}
+                                            </span>
+                                            <span style={{ fontSize: '16px', fontWeight: 700, color: '#475467' }}>{currentProduct?.unit}</span>
+                                        </div>
+                                    </div>
+                                    <PackageOpen size={40} color="#D0D5DD" />
+                                </div>
+                            </div>
+
+                            <div className="old-m-scroll" style={{ padding: '16px 24px', background: '#F9FAFB', flex: 1 }}>
+                                {isHistoryLoading ? (
+                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+                                        <div className="old-loader-circle" style={{ borderColor: '#E4E7EC', borderTopColor: '#059669' }}></div>
+                                    </div>
+                                ) : inventoryHistory.length === 0 ? (
+                                    <EmptyState icon={History} title="No History Yet" description="Stock movements will appear here chronologically." />
+                                ) : (
+                                    <div className="history-timeline" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                        {inventoryHistory.map((log) => {
+                                            const isAddition = ['STOCK_ADDED', 'PURCHASE_ENTRY', 'STOCK_RETURNED'].includes(log.actionType);
+                                            const isManual = log.actionType === 'STOCK_UPDATED' || log.actionType === 'STOCK_ADJUSTED';
+                                            const isSold = log.actionType === 'STOCK_SOLD';
+                                            
+                                            let icon = <Package size={16} />;
+                                            let color = '#475467';
+                                            let bg = '#F2F4F7';
+
+                                            if (isAddition) {
+                                                icon = <TrendingUp size={16} />;
+                                                color = '#059669';
+                                                bg = '#D1FAE5';
+                                            } else if (isSold) {
+                                                icon = <ShoppingCart size={16} />;
+                                                color = '#DC2626';
+                                                bg = '#FEE2E2';
+                                            } else if (isManual) {
+                                                icon = <Edit3 size={16} />;
+                                                color = '#D97706';
+                                                bg = '#FEF3C7';
+                                            }
+
+                                            return (
+                                                <div 
+                                                    key={log._id} 
+                                                    className={`history-card ${isSold ? 'history-card-clickable' : ''}`} 
+                                                    style={{ background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid #F2F4F7', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}
+                                                    onClick={() => {
+                                                        if (isSold) {
+                                                            const d = new Date(log.createdAt);
+                                                            const localDateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                                                            navigate(`/shop/${shopId}/gov-sales-log?date=${localDateStr}`);
+                                                        }
+                                                    }}
+                                                >
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#98A2B3' }}>
+                                                            {new Date(log.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                        </span>
+                                                        {log.referenceId && (
+                                                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#667085', background: '#F2F4F7', padding: '2px 8px', borderRadius: '6px' }}>
+                                                                Ref: {log.referenceId}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    
+                                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                                        <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: bg, color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                                            {icon}
+                                                        </div>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#101828', marginBottom: (!isSold) ? '4px' : '12px' }}>
+                                                                {isAddition && `+ Added ${log.quantity} ${log.unit}`}
+                                                                {isSold && `- Sold ${log.quantity} ${log.unit}`}
+                                                                {isManual && `Stock Adjusted by ${log.quantity} ${log.unit}`}
+                                                            </div>
+                                                            
+                                                            {(!isSold) && (
+                                                                <div style={{ fontSize: '13px', color: '#667085', fontWeight: 600, marginBottom: '12px' }}>
+                                                                    {log.notes} {(log.source && log.source !== 'Daily Summary' && log.source !== 'System') ? `(${log.source})` : ''}
+                                                                </div>
+                                                            )}
+                                                            
+                                                            <div style={{ background: '#F9FAFB', border: '1px dashed #E4E7EC', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                <span style={{ fontSize: '12px', fontWeight: 800, color: '#667085', textTransform: 'uppercase' }}>Stock Transition</span>
+                                                                <span style={{ fontSize: '14px', fontWeight: 800, color: '#101828' }}>
+                                                                    {log.previousStock} <ArrowUpRight size={14} style={{ margin: '0 4px', color: '#98A2B3' }} /> {log.newStock} {log.unit}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
                         </motion.div>
                     </div>
                 )}
@@ -1184,6 +1412,10 @@ const InventoryPage = () => {
                 .old-loader { height: 40vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; color: #98A2B3; }
                 .old-loader-circle { width: 40px; height: 40px; border: 4px solid #F2F4F7; border-top-color: #1E6BFF; border-radius: 50%; animation: orbit 1s infinite linear; }
                 @keyframes orbit { to { transform: rotate(360deg); } }
+                
+                .history-card-clickable { cursor: pointer; transition: all 0.2s ease; }
+                .history-card-clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.06) !important; border-color: #D0D5DD !important; }
+                .history-card-clickable:active { transform: translateY(0); }
             `}</style>
             <ConfirmModal 
                 isOpen={deleteConfirm.open}

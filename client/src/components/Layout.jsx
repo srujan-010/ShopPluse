@@ -109,7 +109,7 @@ const Layout = () => {
 
     return (
         <div className="premium-layout">
-            <Sidebar isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
+            <Sidebar isOpen={isSidebarOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} currentShop={currentShop} />
             
             {/* Elegant Top Header */}
             <header className={`premium-header ${isScrolled ? 'scrolled' : ''}`}>

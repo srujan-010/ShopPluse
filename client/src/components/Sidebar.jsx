@@ -19,9 +19,9 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useInstall } from '../context/InstallContext';
 import { motion } from 'framer-motion';
-import { Download } from 'lucide-react';
+import { Download, ShieldCheck } from 'lucide-react';
 
-const Sidebar = ({ isOpen, toggleSidebar }) => {
+const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
     const { logout } = useAuth();
     const { isInstallable, installApp } = useInstall();
     const { shopId } = useParams();
@@ -53,6 +53,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         { name: 'Purchase Ledger', path: `/shop/${shopId}/purchase-ledger`, icon: <Truck size={20} /> },
         { name: 'Analytics', path: `/shop/${shopId}/reports`, icon: <BarChart3 size={20} /> },
     ];
+
+    const govItems = currentShop && currentShop.type === 'Fertilizers' ? [
+        { name: 'Government Ledger', path: `/shop/${shopId}/gov-sales-log`, icon: <ClipboardList size={20} /> },
+        { name: 'Gov Reports', path: `/shop/${shopId}/gov-reports`, icon: <BarChart3 size={20} /> },
+    ] : [];
 
     const currentItems = shopId ? shopItems : mainItems;
 
@@ -88,10 +93,28 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                             >
                                 <span className="nl-icon">{item.icon}</span>
                                 <span className="nl-text">{item.name}</span>
-                                {item.path.includes('pos') && <span className="hot-tag">HOT</span>}
+                                {item.path.includes('pos') && !item.path.includes('gov') && <span className="hot-tag">HOT</span>}
                             </NavLink>
                         ))}
                     </nav>
+
+                    {govItems.length > 0 && (
+                        <nav className="nav-group secondary">
+                            <div className="nav-label-top" style={{color: '#059669'}}>Government Records</div>
+                            {govItems.map((item) => (
+                                <NavLink 
+                                    key={item.path} 
+                                    to={item.path} 
+                                    className={({ isActive }) => `nav-link-premium gov-link ${isActive ? 'active' : ''}`}
+                                    onClick={() => window.innerWidth < 1024 && toggleSidebar()}
+                                    style={{ '--hover-bg': '#ECFDF5', '--active-bg': '#D1FAE5', '--active-color': '#059669' }}
+                                >
+                                    <span className="nl-icon">{item.icon}</span>
+                                    <span className="nl-text">{item.name}</span>
+                                </NavLink>
+                            ))}
+                        </nav>
+                    )}
 
                     {shopId && (
                         <div className="nav-group secondary">

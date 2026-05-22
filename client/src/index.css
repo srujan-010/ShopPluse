@@ -747,3 +747,9 @@ body.modal-open {
     background: #EF4444;
     color: white;
 }
+.table-responsive-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 1rem;
+}

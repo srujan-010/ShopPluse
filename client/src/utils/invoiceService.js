@@ -53,12 +53,23 @@ export const invoiceService = {
         doc.setFontSize(9);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...slateColor);
-        doc.text("INVOICE DETAILS", 20, currentY);
+        if (type === 'GOV_SALE') {
+            doc.text("GOV RECORD DETAILS", 20, currentY);
+            doc.setTextColor(5, 150, 105);
+            doc.setFontSize(12);
+            doc.text("GOVERNMENT RECORD COPY", 105, 50, { align: 'center' });
+            doc.setFontSize(9);
+            doc.setTextColor(...slateColor);
+        } else {
+            doc.text("INVOICE DETAILS", 20, currentY);
+        }
         
         doc.setFontSize(10);
         doc.setTextColor(...textColor);
         currentY += 7;
-        const billLabel = type === 'PURCHASE' ? 'Bill No' : 'Invoice No';
+        let billLabel = 'Invoice No';
+        if (type === 'PURCHASE') billLabel = 'Bill No';
+        if (type === 'GOV_SALE') billLabel = 'Gov Record No';
         doc.text(`${billLabel}:`, 20, currentY);
         doc.setFont("helvetica", "bold");
         doc.text(`#${data._id.slice(-6).toUpperCase()}`, 50, currentY);
@@ -78,7 +89,9 @@ export const invoiceService = {
         doc.setFontSize(9);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...slateColor);
-        const partyLabel = type === 'PURCHASE' ? 'SUPPLIER DETAILS' : 'CUSTOMER DETAILS';
+        let partyLabel = 'CUSTOMER DETAILS';
+        if (type === 'PURCHASE') partyLabel = 'SUPPLIER DETAILS';
+        if (type === 'GOV_SALE') partyLabel = 'OFFICIAL RECORDS';
         doc.text(partyLabel, 120, rightColY);
         
         doc.setFontSize(10);

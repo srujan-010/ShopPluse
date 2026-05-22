@@ -23,6 +23,8 @@ import KhataPage from './pages/KhataPage';
 import PurchaseLedgerPage from './pages/PurchaseLedgerPage';
 import PurchaseDetailsPage from './pages/PurchaseDetailsPage';
 import SupplierLedgerPage from './pages/SupplierLedgerPage';
+import GovSalesLogPage from './pages/GovSalesLogPage';
+import GovReportsPage from './pages/GovReportsPage';
 
 import { InstallProvider } from './context/InstallContext';
 
@@ -83,6 +85,11 @@ function App() {
                     <Route path="/shop/:shopId/purchase-ledger" element={<PurchaseLedgerPage />} />
                     <Route path="/shop/:shopId/purchase-ledger/:purchaseId" element={<PurchaseDetailsPage />} />
                     <Route path="/shop/:shopId/suppliers/:supplierName" element={<SupplierLedgerPage />} />
+                    
+                    {/* Government Records Routes */}
+                    <Route path="/shop/:shopId/gov-sales-log" element={<GovSalesLogPage />} />
+                    <Route path="/shop/:shopId/gov-reports" element={<GovReportsPage />} />
+                    
                     <Route path="/profile" element={<ProfilePage />} />
                   </Route>
                 </Route>

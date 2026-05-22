@@ -2,6 +2,8 @@ const Sale = require('../models/Sale');
 const Product = require('../models/Product');
 const Purchase = require('../models/Purchase');
 const Khata = require('../models/Khata');
+const GovernmentSale = require('../models/GovernmentSale');
+const InventoryHistory = require('../models/InventoryHistory');
 const mongoose = require('mongoose');
 
 const getConversionMultiplier = (fromUnit, toUnit) => {
@@ -87,6 +89,11 @@ exports.createSale = async (req, res) => {
             totalAmount += totalPrice;
             totalProfit += itemProfit;
 
+            // Update Stock with floating point safety
+            const previousStock = product.quantity;
+            product.quantity = Math.max(0, parseFloat((product.quantity - convertedQuantityInBaseUnit).toFixed(3)));
+            await product.save();
+
             processedItems.push({
                 product: product._id,
                 productName: product.name,
@@ -101,12 +108,12 @@ exports.createSale = async (req, res) => {
                 unit: sellingUnit,
                 multiplier: multiplier,
                 price: parseFloat((totalPrice / enteredQuantity).toFixed(2)) || sellPricePerBaseUnit,
-                profit: itemProfit
+                profit: itemProfit,
+                
+                // For history tracking
+                previousStock: previousStock,
+                newStock: product.quantity
             });
-
-            // Update Stock with floating point safety
-            product.quantity = Math.max(0, parseFloat((product.quantity - convertedQuantityInBaseUnit).toFixed(3)));
-            await product.save();
         }
 
         const Shop = require('../models/Shop');
@@ -133,6 +140,43 @@ exports.createSale = async (req, res) => {
             date: date || new Date(),
             owner: ownerId
         });
+
+        // --- Log Inventory History for Normal Sale ---
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+
+        for (const item of processedItems) {
+            const existingSummary = await InventoryHistory.findOne({
+                productId: item.product,
+                actionType: 'STOCK_SOLD',
+                owner: ownerId,
+                createdAt: { $gte: startOfDay, $lte: endOfDay }
+            });
+
+            if (existingSummary) {
+                existingSummary.quantity += item.soldQtyBaseUnit;
+                existingSummary.newStock = item.newStock; // Keep absolute latest stock
+                existingSummary.notes = `Sold ${existingSummary.quantity} ${existingSummary.unit || 'Piece'}`;
+                await existingSummary.save();
+            } else {
+                await InventoryHistory.create({
+                    productId: item.product,
+                    productName: item.productName,
+                    actionType: 'STOCK_SOLD',
+                    quantity: item.soldQtyBaseUnit,
+                    unit: 'Piece',
+                    previousStock: item.previousStock, // First sale of the day dictates starting stock
+                    newStock: item.newStock,
+                    source: 'Daily Summary',
+                    referenceId: '',
+                    notes: `Sold ${item.soldQtyBaseUnit} Piece`,
+                    shop,
+                    owner: ownerId
+                });
+            }
+        }
 
         // If Khata, create/update Khata record
         if (paymentMethod === 'Khata' && customerMobile) {
@@ -169,6 +213,69 @@ exports.createSale = async (req, res) => {
             
             await khataRecord.save();
         }
+
+        // --- AUTO-GENERATE GOVERNMENT RECORD ---
+        let totalGovernmentAmount = 0;
+        const govItems = [];
+
+        for (const item of items) {
+            const product = await Product.findById(item.product);
+            if (!product) continue;
+
+            if (product.category === 'Fertilizers' && product.governmentPrice && product.governmentPrice > 0) {
+                const enteredQuantity = item.quantity;
+                const sellingUnit = item.unit || product.unit;
+                const baseUnit = product.unit;
+
+                const multiplier = getConversionMultiplier(sellingUnit, baseUnit);
+                if (multiplier === undefined) continue;
+
+                const convertedQuantityInBaseUnit = enteredQuantity * multiplier;
+                const govPricePerBaseUnit = product.governmentPrice;
+                const totalItemGovAmount = parseFloat((convertedQuantityInBaseUnit * govPricePerBaseUnit).toFixed(2));
+
+                totalGovernmentAmount += totalItemGovAmount;
+
+                govItems.push({
+                    product: product._id,
+                    productName: product.name,
+                    soldQtyEntered: enteredQuantity,
+                    soldUnit: sellingUnit,
+                    soldQtyBaseUnit: convertedQuantityInBaseUnit,
+                    pricePerBaseUnit: govPricePerBaseUnit,
+                    totalPrice: totalItemGovAmount,
+                    governmentPrice: govPricePerBaseUnit
+                });
+            }
+        }
+
+        if (govItems.length > 0) {
+            let govInvoiceNumber = `GOV-${Math.floor(100000 + Math.random() * 900000)}`;
+            if (shopRecord) {
+                const prefix = (shopRecord.invoicePrefix || 'LK') + 'G'; // 'LKG' for Gov
+                const counter = shopRecord.govInvoiceCounter || 1000;
+                govInvoiceNumber = `${prefix}-${counter}`;
+                shopRecord.govInvoiceCounter = counter + 1;
+                await shopRecord.save();
+            }
+
+            await GovernmentSale.create({
+                shop,
+                linkedSaleId: sale._id,
+                invoiceNumber: govInvoiceNumber,
+                customerName: customerName || 'Walk-in Customer',
+                customerMobile: customerMobile || '',
+                items: govItems,
+                totalAmount: totalGovernmentAmount,
+                paymentMethod,
+                date: date || new Date(),
+                owner: ownerId,
+                isInspectionCopy: true
+            });
+
+
+        }
+        // --- END AUTO-GENERATE GOVERNMENT RECORD ---
 
         res.status(201).json({ success: true, data: sale });
     } catch (error) {

@@ -1,5 +1,5 @@
 const express = require('express');
-const { getProducts, createProduct, updateProduct, deleteProduct, getProductRestockHistory, restockProduct } = require('../controllers/productController');
+const { getProducts, createProduct, updateProduct, deleteProduct, getProductRestockHistory, getProductInventoryHistory, restockProduct } = require('../controllers/productController');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -18,5 +18,6 @@ router.route('/:id/restock')
     .post(restockProduct);
 
 router.get('/:id/restock-history', getProductRestockHistory);
+router.get('/:id/inventory-history', getProductInventoryHistory);
 
 module.exports = router;

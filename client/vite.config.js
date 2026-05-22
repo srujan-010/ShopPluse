@@ -4,16 +4,16 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',
+    host: "0.0.0.0",
     port: 5173,
-    strictPort: true,
-    cors: true,
-    allowedHosts: ['enamel-stack-subzero.ngrok-free.dev', 'localhost'],
     hmr: {
-      protocol: 'wss',
-      host: 'enamel-stack-subzero.ngrok-free.dev',
+      protocol: "wss",
+      host: "enamel-stack-subzero.ngrok-free.dev",
       clientPort: 443
     },
+    allowedHosts: [
+      "enamel-stack-subzero.ngrok-free.dev"
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:5000',

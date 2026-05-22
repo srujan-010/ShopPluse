@@ -280,6 +280,7 @@ const PurchaseLedgerPage = () => {
     const stats = {
         totalPurchases: filteredPurchases.reduce((sum, p) => sum + (p.totalAmount || 0), 0),
         totalBills: filteredPurchases.length,
+        totalPaid: filteredPurchases.reduce((sum, p) => sum + (p.paidAmount || 0), 0),
         pendingAmount: filteredPurchases.reduce((sum, p) => sum + (p.dueAmount || 0), 0),
         itemsBought: filteredPurchases.reduce((sum, p) => sum + (p.items || []).reduce((iSum, item) => iSum + (item.quantity || 0), 0), 0)
     };
@@ -405,21 +406,21 @@ const PurchaseLedgerPage = () => {
                     </div>
                 </div>
                 <div className="sl-mobile-only sl-summary-grid-v2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '0 12px 12px' }}>
-                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '14px', padding: '10px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px', boxSizing: 'border-box' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Purchase</span>
-                        <strong style={{ fontSize: '15px', fontWeight: '900', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.totalPurchases)}</strong>
+                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Purchase</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.totalPurchases)}</strong>
                     </div>
-                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '14px', padding: '10px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px', boxSizing: 'border-box' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Bills Logged</span>
-                        <strong style={{ fontSize: '15px', fontWeight: '900', color: '#0F172A' }}>{stats.totalBills}</strong>
+                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Paid</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.totalPaid)}</strong>
                     </div>
-                    <div className="sl-mini-chip pending-due-chip" style={{ background: 'linear-gradient(135deg, #FFFBEB, #FEF3C7)', border: '1px solid #FCD34D', borderRadius: '14px', padding: '10px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px', boxSizing: 'border-box' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '800', color: '#B45309', textTransform: 'uppercase' }}>Pending Due</span>
-                        <strong style={{ fontSize: '15px', fontWeight: '900', color: '#92400E' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.pendingAmount)}</strong>
+                    <div className="sl-mini-chip pending-due-chip" style={{ background: stats.pendingAmount > 0 ? 'linear-gradient(135deg, #FFFBEB, #FEF3C7)' : 'white', border: '1px solid', borderColor: stats.pendingAmount > 0 ? '#FCD34D' : '#E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '800', color: stats.pendingAmount > 0 ? '#B45309' : '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Due</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: stats.pendingAmount > 0 ? '#92400E' : '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.pendingAmount)}</strong>
                     </div>
-                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '14px', padding: '10px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '64px', boxSizing: 'border-box' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Items</span>
-                        <strong style={{ fontSize: '15px', fontWeight: '900', color: '#0F172A' }}>{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(stats.itemsBought)}</strong>
+                    <div className="sl-mini-chip" style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Bills</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>{stats.totalBills}</strong>
                     </div>
                 </div>
             </>
@@ -445,36 +446,63 @@ const PurchaseLedgerPage = () => {
             ) : (
                 <>
                     <div className="sl-list sl-mobile-only" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '0 12px' }}>
-                        {paginatedPurchases.map((pur) => (
-                            <motion.div 
-                                whileTap={{ scale: 0.98 }}
-                                key={pur._id} 
-                                style={{ background: 'white', borderRadius: '12px', padding: '10px 12px', border: '1px solid #E2E8F0', boxShadow: '0 1px 2px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', gap: '4px', height: '88px', boxSizing: 'border-box' }}
-                                onClick={() => navigate(`/shop/${shopId}/purchase-ledger/${pur._id}`)}
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div 
-                                        style={{ color: '#0F172A', textDecoration: 'none', cursor: 'pointer', fontWeight: '700', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '65%' }}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            navigate(`/shop/${shopId}/suppliers/${encodeURIComponent(pur.supplierName || 'Unknown Supplier')}`);
-                                        }}
-                                    >
-                                        {pur.supplierName || 'Direct Entry'}
+                        {paginatedPurchases.map((pur) => {
+                            const statusColor = 
+                                pur.paymentStatus === 'Paid' ? '#10B981' : 
+                                pur.paymentStatus === 'Partial Paid' ? '#F59E0B' : '#EF4444';
+                                
+                            return (
+                                <motion.div 
+                                    whileTap={{ scale: 0.98 }}
+                                    key={pur._id} 
+                                    style={{ background: 'white', borderRadius: '16px', padding: '14px 16px', border: '1px solid #E2E8F0', boxShadow: '0 2px 6px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}
+                                    onClick={() => navigate(`/shop/${shopId}/purchase-ledger/${pur._id}`)}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <div style={{ flex: 1, paddingRight: '12px' }}>
+                                            <div style={{ color: '#0F172A', fontWeight: '700', fontSize: '16px', lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                                {pur.items && pur.items.length > 0 ? pur.items.map(i => `${i.productName} (${i.quantity})`).join(', ') : (pur.supplierName || 'Purchase Entry')}
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                                <span style={{ fontSize: '13px', color: '#64748B', fontWeight: '500' }}>
+                                                    Bill #{pur.billNo ? (pur.billNo.includes('-') ? pur.billNo.split('-').pop() : (pur.billNo.length > 6 ? pur.billNo.slice(-6) : pur.billNo)) : 'N/A'}
+                                                </span>
+                                                <span style={{ fontSize: '14px', color: '#CBD5E1' }}>•</span>
+                                                <span style={{ fontSize: '13px', color: '#64748B', fontWeight: '500' }}>
+                                                    {new Date(pur.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                                                </span>
+                                                {pur.supplierName && (
+                                                    <>
+                                                        <span style={{ fontSize: '14px', color: '#CBD5E1' }}>•</span>
+                                                        <span 
+                                                            style={{ fontSize: '13px', color: '#2563EB', fontWeight: '600', cursor: 'pointer' }}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                navigate(`/shop/${shopId}/suppliers/${encodeURIComponent(pur.supplierName)}`);
+                                                            }}
+                                                        >
+                                                            {pur.supplierName}
+                                                        </span>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div style={{ fontWeight: '800', fontSize: '16px', color: '#0F172A', whiteSpace: 'nowrap' }}>
+                                            ₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.totalAmount || 0)}
+                                        </div>
                                     </div>
-                                    <div style={{ fontWeight: '800', fontSize: '13px', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.totalAmount || 0)}</div>
-                                </div>
-                                <div style={{ fontSize: '12px', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {pur.items.map(i => `${i.productName} (${i.quantity})`).join(', ')}
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
-                                    <div style={{ fontSize: '11px', color: '#94A3B8', fontWeight: '600' }}>
-                                        {new Date(pur.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} • {pur.entryType || 'Purchase'}
+                                    
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', paddingTop: '12px', borderTop: '1px dashed #E2E8F0' }}>
+                                        <div style={{ fontSize: '13px', color: '#64748B', fontWeight: '600' }}>
+                                            Due: <span style={{ color: pur.dueAmount > 0 ? '#EF4444' : '#10B981', fontWeight: '800' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.dueAmount || 0)}</span>
+                                        </div>
+                                        <span style={{ padding: '4px 10px', fontSize: '12px', fontWeight: '700', borderRadius: '8px', background: `${statusColor}15`, color: statusColor }}>
+                                            {pur.paymentStatus}
+                                        </span>
                                     </div>
-                                    <span className={`status-pill ${(pur.paymentStatus || '').toLowerCase().replace(' ', '-')}`} style={{ padding: '2px 8px', fontSize: '10px' }}>{pur.paymentStatus}</span>
-                                </div>
-                            </motion.div>
-                        ))}
+                                </motion.div>
+                            );
+                        })}
                     </div>
                     {filteredPurchases.length > paginatedPurchases.length && (
                         <div className="sl-mobile-only" style={{ display: 'flex', justifyContent: 'center', marginTop: '16px', marginBottom: '16px' }}>
@@ -574,51 +602,52 @@ const PurchaseLedgerPage = () => {
                     ) : (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
                             {supplierList.filter(s => s.name.toLowerCase().includes(supplierLedgerSearch.toLowerCase())).map((sup, index) => (
-                                <div key={index}>
-                                    <div className="sl-desktop-only">
-                                        <div className="supplier-card" style={{ background: 'white', border: '1.5px solid #E2E8F0', borderRadius: '20px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02)' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                            <div>
-                                                <h4 style={{ fontSize: '16px', fontWeight: '800', color: '#0F172A', margin: 0 }}>{sup.name}</h4>
-                                                {sup.phone && <span style={{ fontSize: '13px', color: '#64748B', display: 'block', marginTop: '2px' }}>{sup.phone}</span>}
-                                            </div>
-                                            <span style={{ fontSize: '12px', background: '#EFF6FF', color: '#2563EB', padding: '4px 10px', borderRadius: '8px', fontWeight: '700' }}>{sup.bills} {sup.bills === 1 ? 'Bill' : 'Bills'}</span>
+                                <motion.div 
+                                    key={index}
+                                    whileHover={{ y: -2, boxShadow: '0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.02)' }}
+                                    whileTap={{ scale: 0.98 }}
+                                    onClick={() => navigate(`/shop/${shopId}/suppliers/${encodeURIComponent(sup.name)}`)} 
+                                    style={{ 
+                                        background: 'white', 
+                                        border: '1px solid #E2E8F0', 
+                                        borderRadius: '16px', 
+                                        padding: '16px', 
+                                        display: 'flex', 
+                                        justifyContent: 'space-between', 
+                                        alignItems: 'center', 
+                                        boxShadow: '0 2px 6px rgba(0,0,0,0.02)', 
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease-in-out'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflow: 'hidden' }}>
+                                        <h4 style={{ fontSize: '16px', fontWeight: '800', color: '#0F172A', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            {sup.name}
+                                        </h4>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#64748B', fontWeight: '600', flexWrap: 'wrap' }}>
+                                            <span>{sup.bills} {sup.bills === 1 ? 'Bill' : 'Bills'}</span>
+                                            <span style={{ fontSize: '16px', color: '#CBD5E1', lineHeight: '1' }}>•</span>
+                                            <span>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(sup.total)} Purchase</span>
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: '#F8FAFC', padding: '12px', borderRadius: '12px' }}>
-                                            <div>
-                                                <span style={{ fontSize: '12px', color: '#64748B', display: 'block' }}>Total Purchased</span>
-                                                <strong style={{ fontSize: '15px', color: '#1E293B' }}>₹{sup.total.toLocaleString()}</strong>
-                                            </div>
-                                            <div>
-                                                <span style={{ fontSize: '12px', color: '#64748B', display: 'block' }}>Total Paid</span>
-                                                <strong style={{ fontSize: '15px', color: '#10B981' }}>₹{sup.paid.toLocaleString()}</strong>
-                                            </div>
-                                            <div style={{ gridColumn: 'span 2', borderTop: '1px dashed #E2E8F0', paddingTop: '8px', marginTop: '4px' }}>
-                                                <span style={{ fontSize: '12px', color: '#64748B', display: 'block' }}>Outstanding Due</span>
-                                                <strong style={{ fontSize: '16px', color: sup.due > 0 ? '#EF4444' : '#64748B' }}>₹{sup.due.toLocaleString()}</strong>
-                                            </div>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', paddingTop: '4px' }}>
-                                            <button onClick={() => navigate(`/shop/${shopId}/suppliers/${encodeURIComponent(sup.name)}`)} style={{ flex: 1, height: '36px', background: '#2563EB', color: 'white', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                                                <History size={16} />
-                                                <span>View Ledger</span>
-                                            </button>
-                                            {sup.phone && (
-                                                <a href={`tel:${sup.phone}`} style={{ width: '36px', height: '36px', background: '#F2F4F7', border: '1px solid #E4E7EC', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#344054' }}>
-                                                    <Truck size={16} />
-                                                </a>
-                                            )}
-                                            </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                                            <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Due:</span>
+                                            <span style={{ 
+                                                fontSize: '13px', 
+                                                fontWeight: '800', 
+                                                color: sup.due > 0 ? (sup.paid > 0 ? '#F59E0B' : '#EF4444') : '#10B981',
+                                                background: sup.due > 0 ? (sup.paid > 0 ? '#FFFBEB' : '#FEF2F2') : '#ECFDF5',
+                                                padding: '2px 8px',
+                                                borderRadius: '6px'
+                                            }}>
+                                                ₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(sup.due)}
+                                            </span>
                                         </div>
                                     </div>
-                                    <div className="sl-mobile-only" onClick={() => navigate(`/shop/${shopId}/suppliers/${encodeURIComponent(sup.name)}`)} style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.02)', cursor: 'pointer', margin: '0 12px' }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxWidth: '80%' }}>
-                                            <h4 style={{ fontSize: '14px', fontWeight: '700', color: '#0F172A', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sup.name}</h4>
-                                            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '600' }}>{sup.bills} {sup.bills === 1 ? 'Bill' : 'Bills'} • ₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(sup.total)}</span>
-                                        </div>
-                                        <ChevronRight size={18} color="#94A3B8" />
+                                    
+                                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#F8FAFC', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #F1F5F9', flexShrink: 0, marginLeft: '12px' }}>
+                                        <ChevronRight size={18} color="#64748B" />
                                     </div>
-                                </div>
+                                </motion.div>
                             ))}
                         </div>
                     )}

@@ -144,22 +144,22 @@ const PurchaseDetailsPage = () => {
                 <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
                     {/* ── Financial Swipe Row ── */}
-                    <div className="sl-summary-grid-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                        <div style={{ background: purchase.dueAmount > 0 ? 'linear-gradient(135deg, #FFFBEB, #FEF3C7)' : 'white', border: '1px solid', borderColor: purchase.dueAmount > 0 ? '#FCD34D' : '#E2E8F0', borderRadius: '10px', padding: '8px 10px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '56px', boxSizing: 'border-box' }}>
-                            <span style={{ fontSize: '10px', fontWeight: '800', color: purchase.dueAmount > 0 ? '#B45309' : '#64748B', textTransform: 'uppercase' }}>Due</span>
-                            <strong style={{ fontSize: '14px', fontWeight: '900', color: purchase.dueAmount > 0 ? '#92400E' : '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.dueAmount || 0)}</strong>
+                    <div className="sl-summary-grid-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                        <div style={{ background: purchase.dueAmount > 0 ? 'linear-gradient(135deg, #FFFBEB, #FEF3C7)' : 'white', border: '1px solid', borderColor: purchase.dueAmount > 0 ? '#FCD34D' : '#E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                            <span style={{ fontSize: '11px', fontWeight: '800', color: purchase.dueAmount > 0 ? '#B45309' : '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Due</span>
+                            <strong style={{ fontSize: '18px', fontWeight: '900', color: purchase.dueAmount > 0 ? '#92400E' : '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.dueAmount || 0)}</strong>
                         </div>
-                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '8px 10px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '56px', boxSizing: 'border-box' }}>
-                            <span style={{ fontSize: '10px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Paid</span>
-                            <strong style={{ fontSize: '14px', fontWeight: '900', color: '#10B981' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.paidAmount || 0)}</strong>
+                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                            <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Paid</span>
+                            <strong style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.paidAmount || 0)}</strong>
                         </div>
-                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '8px 10px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '56px', boxSizing: 'border-box' }}>
-                            <span style={{ fontSize: '10px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Total</span>
-                            <strong style={{ fontSize: '14px', fontWeight: '900', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.totalAmount || 0)}</strong>
+                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                            <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Total</span>
+                            <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(purchase.totalAmount || 0)}</strong>
                         </div>
-                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '8px 10px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '56px', boxSizing: 'border-box' }}>
-                            <span style={{ fontSize: '10px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Items</span>
-                            <strong style={{ fontSize: '14px', fontWeight: '900', color: '#0F172A' }}>{(purchase.items||[]).length}</strong>
+                        <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                            <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Items</span>
+                            <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>{(purchase.items||[]).length}</strong>
                         </div>
                     </div>
 
@@ -443,26 +443,28 @@ const PurchaseDetailsPage = () => {
                     {/* Items Table */}
                     <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '24px', padding: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
                         <h4 style={{ margin: '0 0 16px 0', fontSize: '16px', color: '#0F172A', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '800' }}>Items Purchased</h4>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                                <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
-                                    <th style={{ textAlign: 'left', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', borderRadius: '10px 0 0 10px' }}>Product / Item</th>
-                                    <th style={{ textAlign: 'center', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '100px' }}>Qty</th>
-                                    <th style={{ textAlign: 'right', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '140px' }}>Rate</th>
-                                    <th style={{ textAlign: 'right', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '140px', borderRadius: '0 10px 10px 0' }}>Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(purchase.items || []).map((item, i) => (
-                                    <tr key={i} style={{ borderBottom: '1px solid #F1F5F9', transition: 'background 0.2s' }}>
-                                        <td style={{ padding: '18px 16px', fontSize: '15px', fontWeight: '700', color: '#1E293B' }}>{item.productName}</td>
-                                        <td style={{ padding: '18px 16px', textAlign: 'center', fontSize: '15px', color: '#334155', fontWeight: '600' }}>{item.quantity} {item.unit || 'Pc'}</td>
-                                        <td style={{ padding: '18px 16px', textAlign: 'right', fontSize: '15px', color: '#334155', fontWeight: '600' }}>₹{item.purchaseRate.toLocaleString()}</td>
-                                        <td style={{ padding: '18px 16px', textAlign: 'right', fontSize: '15px', fontWeight: '800', color: '#0F172A' }}>₹{item.itemTotal.toLocaleString()}</td>
+                        <div className="table-responsive-wrapper">
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+                                        <th style={{ textAlign: 'left', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', borderRadius: '10px 0 0 10px' }}>Product / Item</th>
+                                        <th style={{ textAlign: 'center', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '100px' }}>Qty</th>
+                                        <th style={{ textAlign: 'right', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '140px' }}>Rate</th>
+                                        <th style={{ textAlign: 'right', padding: '16px', fontSize: '13px', color: '#475569', fontWeight: '700', width: '140px', borderRadius: '0 10px 10px 0' }}>Total</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {(purchase.items || []).map((item, i) => (
+                                        <tr key={i} style={{ borderBottom: '1px solid #F1F5F9', transition: 'background 0.2s' }}>
+                                            <td style={{ padding: '18px 16px', fontSize: '15px', fontWeight: '700', color: '#1E293B' }}>{item.productName}</td>
+                                            <td style={{ padding: '18px 16px', textAlign: 'center', fontSize: '15px', color: '#334155', fontWeight: '600' }}>{item.quantity} {item.unit || 'Pc'}</td>
+                                            <td style={{ padding: '18px 16px', textAlign: 'right', fontSize: '15px', color: '#334155', fontWeight: '600' }}>₹{item.purchaseRate.toLocaleString()}</td>
+                                            <td style={{ padding: '18px 16px', textAlign: 'right', fontSize: '15px', fontWeight: '800', color: '#0F172A' }}>₹{item.itemTotal.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
 
                     {/* Payment History */}

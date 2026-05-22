@@ -3,86 +3,64 @@ import {
     Search, 
     Calendar, 
     X, 
-    Wallet, 
-    CreditCard, 
-    QrCode,
-    ChevronRight,
-    ChevronLeft,
     Receipt,
     MessageSquare,
-    History,
-    ArrowDownCircle
+    ChevronLeft,
+    ShieldCheck,
+    ChevronRight
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { saleService, shopService, khataService } from '../services/api';
+import { govSaleService, shopService } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
 
-const SalesLogPage = () => {
+const GovSalesLogPage = () => {
     const { shopId } = useParams();
+    const navigate = useNavigate();
     const [sales, setSales] = useState([]);
     const [shop, setShop] = useState(null);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
-    const [selectedSale, setSelectedSale] = useState(null);
-    const [selectedCustomerKhata, setSelectedCustomerKhata] = useState(null);
-    const [selectedCustomer, setSelectedCustomer] = useState(null);
+    
+    // View Bill State
+    const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
+    const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
+    
+    // Filters & Pagination
     const [searchParams] = useSearchParams();
     const initialDate = searchParams.get('date');
-    const [periodFilter, setPeriodFilter] = useState(initialDate ? 'custom' : 'today');
-    const [paymentFilter, setPaymentFilter] = useState('All');
+    const [periodFilter, setPeriodFilter] = useState(initialDate ? 'custom' : 'month'); 
+    const [paymentFilter, setPaymentFilter] = useState('All'); 
     const getLocalToday = () => {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     };
     const [customDate, setCustomDate] = useState(initialDate || getLocalToday());
     const [page, setPage] = useState(1);
-    const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
-    const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
-    const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
-    const [invoiceLoading, setInvoiceLoading] = useState(false);
     const itemsPerPage = 20;
 
+    useScrollLock(isInvoiceOpen);
+
+    // ESC key support
     useEffect(() => {
-        const handleResize = () => setIsMobile(window.innerWidth < 1024);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    // Lock body scroll when modal is open
-    useScrollLock(selectedSale || isInvoiceOpen);
-
-    useEffect(() => {
-        if (selectedSale && selectedSale.paymentMethod === 'Khata' && selectedSale.customerMobile) {
-            fetchKhataInfo(selectedSale.customerMobile);
-        } else {
-            setSelectedCustomerKhata(null);
-        }
-    }, [selectedSale]);
-
-    const fetchKhataInfo = async (mobile) => {
-        try {
-            const res = await khataService.getCustomers(shopId);
-            const found = res.data.data.find(c => c.mobile === mobile);
-            if (found) {
-                const details = await khataService.getDetails(found._id);
-                setSelectedCustomerKhata(details.data.data);
-            }
-        } catch (err) {
-            console.error('Failed to fetch Khata info:', err);
-        }
-    };
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') setIsInvoiceOpen(false);
+        };
+        if (isInvoiceOpen) window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isInvoiceOpen]);
 
     useEffect(() => {
         fetchInitialData();
     }, [shopId]);
 
     const fetchInitialData = async () => {
+        setLoading(true);
         try {
             const [salesRes, shopsRes] = await Promise.all([
-                saleService.getAll(shopId),
+                govSaleService.getAll(shopId),
                 shopService.getAll()
             ]);
             setSales(salesRes.data.data || []);
@@ -90,42 +68,26 @@ const SalesLogPage = () => {
                 setShop(shopsRes.data.data.find(s => s._id === shopId));
             }
         } catch (err) {
-            console.error('Error fetching initial data:', err);
+            console.error('Error fetching government sales data:', err);
         } finally {
             setLoading(false);
         }
     };
-    const handleViewBill = async (saleId) => {
-        if (!saleId) return;
-        
-        // Close modal first
-        setSelectedSale(null);
 
-        // Delay then open invoice
-        setTimeout(async () => {
-            setInvoiceLoading(true);
-            setIsInvoiceOpen(true);
-            try {
-                const res = await saleService.getSale(saleId);
-                setSelectedSaleForInvoice(res.data.data);
-            } catch (err) {
-                console.error('Failed to fetch bill:', err);
-            } finally {
-                setInvoiceLoading(false);
-            }
-        }, 150);
+    const handleViewBill = (sale) => {
+        if (!sale) return;
+        setSelectedSaleForInvoice(sale);
+        setIsInvoiceOpen(true);
     };
 
-    const handleDownloadPDF = (targetSale) => {
-        const saleToPrint = targetSale || selectedSaleForInvoice || selectedSale;
-        if (!saleToPrint) return;
-        invoiceService.downloadInvoice(saleToPrint, shop, 'SALE');
+    const handleDownloadPDF = (sale) => {
+        if (!sale) return;
+        invoiceService.downloadInvoice(sale, shop, 'GOV_SALE');
     };
 
-    const handleShareWhatsApp = (targetSale) => {
-        const saleToShare = targetSale || selectedSaleForInvoice || selectedSale;
-        if (!saleToShare) return;
-        invoiceService.shareInvoice(saleToShare, shop, 'SALE');
+    const handleShareWhatsApp = (sale) => {
+        if (!sale) return;
+        invoiceService.shareInvoice(sale, shop, 'GOV_SALE');
     };
 
     const filteredSales = sales.filter(sale => {
@@ -156,34 +118,32 @@ const SalesLogPage = () => {
             matchesPeriod = saleDate.getFullYear() === target.getFullYear() &&
                             saleDate.getMonth() === target.getMonth() &&
                             saleDate.getDate() === target.getDate();
+        } else if (periodFilter === 'all') {
+            matchesPeriod = true;
         }
 
         const matchesSearch = searchQuery === '' || 
             (sale.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            sale.totalAmount.toString().includes(searchQuery);
+            (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase());
 
-        const matchesPayment = paymentFilter === 'All' || sale.paymentMethod === paymentFilter;
+        const matchesPayment = paymentFilter === 'All' || 
+            (sale.paymentMethod && sale.paymentMethod.toLowerCase() === paymentFilter.toLowerCase());
 
         return matchesPeriod && matchesSearch && matchesPayment;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
     const paginatedSales = filteredSales.slice(0, page * itemsPerPage);
 
-    const totalOrders = filteredSales.length;
     const totalAmount = filteredSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+    const totalOrders = filteredSales.length;
     const totalItems = filteredSales.reduce((sum, s) => sum + (s.items || []).reduce((iSum, item) => iSum + (item.soldQtyEntered || item.quantity || 0), 0), 0);
-    
-    const totalProfit = filteredSales.reduce((sum, s) => sum + (s.totalProfit || s.profit || 0), 0);
 
     return (
         <div className="sales-log-v3">
             <PageHeader 
-                title="Sales Ledger"
-                subtitle={periodFilter === 'today' ? "Today's transactions" : 
-                        periodFilter === 'yesterday' ? "Yesterday's transactions" : 
-                        periodFilter === 'week' ? "Last 7 days' transactions" : 
-                        periodFilter === 'month' ? "This month's transactions" : "Custom transactions"}
+                title="Government Sales Ledger"
+                subtitle="Official inspection-ready transactions"
+                backAction={() => navigate(-1)}
                 actions={
                     <div className="sl-filters hide-mobile">
                         {['today', 'yesterday', 'week', 'month'].map(id => (
@@ -192,7 +152,7 @@ const SalesLogPage = () => {
                                 className={`sl-pill ${periodFilter === id ? 'active' : ''}`}
                                 onClick={() => { setPeriodFilter(id); setPage(1); }}
                             >
-                                {id.charAt(0).toUpperCase() + id.slice(1)}
+                                {id === 'week' ? '7D' : id.charAt(0).toUpperCase() + id.slice(1)}
                             </button>
                         ))}
                     </div>
@@ -204,11 +164,12 @@ const SalesLogPage = () => {
                     <Search size={20} color="#98A2B3" />
                     <input 
                         type="text" 
-                        placeholder="Search by customer name, amount or bill..." 
+                        placeholder="Search by Bill No or Customer Name..." 
                         value={searchQuery}
                         onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
                     />
                 </div>
+                
                 <div className="sl-filters">
                     {[
                         { id: 'today', label: 'Today' },
@@ -247,19 +208,19 @@ const SalesLogPage = () => {
 
             <div className="sl-summary-grid">
                 <div className="sl-sum-card">
-                    <span className="sl-sum-label">Total Sales</span>
+                    <span className="sl-sum-label">Total Official Sales</span>
                     <strong className="sl-sum-val">₹{totalAmount.toLocaleString()}</strong>
                 </div>
                 <div className="sl-sum-card">
-                    <span className="sl-sum-label">Orders</span>
+                    <span className="sl-sum-label">Total Records</span>
                     <strong className="sl-sum-val">{totalOrders}</strong>
                 </div>
                 <div className="sl-sum-card">
-                    <span className="sl-sum-label">Profit</span>
-                    <strong className="sl-sum-val profit">₹{Math.round(totalProfit).toLocaleString()}</strong>
+                    <span className="sl-sum-label">Government Revenue</span>
+                    <strong className="sl-sum-val profit">₹{totalAmount.toLocaleString()}</strong>
                 </div>
                 <div className="sl-sum-card">
-                    <span className="sl-sum-label">Items</span>
+                    <span className="sl-sum-label">Fertilizer Items Sold</span>
                     <strong className="sl-sum-val">{totalItems}</strong>
                 </div>
             </div>
@@ -273,19 +234,19 @@ const SalesLogPage = () => {
 
             <div className="compact-2x2-container">
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Total Sales</span>
+                    <span className="mini-stat-label">Total Official</span>
                     <strong className="mini-stat-val">₹{totalAmount.toLocaleString()}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Orders</span>
+                    <span className="mini-stat-label">Total Records</span>
                     <strong className="mini-stat-val">{totalOrders}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Profit</span>
-                    <strong className="mini-stat-val profit">₹{Math.round(totalProfit).toLocaleString()}</strong>
+                    <span className="mini-stat-label">Gov Revenue</span>
+                    <strong className="mini-stat-val profit">₹{totalAmount.toLocaleString()}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Items</span>
+                    <span className="mini-stat-label">Items Sold</span>
                     <strong className="mini-stat-val">{totalItems}</strong>
                 </div>
             </div>
@@ -303,8 +264,8 @@ const SalesLogPage = () => {
             ) : paginatedSales.length === 0 ? (
                 <EmptyState 
                     icon={Receipt}
-                    title="No Transactions Found"
-                    description={searchQuery ? `No transactions match your search "${searchQuery}".` : "No transactions recorded for the selected period."}
+                    title="No Official Records Found"
+                    description={searchQuery ? `No records match your search "${searchQuery}".` : "No official government records for the selected period."}
                     actionLabel={searchQuery ? "Clear Search" : "Create New Sale"}
                     onAction={searchQuery ? () => setSearchQuery('') : () => window.location.href = `/shop/${shopId}/pos`}
                     secondaryActionLabel={!searchQuery ? "Change Date" : null}
@@ -313,12 +274,12 @@ const SalesLogPage = () => {
             ) : (
                 <>
                     <div className="sl-list sl-mobile-only">
-                        {paginatedSales.map((sale, idx) => (
+                        {paginatedSales.map((sale) => (
                             <motion.div 
                                 whileTap={{ scale: 0.98 }}
                                 key={sale._id} 
                                 className="sl-card-premium"
-                                onClick={() => setSelectedSale(sale)}
+                                onClick={() => handleViewBill(sale)}
                             >
                                 <div className="sl-card-top">
                                     <div className="sl-card-name">{sale.customerName || 'Walk-in Customer'}</div>
@@ -338,9 +299,11 @@ const SalesLogPage = () => {
                                     <div className="sl-card-meta">
                                         <span>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                         <span className="divider-dot">•</span>
-                                        <span>Bill #{sale._id.slice(-6).toUpperCase()}</span>
+                                        <span>Gov Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                         <span className="divider-dot">•</span>
-                                        <span className={`sl-cp-pay-badge ${sale.paymentMethod.toLowerCase()}`}>{sale.paymentMethod}</span>
+                                        <span className="sl-cp-pay-badge upi" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                            <ShieldCheck size={12} /> Official
+                                        </span>
                                     </div>
                                 </div>
                             </motion.div>
@@ -348,414 +311,165 @@ const SalesLogPage = () => {
                     </div>
 
                     <div className="sl-desktop-only radical-desktop-container">
-                    <div className="rdc-header">
-                        <div className="rdch-left">
-                            <h3>Sales History</h3>
-                            <p>{filteredSales.length} Transactions Found</p>
+                        <div className="rdc-header">
+                            <div className="rdch-left">
+                                <h3>Official Government Records</h3>
+                                <p>{filteredSales.length} Records Found</p>
+                            </div>
+                            <div className="rdch-right">
+                                <span className="rdch-stat">Total Amount: <strong>₹{totalAmount.toLocaleString()}</strong></span>
+                            </div>
                         </div>
-                        <div className="rdch-right">
-                            <span className="rdch-stat">Total: <strong>₹{filteredSales.reduce((acc, s) => acc + (s.totalAmount || 0), 0).toLocaleString()}</strong></span>
-                        </div>
-                    </div>
-                    <table className="radical-desktop-table">
-                        <thead>
-                            <tr>
-                                <th>Bill No</th>
-                                <th>Customer Name</th>
-                                <th>Time</th>
-                                <th style={{ width: '25%' }}>Items Summary</th>
-                                <th>Payment</th>
-                                <th style={{ textAlign: 'center' }}>History</th>
-                                <th style={{ textAlign: 'right' }}>Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {paginatedSales.map((sale) => {
-                                const customerHistory = sales.filter(s => 
-                                    s._id !== sale._id && 
-                                    sale.customerName && 
-                                    sale.customerName !== 'Walk-in Customer' &&
-                                    s.customerName?.toLowerCase().trim() === sale.customerName?.toLowerCase().trim()
-                                );
-                                const prevOrders = customerHistory.length;
-                                
-                                return (
-                                    <tr key={sale._id} className="sl-desktop-row" onClick={() => setSelectedSale(sale)}>
+                        <table className="radical-desktop-table">
+                            <thead>
+                                <tr>
+                                    <th>Bill No</th>
+                                    <th>Customer Name</th>
+                                    <th>Date & Time</th>
+                                    <th style={{ width: '25%' }}>Fertilizer Items Summary</th>
+                                    <th style={{ textAlign: 'center' }}>Gov Status</th>
+                                    <th style={{ textAlign: 'right' }}>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {paginatedSales.map((sale) => (
+                                    <tr key={sale._id} className="sl-desktop-row" onClick={() => handleViewBill(sale)}>
                                         <td className="sld-bill">
-                                            <span className="bill-badge">#{sale._id.slice(-6).toUpperCase()}</span>
+                                            <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                         </td>
                                         <td className="sld-cust">
                                             <div className="cust-main">{sale.customerName || 'Walk-in Customer'}</div>
-                                            {sale.customerPhone && <div className="cust-sub">{sale.customerPhone}</div>}
+                                            {sale.customerMobile && <div className="cust-sub">{sale.customerMobile}</div>}
                                         </td>
                                         <td className="sld-time">
-                                            {new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            <div style={{ fontWeight: 600 }}>{new Date(sale.date).toLocaleDateString('en-IN')}</div>
+                                            <div style={{ fontSize: '12px', color: '#64748b' }}>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                         </td>
                                         <td className="sld-items">
                                             <div className="items-preview">
-                                                {(sale.items || []).slice(0, 2).map(item => item.productName).join(', ')}
+                                                {(sale.items || []).slice(0, 2).map(item => `${item.productName}`).join(', ')}
                                                 {sale.items?.length > 2 && ` +${sale.items.length - 2} more`}
                                             </div>
                                         </td>
-                                        <td className="sld-method">
-                                            <span className={`method-badge ${sale.paymentMethod.toLowerCase()}`}>
-                                                {sale.paymentMethod.toUpperCase()}
+                                        <td className="sld-prev" style={{ textAlign: 'center' }}>
+                                            <span className="status-badge paid" style={{ background: '#ECFDF5', color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                <ShieldCheck size={14} /> Logged
                                             </span>
                                         </td>
-                                        <td className="sld-prev" style={{ textAlign: 'center' }}>
-                                            <span className="history-count">{prevOrders} Orders</span>
-                                        </td>
                                         <td className="sld-amt" style={{ textAlign: 'right' }}>
-                                            <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString()}</div>
+                                            <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                                         </td>
                                     </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </>
             )}
 
             {filteredSales.length > paginatedSales.length && (
                 <button className="sl-load-more" onClick={() => setPage(p => p + 1)}>
-                    Load More Transactions
+                    Load More Records
                 </button>
             )}
 
+            {/* Invoice Modal Overlay */}
             <AnimatePresence>
-                {selectedSale && !isInvoiceOpen && (
+                {isInvoiceOpen && selectedSaleForInvoice && (
                     <motion.div 
-                        key={`sale-modal-${selectedSale._id}`}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="sl-modal-overlay"
+                        className="modal-overlay-v2"
+                        onClick={() => setIsInvoiceOpen(false)}
                     >
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="sl-backdrop" onClick={() => setSelectedSale(null)} />
                         <motion.div 
-                            initial={{ y: "100%" }} 
-                            animate={{ y: 0 }} 
-                            exit={{ y: "100%" }} 
-                            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                            className="sl-sheet"
+                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
+                            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                            className="gsl-invoice-modal gov-corner-accent"
+                            onClick={(e) => e.stopPropagation()}
                         >
-                            <div className="sl-sheet-handle"></div>
-                            
-                            <div className="sl-m-header-v2">
-                                <div className="slmh-title">
-                                    <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>Sale Details</h3>
-                                    <p style={{ fontSize: '13px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
-                                        Bill #{selectedSale.invoiceNumber || selectedSale._id.slice(-6).toUpperCase()} • {new Date(selectedSale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} • {new Date(selectedSale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            <div className="gsl-im-header">
+                                <div>
+                                    <h3 style={{ margin: 0, color: '#059669', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px' }}>
+                                        <ShieldCheck size={24} /> Government Record Copy
+                                    </h3>
+                                    <p style={{ margin: '4px 0 0', fontSize: '14px', color: '#047857', fontWeight: 600 }}>
+                                        Bill #{selectedSaleForInvoice.invoiceNumber || selectedSaleForInvoice._id.slice(-6).toUpperCase()}
                                     </p>
                                 </div>
-                                <button className="sl-m-close-v2" onClick={() => setSelectedSale(null)} style={{ background: '#f1f5f9', padding: '8px', borderRadius: '50%' }}><X size={20} /></button>
+                                <button className="gsl-close-btn" onClick={() => setIsInvoiceOpen(false)}>
+                                    <X size={24} />
+                                </button>
                             </div>
-
-                            <div className="sl-m-content-v2">
-                                <div className="radical-details-grid">
-                                    <div className="rdg-col">
-                                        <label>Customer</label>
-                                        <span>{selectedSale.customerName || 'Walk-in Customer'}</span>
+                            
+                            <div className="gsl-im-body">
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
+                                    <div>
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Customer</div>
+                                        <div style={{ fontWeight: 700, fontSize: '16px', color: '#101828' }}>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</div>
+                                        {selectedSaleForInvoice.customerMobile && <div style={{ color: '#667085' }}>{selectedSaleForInvoice.customerMobile}</div>}
                                     </div>
-                                    <div className="rdg-col">
-                                        <label>Payment Method</label>
-                                        <span className={`method-badge ${selectedSale.paymentMethod.toLowerCase()}`}>
-                                            {selectedSale.paymentMethod.toUpperCase()}
-                                        </span>
-                                    </div>
-                                    <div className="rdg-col">
-                                        <label>Status</label>
-                                        <span className={`status-badge ${selectedSale.paymentMethod === 'Khata' ? 'pending' : 'paid'}`}>
-                                            {selectedSale.paymentMethod === 'Khata' ? 'Payment Pending' : 'Fully Paid'}
-                                        </span>
-                                    </div>
-                                    <div className="rdg-col">
-                                        <label>Transaction Time</label>
-                                        <span>{new Date(selectedSale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Date & Time</div>
+                                        <div style={{ fontWeight: 600, color: '#101828' }}>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</div>
+                                        <div style={{ color: '#667085' }}>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                     </div>
                                 </div>
 
-                                <div className="radical-items-section">
-                                    <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: '#94a3b8', letterSpacing: '0.05em', marginBottom: '12px' }}>Items & Quantity</h4>
-                                    <table className="radical-invoice-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Item Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Rate</th>
-                                                <th style={{ textAlign: 'right' }}>Total</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(selectedSale.items || []).map((item, i) => (
-                                                <tr key={i}>
-                                                    <td>
-                                                        <div className="rit-name">{item.productName}</div>
-                                                        <div className="rit-unit">{item.soldUnit || item.unit}</div>
-                                                    </td>
-                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.soldQtyEntered || item.quantity}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price).toLocaleString()}</td>
-                                                    <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{(item.totalPrice || (item.price * item.quantity)).toLocaleString()}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-
-                                <div className="radical-summary-section">
-                                    <div className="rs-row">
-                                        <span>Subtotal</span>
-                                        <span>₹{(selectedSale.salesAmount || selectedSale.totalAmount + (selectedSale.discount || 0)).toLocaleString()}</span>
-                                    </div>
-                                    {selectedSale.discount > 0 && (
-                                        <div className="rs-row discount">
-                                            <span>Discount</span>
-                                            <span>- ₹{selectedSale.discount.toLocaleString()}</span>
-                                        </div>
-                                    )}
-                                    <div className="rs-row grand">
-                                        <span>Grand Total</span>
-                                        <strong>₹{(selectedSale.totalAmount || 0).toLocaleString()}</strong>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="radical-sticky-footer">
-                                <button className="r-btn r-btn-primary" onClick={() => handleViewBill(selectedSale._id)}>
-                                    <Receipt size={18} />
-                                    <span>View Full Bill</span>
-                                </button>
-                                
-                                {selectedSale.paymentMethod === 'Khata' && (
-                                    <button className="r-btn r-btn-success" onClick={() => window.location.href = `/khata/${shopId}`}>
-                                        <ArrowDownCircle size={18} />
-                                        <span>Receive Payment</span>
-                                    </button>
-                                )}
-
-                                <button className="r-btn r-btn-secondary" onClick={() => handleShareWhatsApp()}>
-                                    <MessageSquare size={18} />
-                                    <span>Share</span>
-                                </button>
-                                
-                                <button className="r-btn r-btn-outline" onClick={() => setSelectedSale(null)}>
-                                    Close
-                                </button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-            
-            <AnimatePresence>
-                {isInvoiceOpen && (
-                    <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        className="invoice-preview-screen"
-                    >
-                        <div className="ips-top-bar">
-                            <button className="ips-back-btn" onClick={() => setIsInvoiceOpen(false)}>
-                                <ChevronLeft size={20} />
-                                <span>Back</span>
-                            </button>
-                            <h2>View Bill</h2>
-                            <div style={{ width: 60 }} />
-                        </div>
-
-                        <div className="ips-content">
-                            {invoiceLoading ? (
-                                <div className="khata-loader"><div className="spinner"></div></div>
-                            ) : !selectedSaleForInvoice ? (
-                                <div className="ips-error">Bill details could not be found.</div>
-                            ) : (
-                                <div className="printable-invoice-sheet">
-                                    <div className="pis-header">
-                                        <div className="pis-logo-circle">{(shop?.name || 'S')[0]}</div>
-                                        <h1 className="pis-shop-name">{shop?.name || 'ShopPulse Business'}</h1>
-                                        <p className="pis-shop-address">{shop?.location || 'Ankisa, Maharashtra'}</p>
-                                        <p className="pis-shop-contact">Phone: {shop?.contactNumber || 'XXXXXXXXXX'} | GSTIN: {shop?.gstNumber || 'N/A'}</p>
-                                    </div>
-
-                                    <div className="pis-divider-solid"></div>
-
-                                    <div className="pis-info-grid">
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">INVOICE DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Invoice No:</label>
-                                                <strong>#{selectedSaleForInvoice._id.slice(-6).toUpperCase()}</strong>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Date:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Time:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Payment:</label>
-                                                <strong className="pis-payment-method">{selectedSaleForInvoice.paymentMethod.toUpperCase()}</strong>
-                                            </div>
-                                        </div>
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">CUSTOMER DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Name:</label>
-                                                <strong>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</strong>
-                                            </div>
-                                            {selectedSaleForInvoice.customerMobile && (
-                                                <div className="pis-info-row">
-                                                    <label>Mobile:</label>
-                                                    <span>{selectedSaleForInvoice.customerMobile}</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <table className="pis-items-table-v2">
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '40px' }}>Sl</th>
-                                                <th>Product Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Rate</th>
-                                                <th style={{ textAlign: 'right' }}>Amount</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                                <tr key={i}>
-                                                    <td>{i + 1}</td>
-                                                    <td>{item.productName}</td>
-                                                    <td style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-
-                                    {/* Mobile Item Cards (Stacked Layout) */}
-                                    <div className="pis-items-mobile-list">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '24px' }}>
+                                    <thead>
+                                        <tr style={{ borderBottom: '2px solid #F2F4F7' }}>
+                                            <th style={{ textAlign: 'left', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Fertilizer Details</th>
+                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Qty</th>
+                                            <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Gov Rate</th>
+                                            <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
                                         {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                            <div key={i} className="pis-mobile-item-card">
-                                                <div className="pmic-header">
-                                                    <span className="pmic-sl">#{i + 1}</span>
-                                                    <span className="pmic-name">{item.productName}</span>
-                                                </div>
-                                                <div className="pmic-body">
-                                                    <div className="pmic-col">
-                                                        <label>Qty</label>
-                                                        <span>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Rate</label>
-                                                        <span>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Amount</label>
-                                                        <strong>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</strong>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                            <tr key={i} style={{ borderBottom: '1px solid #F2F4F7' }}>
+                                                <td style={{ padding: '16px 0', fontWeight: 600, color: '#101828' }}>{item.productName}</td>
+                                                <td style={{ padding: '16px 0', textAlign: 'center', color: '#475467' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit}</td>
+                                                <td style={{ padding: '16px 0', textAlign: 'right', color: '#475467' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
+                                                <td style={{ padding: '16px 0', textAlign: 'right', fontWeight: 700, color: '#101828' }}>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</td>
+                                            </tr>
                                         ))}
-                                    </div>
+                                    </tbody>
+                                </table>
 
-                                    <div className="pis-summary-v2">
-                                        <div className="pis-summary-box">
-                                            <div className="pis-sum-row">
-                                                <span>Subtotal:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount + (selectedSaleForInvoice.discount || 0)).toLocaleString()}</span>
-                                            </div>
-                                            {selectedSaleForInvoice.discount > 0 && (
-                                                <div className="pis-sum-row discount">
-                                                    <span>Discount:</span>
-                                                    <span>- ₹{selectedSaleForInvoice.discount.toLocaleString()}</span>
-                                                </div>
-                                            )}
-                                            <div className="pis-sum-row grand">
-                                                <span>GRAND TOTAL:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount || 0).toLocaleString()}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="pis-footer-v2">
-                                        <div className="pis-footer-divider"></div>
-                                        <h3>Thank you for your business!</h3>
-                                        <p>Returns accepted within 7 days with original bill.</p>
-                                        <p>This is a computer generated invoice.</p>
-                                        <div className="pis-brand-footer">Generated by ShopPulse POS</div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '16px', borderRadius: '12px' }}>
+                                    <div style={{ color: '#047857', fontWeight: 600 }}>Payment: {selectedSaleForInvoice.paymentMethod}</div>
+                                    <div style={{ textAlign: 'right' }}>
+                                        <span style={{ fontSize: '14px', color: '#047857', marginRight: '12px', fontWeight: 600 }}>Total Gov Amount</span>
+                                        <strong style={{ fontSize: '24px', color: '#059669', fontWeight: 800 }}>₹{selectedSaleForInvoice.totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                                     </div>
                                 </div>
-                            )}
-                        </div>
-
-                        <div className="ips-actions-bar">
-                            <button className="ips-btn ips-wa" onClick={() => handleShareWhatsApp()}>
-                                WhatsApp
-                            </button>
-                            <button className="ips-btn ips-pdf" onClick={() => handleDownloadPDF()}>
-                                Download PDF
-                            </button>
-                            <button className="ips-btn ips-print" onClick={() => window.print()}>
-                                Print
-                            </button>
-                            <button className="ips-btn ips-close" onClick={() => setIsInvoiceOpen(false)}>
-                                Close
-                            </button>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            <AnimatePresence>
-                {selectedCustomer && (
-                    <div className="sl-modal-overlay">
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="sl-backdrop" onClick={() => setSelectedCustomer(null)} />
-                        <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} className="sl-sheet-history">
-                            <div className="sl-m-header">
-                                <div>
-                                    <h3>Customer Purchase History</h3>
-                                    <p>{selectedCustomer}</p>
-                                </div>
-                                <button className="sl-m-close" onClick={() => setSelectedCustomer(null)}><X size={20} /></button>
                             </div>
-                            <div className="sl-m-content">
-                                {sales
-                                    .filter(s => s.customerName?.toLowerCase().trim() === selectedCustomer.toLowerCase().trim())
-                                    .sort((a, b) => new Date(b.date) - new Date(a.date))
-                                    .map(sale => (
-                                        <div key={sale._id} className="sl-hist-card">
-                                            <div className="sl-hist-head">
-                                                <strong>Bill #{sale._id.slice(-6).toUpperCase()}</strong>
-                                                <span>{new Date(sale.date).toLocaleDateString()} {new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="sl-hist-body">
-                                                {(sale.items || []).map((item, idx) => (
-                                                    <div key={idx} className="sl-hist-item">
-                                                        <span>{item.productName} x {item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Piece'}</span>
-                                                        <strong>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</strong>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div className="sl-hist-foot">
-                                                <span>Method: {sale.paymentMethod}</span>
-                                                <strong>Total: ₹{sale.totalAmount.toLocaleString()}</strong>
-                                            </div>
-                                        </div>
-                                    ))}
+                            
+                            <div className="gsl-im-footer">
+                                <button 
+                                    className="gsl-print-btn"
+                                    onClick={() => handleDownloadPDF(selectedSaleForInvoice)}
+                                >
+                                    Print Government Copy
+                                </button>
+                                <button 
+                                    className="gsl-wa-btn"
+                                    onClick={() => handleShareWhatsApp(selectedSaleForInvoice)}
+                                >
+                                    <MessageSquare size={18} /> Download / Share PDF
+                                </button>
                             </div>
                         </motion.div>
-                    </div>
+                    </motion.div>
                 )}
             </AnimatePresence>
 
             <style jsx="true">{`
+
                 .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
                 .radical-desktop-container { background: white; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0,0,0,0.05); overflow: hidden; margin-top: 24px; }
                 .rdc-header { padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
@@ -1323,9 +1037,64 @@ const SalesLogPage = () => {
                     .sl-m-actions-v3 { padding: 12px 16px; }
                     .btn-v3-primary, .btn-v3-success, .btn-v3-secondary { height: 44px; font-size: 13px; border-radius: 10px; }
                 }
+            
+
+                /* MODAL STYLES & GOV DECORATION */
+                .modal-overlay-v2 { position: fixed; inset: 0; z-index: 7000; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); padding: 20px; }
+                .gsl-invoice-modal { background: white; border-radius: 16px; width: 100%; max-width: 700px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); overflow: hidden; border-top: 6px solid #10B981; }
+                .gsl-im-header { padding: 20px 24px; border-bottom: 1px solid #E4E7EC; display: flex; justify-content: space-between; align-items: center; background: #ECFDF5; }
+                .gsl-close-btn { background: transparent; border: none; cursor: pointer; color: #047857; width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+                .gsl-close-btn:hover { background: #D1FAE5; }
+                .gsl-im-body { padding: 24px; overflow-y: auto; flex: 1; }
+                .gsl-im-footer { padding: 20px 24px; border-top: 1px solid #E4E7EC; display: flex; gap: 16px; background: #F9FAFB; }
+                
+                .gsl-print-btn { flex: 1; padding: 12px; background: white; border: 1px solid #D0D5DD; border-radius: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; color: #344054; transition: 0.2s; }
+                .gsl-print-btn:hover { background: #F9FAFB; border-color: #98A2B3; }
+                
+                .gsl-wa-btn { flex: 1; padding: 12px; background: #10B981; border: none; border-radius: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; color: white; transition: 0.2s; }
+                .gsl-wa-btn:hover { background: #059669; }
+
+                @media (max-width: 768px) {
+                    .modal-overlay-v2 { padding: 0; align-items: flex-end; }
+                    .gsl-invoice-modal { max-width: 100%; border-radius: 20px 20px 0 0; max-height: 90vh; border-top: none; }
+                }
+
+                /* Decorative Curved Corner Accent */
+                .gov-corner-accent {
+                    position: relative;
+                    overflow: hidden;
+                }
+                .gov-corner-accent::before {
+                    content: '';
+                    position: absolute;
+                    bottom: -10px;
+                    right: -10px;
+                    width: 180px;
+                    height: 180px;
+                    background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.02));
+                    border-top-left-radius: 120px;
+                    z-index: 0;
+                    pointer-events: none;
+                }
+                .gov-corner-accent::after {
+                    content: '';
+                    position: absolute;
+                    bottom: -5px;
+                    right: -5px;
+                    width: 100px;
+                    height: 100px;
+                    background: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.05));
+                    border-top-left-radius: 80px;
+                    z-index: 0;
+                    pointer-events: none;
+                }
+                .gov-corner-accent > * {
+                    position: relative;
+                    z-index: 1;
+                }
             `}</style>
         </div>
     );
 };
 
-export default SalesLogPage;
+export default GovSalesLogPage;

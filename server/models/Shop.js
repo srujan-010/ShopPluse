@@ -40,6 +40,10 @@ const shopSchema = new mongoose.Schema({
         type: Number,
         default: 1000
     },
+    govInvoiceCounter: {
+        type: Number,
+        default: 1000
+    },
     owner: {
         type: mongoose.Schema.ObjectId,
         ref: 'User',

@@ -280,7 +280,7 @@ const KhataPage = () => {
                                 </div>
 
                                 {/* Desktop Table */}
-                                <div className="khata-desktop-table-wrapper">
+                                <div className="khata-desktop-table-wrapper table-responsive-wrapper">
                                     <table className="khata-desktop-table">
                                         <thead>
                                             <tr>
@@ -512,28 +512,30 @@ const KhataPage = () => {
                                         </div>
                                     </div>
 
-                                    <table className="pis-items-table-v2">
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '40px' }}>Sl</th>
-                                                <th>Product Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Rate</th>
-                                                <th style={{ textAlign: 'right' }}>Amount</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                                <tr key={i}>
-                                                    <td>{i + 1}</td>
-                                                    <td>{item.productName}</td>
-                                                    <td style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price || (item.totalPrice / item.quantity)).toFixed(2)}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.totalPrice || ((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity))).toFixed(2)}</td>
+                                    <div className="table-responsive-wrapper">
+                                        <table className="pis-items-table-v2">
+                                            <thead>
+                                                <tr>
+                                                    <th style={{ width: '40px' }}>Sl</th>
+                                                    <th>Product Description</th>
+                                                    <th style={{ textAlign: 'center' }}>Qty</th>
+                                                    <th style={{ textAlign: 'right' }}>Rate</th>
+                                                    <th style={{ textAlign: 'right' }}>Amount</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                            </thead>
+                                            <tbody>
+                                                {(selectedSaleForInvoice.items || []).map((item, i) => (
+                                                    <tr key={i}>
+                                                        <td>{i + 1}</td>
+                                                        <td>{item.productName}</td>
+                                                        <td style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</td>
+                                                        <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price || (item.totalPrice / item.quantity)).toFixed(2)}</td>
+                                                        <td style={{ textAlign: 'right' }}>₹{(item.totalPrice || ((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity))).toFixed(2)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
 
                                     {/* Mobile Item Cards (Stacked Layout) */}
                                     <div className="pis-items-mobile-list">
@@ -657,46 +659,48 @@ const KhataPage = () => {
 
                                 <div className="radical-items-section">
                                     <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: '#94a3b8', letterSpacing: '0.05em', marginBottom: '12px' }}>Items & Details</h4>
-                                    <table className="radical-invoice-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Amount</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {txnSaleDetails ? (
-                                                (txnSaleDetails.items || []).map((item, i) => (
-                                                    <tr key={i}>
-                                                        <td>
-                                                            <div className="rit-name">{item.productName}</div>
-                                                            <div className="rit-unit">{item.soldUnit || item.unit}</div>
-                                                        </td>
-                                                        <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.soldQtyEntered || item.quantity}</td>
-                                                        <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{(item.totalPrice || (item.price * item.quantity)).toLocaleString()}</td>
-                                                    </tr>
-                                                ))
-                                            ) : selectedTxn.items && selectedTxn.items.length > 0 ? (
-                                                selectedTxn.items.map((item, i) => (
-                                                    <tr key={i}>
-                                                        <td>
-                                                            <div className="rit-name">{item.productName}</div>
-                                                            <div className="rit-unit">{item.unit}</div>
-                                                        </td>
-                                                        <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity}</td>
-                                                        <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{selectedTxn.amount.toLocaleString()}</td>
-                                                    </tr>
-                                                ))
-                                            ) : (
+                                    <div className="table-responsive-wrapper">
+                                        <table className="radical-invoice-table">
+                                            <thead>
                                                 <tr>
-                                                    <td colSpan="3" style={{ textAlign: 'center', color: '#64748b', fontStyle: 'italic', padding: '24px' }}>
-                                                        {selectedTxn.note || (selectedTxn.type === 'due' ? 'Manual credit entry' : 'Payment received')}
-                                                    </td>
+                                                    <th>Description</th>
+                                                    <th style={{ textAlign: 'center' }}>Qty</th>
+                                                    <th style={{ textAlign: 'right' }}>Amount</th>
                                                 </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
+                                            </thead>
+                                            <tbody>
+                                                {txnSaleDetails ? (
+                                                    (txnSaleDetails.items || []).map((item, i) => (
+                                                        <tr key={i}>
+                                                            <td>
+                                                                <div className="rit-name">{item.productName}</div>
+                                                                <div className="rit-unit">{item.soldUnit || item.unit}</div>
+                                                            </td>
+                                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.soldQtyEntered || item.quantity}</td>
+                                                            <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{(item.totalPrice || (item.price * item.quantity)).toLocaleString()}</td>
+                                                        </tr>
+                                                    ))
+                                                ) : selectedTxn.items && selectedTxn.items.length > 0 ? (
+                                                    selectedTxn.items.map((item, i) => (
+                                                        <tr key={i}>
+                                                            <td>
+                                                                <div className="rit-name">{item.productName}</div>
+                                                                <div className="rit-unit">{item.unit}</div>
+                                                            </td>
+                                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity}</td>
+                                                            <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{selectedTxn.amount.toLocaleString()}</td>
+                                                        </tr>
+                                                    ))
+                                                ) : (
+                                                    <tr>
+                                                        <td colSpan="3" style={{ textAlign: 'center', color: '#64748b', fontStyle: 'italic', padding: '24px' }}>
+                                                            {selectedTxn.note || (selectedTxn.type === 'due' ? 'Manual credit entry' : 'Payment received')}
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 </div>
 
                                 <div className="radical-summary-section">

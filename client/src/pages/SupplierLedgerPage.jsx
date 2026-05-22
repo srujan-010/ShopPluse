@@ -74,7 +74,7 @@ const SupplierLedgerPage = () => {
     const handleRecordPayment = async (e) => {
         e.preventDefault();
         if (!selectedPurchaseForPayment) {
-            setAlertConfig({ open: true, title: 'Bill Required', message: 'Please select a bill first.', type: 'error' });
+            setAlertConfig({ open: true, title: 'Bill Required', message: 'Please select a bill or auto-allocate.', type: 'error' });
             return;
         }
         if (!paymentInput.amount || Number(paymentInput.amount) <= 0) {
@@ -83,12 +83,33 @@ const SupplierLedgerPage = () => {
         }
         try {
             setIsSaving(true);
-            await purchaseService.addPayment(selectedPurchaseForPayment._id, {
-                amount: Number(paymentInput.amount),
-                mode: paymentInput.mode,
-                note: paymentInput.note
-            });
-            setAlertConfig({ open: true, title: 'Success', message: 'Payment successfully recorded!', type: 'success' });
+            
+            if (selectedPurchaseForPayment._id === 'AUTO') {
+                let remainingAmount = Number(paymentInput.amount);
+                const pendingPurchases = [...purchases]
+                    .filter(p => p.dueAmount > 0)
+                    .sort((a, b) => new Date(a.date) - new Date(b.date)); // Oldest first
+                
+                for (const p of pendingPurchases) {
+                    if (remainingAmount <= 0) break;
+                    const payAmount = Math.min(remainingAmount, p.dueAmount);
+                    await purchaseService.addPayment(p._id, {
+                        amount: payAmount,
+                        mode: paymentInput.mode,
+                        note: paymentInput.note || 'Auto-allocated payment'
+                    });
+                    remainingAmount -= payAmount;
+                }
+                setAlertConfig({ open: true, title: 'Success', message: 'Payment successfully auto-allocated!', type: 'success' });
+            } else {
+                await purchaseService.addPayment(selectedPurchaseForPayment._id, {
+                    amount: Number(paymentInput.amount),
+                    mode: paymentInput.mode,
+                    note: paymentInput.note
+                });
+                setAlertConfig({ open: true, title: 'Success', message: 'Payment successfully recorded!', type: 'success' });
+            }
+            
             setPaymentInput({ amount: '', mode: 'Cash', note: '' });
             setSelectedPurchaseForPayment(null);
             setShowPaymentModal(false);
@@ -158,29 +179,26 @@ const SupplierLedgerPage = () => {
                 .sl-mobile-only { display: none; }
                 .sl-desktop-only { display: block; }
                 @media (max-width: 768px) {
-                    .supplier-ledger-view { padding: 0 0 80px 0 !important; gap: 0 !important; background: #F8FAFC; min-height: 100vh; }
-                    .slv-header { padding: 10px 12px !important; height: 56px !important; display: flex !important; justify-content: space-between !important; align-items: center !important; position: sticky; top: 0; background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); z-index: 100; border-bottom: 1px solid #E2E8F0 !important; margin: 0 !important; }
-                    .slv-header > div:first-child { gap: 8px !important; }
-                    .slv-header h2 { font-size: 18px !important; font-weight: 900 !important; margin: 0 !important; }
+                    .supplier-ledger-view { padding: 0 0 100px 0 !important; gap: 0 !important; background: #F8FAFC; min-height: 100vh; overflow-x: hidden; }
+                    .slv-header { padding: 12px !important; height: auto !important; display: flex !important; flex-direction: column !important; align-items: stretch !important; position: static !important; background: transparent; border-bottom: none !important; margin: 0 !important; gap: 16px !important; }
+                    .slv-header > div:first-child { width: 100% !important; justify-content: flex-start !important; }
+                    .slv-header h2 { font-size: 20px !important; font-weight: 900 !important; margin: 0 !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
                     .slv-header p { display: none; }
-                    .slv-header-buttons { display: flex !important; width: auto !important; gap: 6px !important; }
-                    .slv-header-buttons a, .slv-header-buttons button { height: 32px !important; font-size: 11px !important; padding: 0 10px !important; border-radius: 8px !important; }
-                    .slv-header-buttons span { display: none; }
+                    
+                    .slv-header-buttons { display: flex !important; width: 100% !important; gap: 8px !important; flex-wrap: wrap !important; overflow: visible !important; }
+                    .slv-header-buttons a, .slv-header-buttons button { flex: 1 1 calc(50% - 4px) !important; min-width: 140px !important; height: 44px !important; font-size: 13px !important; padding: 0 8px !important; border-radius: 12px !important; justify-content: center !important; }
+                    .slv-header-buttons span { display: inline !important; }
                     
                     .sl-desktop-only { display: none !important; }
                     .sl-mobile-only { display: grid !important; }
-                    .sl-summary-grid-mobile { padding: 12px; gap: 6px; grid-template-columns: 1fr 1fr; }
-                    .sl-mini-chip { background: white; border: 1px solid #E2E8F0; borderRadius: 10px; padding: 8px 10px; display: flex; flexDirection: column; justifyContent: center; height: 56px; boxSizing: border-box; }
-                    .sl-mini-chip span { fontSize: 10px; fontWeight: 700; color: #64748B; textTransform: uppercase; }
-                    .sl-mini-chip strong { fontSize: 14px; fontWeight: 900; color: #0F172A; }
+                    .sl-summary-grid-mobile { padding: 4px 12px 16px; gap: 12px !important; grid-template-columns: 1fr 1fr !important; }
                     
                     .slv-history-grid { display: flex !important; flex-direction: column !important; gap: 12px !important; padding: 0 12px !important; }
-                    .slv-history-card { padding: 14px !important; border-radius: 16px !important; border: 1px solid #E2E8F0 !important; }
+                    .slv-history-card { padding: 16px !important; border-radius: 16px !important; border: 1px solid #E2E8F0 !important; }
                     .slv-history-card h3 { font-size: 15px !important; margin-bottom: 10px !important; }
                     .slv-history-item { padding: 10px !important; border-radius: 10px !important; }
                     
-                    .bill-list-mobile { padding: 0 12px 12px; display: flex; flexDirection: column; gap: 6px; }
-                    .bill-card-mobile { background: white; borderRadius: 10px; padding: 8px 10px; border: 1px solid #E2E8F0; display: flex; flexDirection: column; gap: 2px; height: 76px; boxSizing: border-box; }
+                    .bill-list-mobile { padding: 16px 12px 24px; display: flex; flexDirection: column; gap: 10px; margin-top: 8px; }
                 }
             `}</style>
             
@@ -276,22 +294,22 @@ const SupplierLedgerPage = () => {
             </div>
             </div>
             <div className="sl-mobile-only sl-summary-grid-mobile" style={{ display: 'grid' }}>
-                <div className="sl-mini-chip">
-                    <span>Purchase</span>
-                    <strong>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(totalPurchased)}</strong>
-                </div>
-                <div className="sl-mini-chip">
-                    <span>Paid</span>
-                    <strong style={{ color: '#10B981' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(totalPaid)}</strong>
-                </div>
-                <div className="sl-mini-chip" style={{ background: outstandingDue > 0 ? 'linear-gradient(135deg, #FFFBEB, #FEF3C7)' : 'white', borderColor: outstandingDue > 0 ? '#FCD34D' : '#E2E8F0' }}>
-                    <span style={{ color: outstandingDue > 0 ? '#B45309' : '#64748B' }}>Due</span>
-                    <strong style={{ color: outstandingDue > 0 ? '#92400E' : '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(outstandingDue)}</strong>
-                </div>
-                <div className="sl-mini-chip">
-                    <span>Bills</span>
-                    <strong>{totalBills}</strong>
-                </div>
+                    <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Purchase</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(totalPurchased)}</strong>
+                    </div>
+                    <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Paid</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(totalPaid)}</strong>
+                    </div>
+                    <div style={{ background: outstandingDue > 0 ? 'linear-gradient(135deg, #FFFBEB, #FEF3C7)' : 'white', border: '1px solid', borderColor: outstandingDue > 0 ? '#FCD34D' : '#E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '800', color: outstandingDue > 0 ? '#B45309' : '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Due</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: outstandingDue > 0 ? '#92400E' : '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(outstandingDue)}</strong>
+                    </div>
+                    <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '16px', padding: '14px 16px', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: 'auto', boxSizing: 'border-box', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>Bills</span>
+                        <strong style={{ fontSize: '18px', fontWeight: '900', color: '#0F172A' }}>{totalBills}</strong>
+                    </div>
             </div>
             </>
 
@@ -300,7 +318,7 @@ const SupplierLedgerPage = () => {
             <div className="sl-desktop-only">
             <div style={{ background: 'white', border: '1px solid #E2E8F0', borderRadius: '24px', padding: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
                 <h3 style={{ margin: '0 0 20px 0', fontSize: '18px', color: '#0F172A', fontWeight: '800' }}>Purchase Invoices</h3>
-                <div style={{ overflowX: 'auto' }}>
+                <div className="table-responsive-wrapper">
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ background: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
@@ -346,30 +364,43 @@ const SupplierLedgerPage = () => {
             </div>
             <div className="sl-mobile-only bill-list-mobile">
                 <h3 style={{ margin: '0 0 4px 0', fontSize: '15px', color: '#0F172A', fontWeight: '800' }}>Purchase Invoices</h3>
-                {purchases.map((pur, idx) => (
-                    <motion.div 
-                        whileTap={{ scale: 0.98 }}
-                        key={idx} 
-                        className="bill-card-mobile"
-                        onClick={() => navigate(`/shop/${shopId}/purchase-ledger/${pur._id}`)}
-                    >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ color: '#0F172A', fontWeight: '700', fontSize: '13px' }}>#{pur.billNo}</div>
-                            <div style={{ fontWeight: '800', fontSize: '14px', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.totalAmount || 0)}</div>
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {(pur.items || []).map(i => `${i.productName} (${i.quantity})`).join(', ')}
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
-                            <div style={{ fontSize: '10px', color: '#94A3B8', fontWeight: '600' }}>
-                                {new Date(pur.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} • Due: ₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.dueAmount || 0)}
+                {purchases.map((pur, idx) => {
+                    const statusColor = 
+                        pur.paymentStatus === 'Paid' ? '#10B981' : 
+                        pur.paymentStatus === 'Partial Paid' ? '#F59E0B' : '#EF4444';
+                        
+                    return (
+                        <motion.div 
+                            whileTap={{ scale: 0.98 }}
+                            key={idx} 
+                            style={{ background: 'white', borderRadius: '16px', padding: '14px 16px', border: '1px solid #E2E8F0', boxShadow: '0 2px 6px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '10px', boxSizing: 'border-box' }}
+                            onClick={() => navigate(`/shop/${shopId}/purchase-ledger/${pur._id}`)}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div style={{ color: '#0F172A', fontWeight: '900', fontSize: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%' }}>
+                                    {(pur.items || []).map(i => `${i.productName} (${i.quantity})`).join(', ') || 'No Items'}
+                                </div>
+                                <div style={{ fontWeight: '900', fontSize: '16px', color: '#0F172A' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.totalAmount || 0)}</div>
                             </div>
-                            <span style={{ padding: '1px 6px', fontSize: '9px', borderRadius: '4px', fontWeight: '800', background: pur.paymentStatus === 'Paid' ? '#D1FAE5' : pur.paymentStatus === 'Partial Paid' ? '#FEF3C7' : '#FEE2E2', color: pur.paymentStatus === 'Paid' ? '#059669' : pur.paymentStatus === 'Partial Paid' ? '#D97706' : '#DC2626' }}>
-                                {pur.paymentStatus}
-                            </span>
-                        </div>
-                    </motion.div>
-                ))}
+                            <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '6px' }}>
+                                <div style={{ fontSize: '11px', color: '#64748B', fontWeight: '700', background: '#F1F5F9', padding: '2px 6px', borderRadius: '4px' }}>
+                                    INV #{pur.billNo ? pur.billNo.slice(-4) : '---'}
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: '600' }}>
+                                    • {new Date(pur.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', paddingTop: '10px', borderTop: '1px dashed #E2E8F0' }}>
+                                <div style={{ fontSize: '12px', color: '#64748B', fontWeight: '700' }}>
+                                    Due: <span style={{ color: pur.dueAmount > 0 ? '#EF4444' : '#64748B', fontWeight: '800' }}>₹{Intl.NumberFormat('en-IN', { notation: "compact", maximumFractionDigits: 1 }).format(pur.dueAmount || 0)}</span>
+                                </div>
+                                <span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: '800', borderRadius: '8px', background: `${statusColor}15`, color: statusColor }}>
+                                    {pur.paymentStatus}
+                                </span>
+                            </div>
+                        </motion.div>
+                    );
+                })}
             </div>
             </>
 
@@ -434,19 +465,25 @@ const SupplierLedgerPage = () => {
                         
                         <form onSubmit={handleRecordPayment} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                             <CustomSelect 
-                                label="Select Pending Bill"
+                                label="Payment Type"
                                 value={selectedPurchaseForPayment?._id || ''} 
                                 options={[
-                                    { label: '-- Choose an invoice --', value: '' },
+                                    { label: '-- Select payment type --', value: '' },
+                                    { label: `Auto-allocate Custom Amount (Total Due: ₹${outstandingDue.toLocaleString()})`, value: 'AUTO' },
                                     ...purchases.filter(p => p.dueAmount > 0).map(pur => ({
                                         label: `Bill #${pur.billNo} (Due: ₹${pur.dueAmount.toLocaleString()})`,
                                         value: pur._id
                                     }))
                                 ]}
                                 onChange={(val) => {
-                                    const pur = purchases.find(p => p._id === val);
-                                    setSelectedPurchaseForPayment(pur);
-                                    if (pur) setPaymentInput({ ...paymentInput, amount: pur.dueAmount });
+                                    if (val === 'AUTO') {
+                                        setSelectedPurchaseForPayment({ _id: 'AUTO', dueAmount: outstandingDue });
+                                        setPaymentInput({ ...paymentInput, amount: outstandingDue });
+                                    } else {
+                                        const pur = purchases.find(p => p._id === val);
+                                        setSelectedPurchaseForPayment(pur);
+                                        if (pur) setPaymentInput({ ...paymentInput, amount: pur.dueAmount });
+                                    }
                                 }}
                             />
 
