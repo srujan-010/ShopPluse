@@ -4,22 +4,21 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
+    host: '0.0.0.0',
     port: 5173,
     strictPort: true,
     cors: true,
-    allowedHosts: true,
+    allowedHosts: ['enamel-stack-subzero.ngrok-free.dev', 'localhost'],
     hmr: {
-      overlay: true,
       protocol: 'wss',
-      clientPort: 443,
-      host: 'overdefensively-racemed-karole.ngrok-free.dev'
+      host: 'enamel-stack-subzero.ngrok-free.dev',
+      clientPort: 443
     },
     proxy: {
       '/api': {
-        target: 'https://shoppluse.onrender.com',
+        target: 'http://localhost:5000',
         changeOrigin: true,
-        secure: true,
+        secure: false,
         ws: true
       }
     }

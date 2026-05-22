@@ -210,7 +210,7 @@ export const SearchableSelect = ({ label, value, options, onChange, onSearch, pl
     }, [value, options]);
 
     const filtered = options.filter(opt => 
-        (opt.label || opt).toLowerCase().includes(query.toLowerCase())
+        String(opt?.label ?? opt ?? '').toLowerCase().includes(String(query || '').toLowerCase())
     );
 
     useScrollLock(isOpen);
@@ -416,8 +416,18 @@ export const OptionGroup = ({ options, value, onChange, label }) => (
  * Premium Date Picker
  */
 export const PremiumDatePicker = ({ value, onChange, label, placeholder = "Select Date" }) => {
+    const getInitialDate = (val) => {
+        if (!val) return new Date();
+        if (typeof val === 'string' && val.includes('T')) return new Date(val);
+        if (typeof val === 'string' && val.includes('-')) {
+            const [year, month, day] = val.split('-');
+            return new Date(year, month - 1, day);
+        }
+        return new Date(val);
+    };
+
     const [isOpen, setIsOpen] = React.useState(false);
-    const [viewDate, setViewDate] = React.useState(value ? new Date(value) : new Date());
+    const [viewDate, setViewDate] = React.useState(getInitialDate(value));
     const [viewMode, setViewMode] = React.useState('days'); // 'days' | 'months' | 'years'
     
     useScrollLock(isOpen);
@@ -443,7 +453,8 @@ export const PremiumDatePicker = ({ value, onChange, label, placeholder = "Selec
     const handleSelectDate = (day) => {
         if (!day) return;
         const selected = new Date(currentYear, currentMonth, day);
-        onChange(selected.toISOString().split('T')[0]);
+        const formatted = `${selected.getFullYear()}-${String(selected.getMonth()+1).padStart(2,'0')}-${String(selected.getDate()).padStart(2,'0')}`;
+        onChange(formatted);
         setIsOpen(false);
     };
 
@@ -461,9 +472,9 @@ export const PremiumDatePicker = ({ value, onChange, label, placeholder = "Selec
     const changeYear = (offset) => setViewDate(new Date(currentYear + offset, currentMonth, 1));
     const changeYearRange = (offset) => setViewDate(new Date(currentYear + (offset * 12), currentMonth, 1));
 
-    const formatDate = (dateStr) => {
-        if (!dateStr) return '';
-        const d = new Date(dateStr);
+    const formatDate = (val) => {
+        if (!val) return '';
+        const d = getInitialDate(val);
         return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     };
 
@@ -494,9 +505,10 @@ export const PremiumDatePicker = ({ value, onChange, label, placeholder = "Selec
                                             <button type="button" className="pdp-nav-btn" onClick={() => changeMonth(1)}><ChevronRight size={18} /></button>
                                         </div>
                                         <div className="pdp-grid">
-                                            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => <div key={d} className="pdp-day-label">{d}</div>)}
+                                            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <div key={i} className="pdp-day-label">{d}</div>)}
                                             {days.map((d, i) => {
-                                                const isSelected = value && new Date(value).getDate() === d && new Date(value).getMonth() === currentMonth && new Date(value).getFullYear() === currentYear;
+                                                const initDate = value ? getInitialDate(value) : null;
+                                                const isSelected = initDate && initDate.getDate() === d && initDate.getMonth() === currentMonth && initDate.getFullYear() === currentYear;
                                                 const isToday = new Date().getDate() === d && new Date().getMonth() === currentMonth && new Date().getFullYear() === currentYear;
                                                 return (
                                                     <div key={i} className={`pdp-day ${!d ? 'empty' : ''} ${isSelected ? 'active' : ''} ${isToday ? 'today' : ''}`} onClick={() => handleSelectDate(d)}>
@@ -548,7 +560,8 @@ export const PremiumDatePicker = ({ value, onChange, label, placeholder = "Selec
                                 <button type="button" className="btn-primary-premium" onClick={() => {
                                     const today = new Date();
                                     setViewDate(today);
-                                    onChange(today.toISOString().split('T')[0]);
+                                    const formatted = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+                                    onChange(formatted);
                                     setIsOpen(false);
                                 }}>Today</button>
                             </div>

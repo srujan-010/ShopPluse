@@ -31,7 +31,11 @@ const SalesLogPage = () => {
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [periodFilter, setPeriodFilter] = useState('today');
     const [paymentFilter, setPaymentFilter] = useState('All');
-    const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
+    const getLocalToday = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+    const [customDate, setCustomDate] = useState(getLocalToday());
     const [page, setPage] = useState(1);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
     const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);

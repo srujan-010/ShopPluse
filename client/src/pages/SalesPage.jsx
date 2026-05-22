@@ -31,7 +31,11 @@ const SalesPage = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedSale, setSelectedSale] = useState(null);
     const [periodFilter, setPeriodFilter] = useState('today');
-    const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
+    const getLocalToday = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+    const [customDate, setCustomDate] = useState(getLocalToday());
 
     useScrollLock(!!selectedSale);
 

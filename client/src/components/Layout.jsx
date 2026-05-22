@@ -258,7 +258,7 @@ const Layout = () => {
                                 <span>{item.name}</span>
                             </Link>
                         ))}
-                        
+                        <div className="fab-add-center-spacer"></div>
                         <button className="fab-add-center" onClick={() => setShowQuickActions(!showQuickActions)}>
                             <motion.div 
                                 animate={{ rotate: showQuickActions ? 45 : 0 }}
@@ -350,16 +350,45 @@ const Layout = () => {
                 }
 
                 /* Floating Bottom Nav */
-                .premium-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; height: 85px; z-index: 5500; display: flex; justify-content: center; padding: 0 20px 20px 20px; }
-                .nav-blur-bg { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border-top: 1px solid rgba(255, 255, 255, 0.5); }
-                .nav-items-wrapper { position: relative; width: 100%; max-width: 500px; height: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; }
+                .premium-bottom-nav { 
+                    position: fixed; 
+                    bottom: 0; 
+                    left: 0; 
+                    right: 0; 
+                    width: 100%;
+                    height: 70px; 
+                    z-index: 999; 
+                    display: flex; 
+                    justify-content: center; 
+                    padding: 0 20px;
+                    padding-bottom: max(10px, env(safe-area-inset-bottom));
+                    box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+                }
+                .nav-blur-bg { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border-top: 1px solid rgba(0, 0, 0, 0.05); }
+                .nav-items-wrapper { position: relative; width: 100%; max-width: 500px; height: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0; margin-bottom: env(safe-area-inset-bottom); }
                 
-                .nav-item-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-decoration: none; color: #94A3B8; transition: all 0.15s ease-out; min-width: 64px; height: 56px; border-radius: 16px; }
+                .nav-item-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-decoration: none; color: #94A3B8; transition: all 0.15s ease-out; min-width: 64px; height: 100%; flex: 1; }
                 .nav-item-link:active { transform: scale(0.97); opacity: 0.8; }
-                .nav-item-link.active { color: #1E6BFF; background: #EFF6FF; }
-                .nav-item-link span { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; }
+                .nav-item-link.active { color: #1E6BFF; }
+                .nav-item-link span { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em; margin-top: 2px; }
                 
-                .fab-add-center { position: relative; width: 70px; height: 70px; border: none; background: transparent; cursor: pointer; margin-top: -50px; z-index: 6000; }
+                .fab-add-center-spacer {
+                    width: 70px;
+                    flex-shrink: 0;
+                }
+                
+                .fab-add-center { 
+                    position: fixed; 
+                    bottom: calc(70px + env(safe-area-inset-bottom)); 
+                    left: 50%; 
+                    transform: translateX(-50%); 
+                    width: 64px; 
+                    height: 64px; 
+                    border: none; 
+                    background: transparent; 
+                    cursor: pointer; 
+                    z-index: 1000; 
+                }
                 .fab-circle { width: 64px; height: 64px; background: #1E6BFF; color: white; border-radius: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(30, 107, 255, 0.3); border: 4px solid white; transition: all 0.15s ease-out; }
                 .fab-circle:active { transform: scale(0.95); opacity: 0.9; }
                 .fab-circle.active { background: #FF4D4F; box-shadow: 0 10px 30px rgba(255, 77, 79, 0.3); }
@@ -380,7 +409,7 @@ const Layout = () => {
                     .profile-square { width: 32px; height: 32px; font-size: 0.9rem; border-radius: 8px; }
                     
                     .premium-canvas { padding-top: 0; }
-                    .canvas-content { padding: 12px 12px 100px 12px; }
+                    .canvas-content { padding: 12px 12px calc(130px + env(safe-area-inset-bottom)) 12px; }
                 }
 
                 @media (max-width: 480px) {

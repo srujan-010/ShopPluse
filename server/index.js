@@ -20,21 +20,14 @@ app.use(cors({
     origin: [
         'http://localhost:5173',
         'https://shoppluse.onrender.com',
-        /\.netlify\.app$/ // Matches any netlify sub-domain
+        /\.netlify\.app$/, // Matches any netlify sub-domain
+        /\.ngrok-free\.dev$/ // Matches ngrok domains
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Add a helper GET route for Google Login to prevent 404s if accessed directly
-app.get('/api/auth/google', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Google login endpoint. Please use POST with Firebase user data, or redirect to the frontend login page.',
-        method: 'GET'
-    });
-});
 
 // Serve static files from public directory
 app.use(express.static('public'));

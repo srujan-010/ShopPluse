@@ -57,6 +57,16 @@ body {
     min-height: 100dvh;
 }
 
+/* Hide number input spin buttons */
+input[type=number]::-webkit-inner-spin-button, 
+input[type=number]::-webkit-outer-spin-button { 
+  -webkit-appearance: none; 
+  margin: 0; 
+}
+input[type=number] { 
+  -moz-appearance: textfield;
+}
+
 /* Desktop Typography Overrides */
 @media (min-width: 1024px) {
     h1, h2, h3, h4, h5, h6 {
@@ -163,6 +173,7 @@ body.modal-open {
     .pss-option.pss-add-new:hover {
         background: #E0EFFF;
     }
+}
 
     /* Premium Toggle */
     .premium-toggle { display: flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
@@ -198,10 +209,10 @@ body.modal-open {
     .pdp-icon { color: #94A3B8; }
     .pdp-value { font-weight: 700; color: #1E293B; flex: 1; }
     
-    .pdp-calendar-modal { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .pdp-calendar-modal { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px; overflow: visible; }
     .pdp-backdrop { position: absolute; inset: 0; background: rgba(7, 27, 68, 0.3); backdrop-filter: blur(10px); }
-    .pdp-content { position: relative; background: white; width: 100%; max-width: 360px; border-radius: 32px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.1); }
-    .pdp-header { padding: 24px; background: #1E6BFF; color: white; }
+    .pdp-content { position: relative; background: white; width: 100%; max-width: 340px; border-radius: 32px; overflow: visible; box-shadow: 0 20px 50px rgba(0,0,0,0.1); z-index: 9999; min-width: unset; }
+    .pdp-header { padding: 24px; background: #1E6BFF; color: white; border-top-left-radius: 32px; border-top-right-radius: 32px; }
     .pdp-header span { font-size: 14px; font-weight: 700; opacity: 0.8; text-transform: uppercase; letter-spacing: 1px; }
     .pdp-header h2 { font-size: 28px; font-weight: 800; margin-top: 4px; }
     .pdp-body { padding: 12px; }
@@ -247,7 +258,6 @@ body.modal-open {
         bottom: calc(70px + var(--keyboard-height)) !important;
         transition: bottom 0.2s ease-out;
     }
-}
 
 /* Utility Classes */
 .glass {

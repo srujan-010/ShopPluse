@@ -145,10 +145,10 @@ exports.googleLogin = async (req, res, next) => {
         user = await User.create(userData);
 
         console.log('New user created successfully:', user._id);
-        sendTokenResponse(user, 201, res);
+        return sendTokenResponse(user, 201, res);
     } catch (error) {
         console.error('CRITICAL GOOGLE LOGIN ERROR:', error);
-        res.status(500).json({ 
+        return res.status(500).json({ 
             success: false, 
             message: 'Server Error during Google Login',
             error: error.message 

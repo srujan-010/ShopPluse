@@ -298,7 +298,7 @@ const PurchaseDetailsPage = () => {
                 {/* ── Inline Payment Form (slides in above sticky FAB) ── */}
                 {showReceivePayment && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                        style={{ position: 'fixed', bottom: '80px', left: '12px', right: '12px', background: 'white', borderRadius: '20px', padding: '20px', boxShadow: '0 -8px 32px rgba(0,0,0,0.15)', border: '1.5px solid #FCD34D', zIndex: 60 }}>
+                        style={{ position: 'fixed', bottom: 'calc(150px + env(safe-area-inset-bottom))', left: '12px', right: '12px', background: 'white', borderRadius: '20px', padding: '20px', boxShadow: '0 -8px 32px rgba(0,0,0,0.15)', border: '1.5px solid #FCD34D', zIndex: 60 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                             <span style={{ fontSize: '15px', fontWeight: '800', color: '#78350F' }}>Record Payment</span>
                             <button onClick={() => setShowReceivePayment(false)} style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer', lineHeight: 1 }}>×</button>
@@ -335,7 +335,7 @@ const PurchaseDetailsPage = () => {
                 {/* ── Sticky Bottom FAB ── */}
                 {purchase.dueAmount > 0 && !showReceivePayment && (
                     <button onClick={() => setShowReceivePayment(true)}
-                        style={{ position: 'fixed', bottom: '72px', left: '16px', right: '16px', height: '54px', background: 'linear-gradient(135deg, #D97706, #B45309)', color: 'white', border: 'none', borderRadius: '16px', fontSize: '16px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 8px 20px rgba(217,119,6,0.4)', zIndex: 55 }}>
+                        style={{ position: 'fixed', bottom: 'calc(140px + env(safe-area-inset-bottom))', left: '16px', right: '16px', height: '54px', background: 'linear-gradient(135deg, #D97706, #B45309)', color: 'white', border: 'none', borderRadius: '16px', fontSize: '16px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 8px 20px rgba(217,119,6,0.4)', zIndex: 55 }}>
                         <IndianRupee size={20} />
                         Record Payment · ₹{(purchase.dueAmount||0).toLocaleString()} Due
                     </button>

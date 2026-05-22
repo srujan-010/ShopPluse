@@ -335,6 +335,7 @@ const ShopsPage = () => {
                                                     { label: 'Electronics', value: 'Electronics' },
                                                     { label: 'Clothing', value: 'Clothing' },
                                                     { label: 'Pharmacy', value: 'Pharmacy' },
+                                                    { label: 'Fertilizers', value: 'Fertilizers' },
                                                     { label: 'Other', value: 'Other' }
                                                 ]}
                                                 onChange={(val) => setFormData({...formData, type: val})}

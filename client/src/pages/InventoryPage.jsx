@@ -60,16 +60,26 @@ const InventoryPage = () => {
     // Lock body scroll when main modals are open
     useScrollLock(showModal || showRestockModal);
 
+    const getLocalToday = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+    const getLocalFromDate = (dateVal) => {
+        if (!dateVal) return '';
+        const d = new Date(dateVal);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+
     const [formData, setFormData] = useState({
         name: '',
         category: '',
         brand: '',
         barcode: '',
         productType: 'Piece',
-        quantity: '',
+        quantity: 0,
         unit: 'Piece',
-        buyPrice: '',
-        sellPrice: '',
+        buyPrice: 0,
+        sellPrice: 0,
         lowStockLimit: 5,
         expiryDate: '',
         notes: '',
@@ -79,7 +89,7 @@ const InventoryPage = () => {
         supplier: '',
         supplierPhone: '',
         billNo: '',
-        purchaseDate: new Date().toISOString().split('T')[0],
+        purchaseDate: getLocalToday(),
         paymentMethod: 'Cash',
         amountPaid: '',
         entryType: 'Purchase'
@@ -92,7 +102,7 @@ const InventoryPage = () => {
         supplier: '',
         supplierPhone: '',
         billNo: '',
-        purchaseDate: new Date().toISOString().split('T')[0],
+        purchaseDate: getLocalToday(),
         paymentMethod: 'Cash',
         amountPaid: '',
         entryType: 'Purchase',
@@ -126,12 +136,20 @@ const InventoryPage = () => {
         return Array.from(cats).sort();
     }, [products]);
 
+    const sanitizeProduct = (p) => ({
+        ...p,
+        buyPrice: Number(p.buyPrice || 0),
+        sellPrice: Number(p.sellPrice || 0),
+        quantity: Number(p.quantity || 0),
+        lowStockLimit: Number(p.lowStockLimit || 5)
+    });
+
     const fetchData = async () => {
         try {
             // Offline-first load: Instant render from local IndexedDB
             const localProducts = await offlineDB.getProducts(shopId);
-            if (localProducts && localProducts.length > 0) {
-                setProducts(localProducts);
+            if (localProducts && Array.isArray(localProducts) && localProducts.length > 0) {
+                setProducts(localProducts.map(sanitizeProduct));
                 setLoading(false);
             }
 
@@ -141,8 +159,10 @@ const InventoryPage = () => {
                 purchaseService.getAll(shopId)
             ]);
             
-            const fetchedProducts = prodRes.data.data || prodRes.data || [];
-            setProducts(fetchedProducts);
+            const fetchedProducts = prodRes.data?.data || prodRes.data || [];
+            if (Array.isArray(fetchedProducts)) {
+                setProducts(fetchedProducts.map(sanitizeProduct));
+            }
             setShop(shopRes.data.data.find(s => s._id === shopId));
 
             const purchases = purRes.data?.data || purRes.data || [];
@@ -199,17 +219,21 @@ const InventoryPage = () => {
             setCurrentProduct(product);
             setFormData({
                 ...product,
-                expiryDate: product.expiryDate ? new Date(product.expiryDate).toISOString().split('T')[0] : '',
+                buyPrice: Number(product.buyPrice || 0),
+                sellPrice: Number(product.sellPrice || 0),
+                quantity: Number(product.quantity || 0),
+                lowStockLimit: Number(product.lowStockLimit || 5),
+                expiryDate: product.expiryDate ? getLocalFromDate(product.expiryDate) : '',
                 shop: shopId,
                 allowPartialSelling: product.allowPartialSelling || false,
                 allowedUnits: product.allowedUnits?.length ? product.allowedUnits : [product.unit || 'Piece'],
                 supplier: product.supplier || '',
-                supplierPhone: '',
-                billNo: '',
-                purchaseDate: new Date().toISOString().split('T')[0],
-                paymentMethod: 'Cash',
-                amountPaid: '',
-                entryType: 'Purchase'
+                supplierPhone: product.supplierPhone || '',
+                billNo: product.billNo || '',
+                purchaseDate: product.purchaseDate ? getLocalFromDate(product.purchaseDate) : getLocalToday(),
+                paymentMethod: product.paymentMethod || 'Cash',
+                amountPaid: product.amountPaid || '',
+                entryType: product.entryType || 'Purchase'
             });
 
             try {
@@ -226,10 +250,10 @@ const InventoryPage = () => {
                 brand: '',
                 barcode: '',
                 productType: 'Piece',
-                quantity: '',
+                quantity: 0,
                 unit: 'Piece',
-                buyPrice: '',
-                sellPrice: '',
+                buyPrice: 0,
+                sellPrice: 0,
                 lowStockLimit: 5,
                 expiryDate: '',
                 notes: '',
@@ -239,7 +263,7 @@ const InventoryPage = () => {
                 supplier: '',
                 supplierPhone: '',
                 billNo: '',
-                purchaseDate: new Date().toISOString().split('T')[0],
+                purchaseDate: getLocalToday(),
                 paymentMethod: 'Cash',
                 amountPaid: '',
                 entryType: 'Purchase'
@@ -258,7 +282,7 @@ const InventoryPage = () => {
                 supplier: product.supplier || '',
                 supplierPhone: '',
                 billNo: '',
-                purchaseDate: new Date().toISOString().split('T')[0],
+                purchaseDate: getLocalToday(),
                 paymentMethod: 'Cash',
                 amountPaid: '',
                 entryType: 'Purchase',
@@ -273,7 +297,7 @@ const InventoryPage = () => {
                 supplier: '',
                 supplierPhone: '',
                 billNo: '',
-                purchaseDate: new Date().toISOString().split('T')[0],
+                purchaseDate: getLocalToday(),
                 paymentMethod: 'Cash',
                 amountPaid: '',
                 entryType: 'Purchase',
@@ -286,15 +310,23 @@ const InventoryPage = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         
-        if (formData.sellPrice < 0) {
+        const payload = {
+            ...formData,
+            buyPrice: Number(formData.buyPrice || 0),
+            sellPrice: Number(formData.sellPrice || 0),
+            quantity: Number(formData.quantity || 0),
+            lowStockLimit: Number(formData.lowStockLimit || 5)
+        };
+
+        if (payload.sellPrice < 0) {
             setAlertConfig({ open: true, title: 'Invalid Price', message: 'Selling price cannot be negative', type: 'error' });
             return;
         }
-        if (formData.quantity < 0) {
+        if (payload.quantity < 0) {
             setAlertConfig({ open: true, title: 'Invalid Stock', message: 'Stock cannot be negative', type: 'error' });
             return;
         }
-        if (formData.allowPartialSelling && (!formData.allowedUnits || formData.allowedUnits.length === 0)) {
+        if (payload.allowPartialSelling && (!payload.allowedUnits || payload.allowedUnits.length === 0)) {
             setAlertConfig({ open: true, title: 'Units Required', message: 'Please select at least one allowed unit for partial selling', type: 'error' });
             return;
         }
@@ -302,9 +334,9 @@ const InventoryPage = () => {
         setIsSaving(true);
         try {
             if (currentProduct) {
-                await productService.update(currentProduct._id, formData);
+                await productService.update(currentProduct._id, payload);
             } else {
-                await productService.create(formData);
+                await productService.create(payload);
             }
             setAlertConfig({ open: true, title: 'Success', message: 'Product saved successfully!', type: 'success' });
             setShowModal(false);
@@ -358,8 +390,8 @@ const InventoryPage = () => {
     const categories = ['All', ...new Set(products.map(p => p.category).filter(Boolean))];
 
     const filteredProducts = products.filter(p => {
-        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            (p.category || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        const matchesSearch = (p.name || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
+                            (p.category || '').toLowerCase().includes((searchQuery || '').toLowerCase()) ||
                             (p.barcode || '').includes(searchQuery);
         const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
         const matchesLowStock = !showOnlyLowStock || p.quantity <= (p.lowStockLimit || 5);
@@ -368,6 +400,10 @@ const InventoryPage = () => {
 
     const lowStockItems = products.filter(p => p.quantity <= (p.lowStockLimit || 5));
     const healthyStockItems = products.filter(p => p.quantity > (p.lowStockLimit || 5));
+
+    if (!products || !Array.isArray(products)) {
+        return <div style={{padding: '40px', textAlign: 'center'}}>Loading inventory...</div>;
+    }
 
     return (
         <div className="old-inventory-page">
@@ -478,7 +514,10 @@ const InventoryPage = () => {
                                 className="old-product-card"
                             >
                                 <div className="opc-header">
-                                    <h3>{product.name}</h3>
+                                    <div>
+                                        <h3>{product.name}</h3>
+                                        {product.brand && <div style={{fontSize: '12px', color: '#667085', marginTop: '2px', fontWeight: '600'}}>{product.brand}</div>}
+                                    </div>
                                     <button className="opc-more" onClick={() => handleOpenModal(product)}><Edit3 size={18} /></button>
                                 </div>
                                 
@@ -486,9 +525,9 @@ const InventoryPage = () => {
                                 
                                 <div className="opc-middle">
                                     <div className="opc-pricing">
-                                        <span className="opc-price">₹{product.sellPrice.toLocaleString()}</span>
+                                        <span className="opc-price">₹{(product.sellPrice || 0).toLocaleString()}</span>
                                         {product.buyPrice && (
-                                            <span className="opc-profit">+₹{(product.sellPrice - product.buyPrice).toLocaleString()}</span>
+                                            <span className="opc-profit">+₹{((product.sellPrice || 0) - (product.buyPrice || 0)).toLocaleString()}</span>
                                         )}
                                     </div>
                                     
@@ -569,6 +608,7 @@ const InventoryPage = () => {
                                         <tr key={product._id} className="sl-desktop-row">
                                             <td className="sld-cust">
                                                 <div className="cust-main">{product.name}</div>
+                                                {product.brand && <div className="cust-sub" style={{color: '#667085', fontWeight: '600'}}>{product.brand}</div>}
                                                 {product.barcode && <div className="cust-sub">#{product.barcode}</div>}
                                             </td>
                                             <td className="sld-time">

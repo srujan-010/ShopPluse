@@ -38,7 +38,12 @@ const PurchaseLedgerPage = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedPurchase, setSelectedPurchase] = useState(null);
     const [periodFilter, setPeriodFilter] = useState('today');
-    const [customDate, setCustomDate] = useState(new Date().toISOString().split('T')[0]);
+    const getLocalToday = () => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+
+    const [customDate, setCustomDate] = useState(getLocalToday());
     const [paymentStatusFilter, setPaymentStatusFilter] = useState('All');
     const [entryTypeFilter, setEntryTypeFilter] = useState('All');
     const [page, setPage] = useState(1);
@@ -50,7 +55,7 @@ const PurchaseLedgerPage = () => {
         supplierName: '',
         supplierPhone: '',
         billNo: '',
-        date: new Date().toISOString().split('T')[0],
+        date: getLocalToday(),
         paymentMethod: 'Cash',
         paymentStatus: 'Paid',
         items: []
@@ -194,7 +199,7 @@ const PurchaseLedgerPage = () => {
                 supplierName: '',
                 supplierPhone: '',
                 billNo: '',
-                date: new Date().toISOString().split('T')[0],
+                date: getLocalToday(),
                 paymentMethod: 'Cash',
                 paymentStatus: 'Paid',
                 items: []

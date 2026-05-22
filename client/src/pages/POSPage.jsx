@@ -113,10 +113,10 @@ const POSPage = () => {
         }
     };
 
-    const categories = ['All', ...new Set(products.map(p => p.category))];
+    const categories = ['All', ...new Set(products.map(p => p.category).filter(Boolean))];
 
     const filteredProducts = products.filter(p => {
-        const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        const matchesSearch = (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
                             (p.barcode || '').includes(searchTerm);
         const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
         return matchesSearch && matchesCategory;
@@ -261,9 +261,9 @@ const POSPage = () => {
                         />
                     </div>
                     <div className="cat-scroller-v2">
-                        {categories.map(cat => (
+                        {categories.map((cat, idx) => (
                             <button 
-                                key={cat} 
+                                key={idx} 
                                 className={`cat-pill-v2 ${selectedCategory === cat ? 'active' : ''}`}
                                 onClick={() => setSelectedCategory(cat)}
                             >
@@ -297,6 +297,7 @@ const POSPage = () => {
                                     <div className="pcv2-badge">{product.category || 'ITEM'}</div>
                                     <div className="pcv2-info">
                                         <h3>{product.name}</h3>
+                                        {product.brand && <div style={{fontSize: '11px', color: '#667085', marginTop: '2px', fontWeight: '700'}}>{product.brand}</div>}
                                         <div className="pcv2-stock">
                                             <PackageOpen size={14} />
                                             <span>{product.quantity} {product.unit} available</span>
