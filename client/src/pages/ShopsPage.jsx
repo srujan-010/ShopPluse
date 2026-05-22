@@ -252,11 +252,11 @@ const ShopsPage = () => {
                                     <div className="shop-stats">
                                         <div className="stat">
                                             <span className="s-label">Products</span>
-                                            <span className="s-value">124</span>
+                                            <span className="s-value">{shop.stats?.productCount || 0}</span>
                                         </div>
                                         <div className="stat">
-                                            <span className="s-label">Sales</span>
-                                            <span className="s-value">₹24.5k</span>
+                                            <span className="s-label">Today's Sales</span>
+                                            <span className="s-value">{shop.currency || '₹'}{(shop.stats?.todaySales || 0).toLocaleString()}</span>
                                         </div>
                                     </div>
                                     <button 

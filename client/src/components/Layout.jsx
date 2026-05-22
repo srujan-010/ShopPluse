@@ -379,17 +379,21 @@ const Layout = () => {
                 
                 .fab-add-center { 
                     position: fixed; 
-                    bottom: calc(70px + env(safe-area-inset-bottom)); 
+                    bottom: calc(45px + env(safe-area-inset-bottom)); 
                     left: 50%; 
-                    transform: translateX(-50%); 
-                    width: 64px; 
-                    height: 64px; 
+                    transform: translate(-50%, 50%); 
+                    width: 72px; 
+                    height: 72px; 
                     border: none; 
                     background: transparent; 
                     cursor: pointer; 
                     z-index: 1000; 
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 0;
                 }
-                .fab-circle { width: 64px; height: 64px; background: #1E6BFF; color: white; border-radius: 22px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(30, 107, 255, 0.3); border: 4px solid white; transition: all 0.15s ease-out; }
+                .fab-circle { width: 60px; height: 60px; background: #1E6BFF; color: white; border-radius: 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(30, 107, 255, 0.35); border: 4px solid white; transition: all 0.15s ease-out; }
                 .fab-circle:active { transform: scale(0.95); opacity: 0.9; }
                 .fab-circle.active { background: #FF4D4F; box-shadow: 0 10px 30px rgba(255, 77, 79, 0.3); }
 
@@ -413,8 +417,8 @@ const Layout = () => {
                 }
 
                 @media (max-width: 480px) {
-                    .fab-circle { width: 56px !important; height: 56px !important; border-radius: 18px !important; }
-                    .fab-add-center { margin-top: -40px !important; width: 60px !important; height: 60px !important; }
+                    .fab-circle { width: 56px !important; height: 56px !important; border-radius: 18px !important; border-width: 3px !important; }
+                    .fab-add-center { width: 64px !important; height: 64px !important; bottom: calc(45px + env(safe-area-inset-bottom)) !important; margin-top: 0 !important; }
                 }
 
                 /* Quick Action Overlay */
