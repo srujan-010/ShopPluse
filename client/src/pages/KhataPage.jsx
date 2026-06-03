@@ -56,6 +56,7 @@ const KhataPage = () => {
     const [txnLoading, setTxnLoading] = useState(false);
     
     // Direct Entry State
+    const [newCustName, setNewCustName] = useState('');
     const [newCustMobile, setNewCustMobile] = useState('');
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
 
