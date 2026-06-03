@@ -386,6 +386,7 @@ const InventoryPage = () => {
             }
             setAlertConfig({ open: true, title: 'Success', message: 'Product saved successfully!', type: 'success' });
             setShowModal(false);
+            fetchData();
         } catch (err) {
             setAlertConfig({ open: true, title: 'Error', message: err.response?.data?.message || 'Error saving product', type: 'error' });
         } finally {
