@@ -336,7 +336,7 @@ const SalesLogPage = () => {
                                 </div>
                                 <div className="sl-card-bot">
                                     <div className="sl-card-meta">
-                                        <span>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                        <span>{new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                                         <span className="divider-dot">•</span>
                                         <span>Bill #{sale._id.slice(-6).toUpperCase()}</span>
                                         <span className="divider-dot">•</span>
@@ -362,7 +362,7 @@ const SalesLogPage = () => {
                             <tr>
                                 <th>Bill No</th>
                                 <th>Customer Name</th>
-                                <th>Time</th>
+                                <th>Date</th>
                                 <th style={{ width: '25%' }}>Items Summary</th>
                                 <th>Payment</th>
                                 <th style={{ textAlign: 'center' }}>History</th>
@@ -389,7 +389,7 @@ const SalesLogPage = () => {
                                             {sale.customerPhone && <div className="cust-sub">{sale.customerPhone}</div>}
                                         </td>
                                         <td className="sld-time">
-                                            {new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            {new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                                         </td>
                                         <td className="sld-items">
                                             <div className="items-preview">
