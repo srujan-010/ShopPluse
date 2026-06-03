@@ -26,7 +26,7 @@ exports.getShops = async (req, res) => {
             const productCount = await Product.countDocuments({ shop: shop._id });
             const lowStockCount = await Product.countDocuments({ 
                 shop: shop._id, 
-                $expr: { $lte: ["$quantity", { $ifNull: ["$minStock", 10] }] } 
+                $expr: { $lte: ["$quantity", { $ifNull: ["$lowStockLimit", 5] }] } 
             });
 
             return {

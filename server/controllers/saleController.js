@@ -355,7 +355,7 @@ exports.getStats = async (req, res) => {
         // Low Stock Count
         const lowStockCount = await Product.countDocuments({ 
             ...match, 
-            $expr: { $lte: ["$quantity", { $ifNull: ["$minStock", 10] }] } 
+            $expr: { $lte: ["$quantity", { $ifNull: ["$lowStockLimit", 5] }] } 
         });
 
         // Total Items and Stock Value
