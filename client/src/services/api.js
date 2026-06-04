@@ -89,8 +89,9 @@ api.interceptors.response.use(
             return Promise.reject(error);
         }
 
-        // Check if offline or network error
-        if (!error.response && originalRequest) {
+        // Check if offline, network error, or server error (e.g. 503 Service Unavailable, 500 Internal Server Error)
+        const isOfflineOrServerError = !error.response || (error.response && error.response.status >= 500);
+        if (isOfflineOrServerError && originalRequest) {
             const url = originalRequest.url;
             const method = originalRequest.method;
 
@@ -444,56 +445,297 @@ api.interceptors.response.use(
 );
 
 export const authService = {
-    login: (data) => api.post('/api/auth/login', data),
-    register: (data) => api.post('/api/auth/register', data),
-    googleLogin: (data) => api.post('/api/auth/google', data)
+    login: async (data) => {
+        try {
+            return await api.post('/api/auth/login', data);
+        } catch (err) {
+            console.error('authService.login failed:', err);
+            throw err;
+        }
+    },
+    register: async (data) => {
+        try {
+            return await api.post('/api/auth/register', data);
+        } catch (err) {
+            console.error('authService.register failed:', err);
+            throw err;
+        }
+    },
+    googleLogin: async (data) => {
+        try {
+            return await api.post('/api/auth/google', data);
+        } catch (err) {
+            console.error('authService.googleLogin failed:', err);
+            throw err;
+        }
+    }
 };
 
 export const shopService = {
-    getAll: () => api.get('/api/shops'),
-    create: (data) => api.post('/api/shops', data),
-    update: (id, data) => api.put(`/api/shops/${id}`, data),
-    delete: (id) => api.delete(`/api/shops/${id}`)
+    getAll: async () => {
+        try {
+            return await api.get('/api/shops');
+        } catch (err) {
+            console.warn('shopService.getAll failed, using IndexedDB fallback:', err);
+            const shops = await offlineDB.getShops();
+            return { data: { success: true, data: shops }, status: 200, fromCache: true };
+        }
+    },
+    create: async (data) => {
+        try {
+            return await api.post('/api/shops', data);
+        } catch (err) {
+            console.error('shopService.create failed:', err);
+            throw err;
+        }
+    },
+    update: async (id, data) => {
+        try {
+            return await api.put(`/api/shops/${id}`, data);
+        } catch (err) {
+            console.error('shopService.update failed:', err);
+            throw err;
+        }
+    },
+    delete: async (id) => {
+        try {
+            return await api.delete(`/api/shops/${id}`);
+        } catch (err) {
+            console.error('shopService.delete failed:', err);
+            throw err;
+        }
+    }
 };
 
 export const productService = {
-    getAll: (shopId) => api.get(`/api/products${shopId ? `?shop=${shopId}` : ''}`),
-    create: (data) => api.post('/api/products', data),
-    update: (id, data) => api.put(`/api/products/${id}`, data),
-    delete: (id) => api.delete(`/api/products/${id}`),
-    getRestockHistory: (id) => api.get(`/api/products/${id}/restock-history`),
-    getInventoryHistory: (id) => api.get(`/api/products/${id}/inventory-history`),
-    restock: (id, data) => api.post(`/api/products/${id}/restock`, data)
+    getAll: async (shopId) => {
+        try {
+            return await api.get(`/api/products${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('productService.getAll failed, using IndexedDB fallback:', err);
+            const products = await offlineDB.getProducts(shopId);
+            return { data: { success: true, data: products }, status: 200, fromCache: true };
+        }
+    },
+    create: async (data) => {
+        try {
+            return await api.post('/api/products', data);
+        } catch (err) {
+            console.error('productService.create failed:', err);
+            throw err;
+        }
+    },
+    update: async (id, data) => {
+        try {
+            return await api.put(`/api/products/${id}`, data);
+        } catch (err) {
+            console.error('productService.update failed:', err);
+            throw err;
+        }
+    },
+    delete: async (id) => {
+        try {
+            return await api.delete(`/api/products/${id}`);
+        } catch (err) {
+            console.error('productService.delete failed:', err);
+            throw err;
+        }
+    },
+    getRestockHistory: async (id) => {
+        try {
+            return await api.get(`/api/products/${id}/restock-history`);
+        } catch (err) {
+            console.warn('productService.getRestockHistory failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/products/${id}/restock-history`);
+            return { data: cached || { success: true, data: [] }, status: 200, fromCache: true };
+        }
+    },
+    getInventoryHistory: async (id) => {
+        try {
+            return await api.get(`/api/products/${id}/inventory-history`);
+        } catch (err) {
+            console.warn('productService.getInventoryHistory failed, using IndexedDB fallback:', err);
+            const history = await offlineDB.getInventoryHistoryByProduct(id);
+            return { data: { success: true, data: history }, status: 200, fromCache: true };
+        }
+    },
+    restock: async (id, data) => {
+        try {
+            return await api.post(`/api/products/${id}/restock`, data);
+        } catch (err) {
+            console.error('productService.restock failed:', err);
+            throw err;
+        }
+    }
 };
 
 export const saleService = {
-    getAll: (shopId) => api.get(`/api/sales${shopId ? `?shop=${shopId}` : ''}`),
-    getSale: (id) => api.get(`/api/sales/${id}`),
-    create: (data) => api.post('/api/sales', data),
-    getShopStats: (shopId) => api.get(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`),
-    getReports: (shopId) => api.get(`/api/sales/reports${shopId ? `?shop=${shopId}` : ''}`),
-    getHistory: (range, shopId) => api.get(`/api/sales/history?range=${range}${shopId ? `&shop=${shopId}` : ''}`),
-    getSummaries: (shopId) => api.get(`/api/sales/summaries${shopId ? `?shop=${shopId}` : ''}`)
+    getAll: async (shopId) => {
+        try {
+            return await api.get(`/api/sales${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('saleService.getAll failed, using IndexedDB fallback:', err);
+            const sales = await offlineDB.getSales(shopId);
+            return { data: { success: true, data: sales }, status: 200, fromCache: true };
+        }
+    },
+    getSale: async (id) => {
+        try {
+            return await api.get(`/api/sales/${id}`);
+        } catch (err) {
+            console.warn('saleService.getSale failed, using IndexedDB fallback:', err);
+            const sale = await offlineDB.getSale(id);
+            return { data: { success: true, data: sale }, status: 200, fromCache: true };
+        }
+    },
+    create: async (data) => {
+        try {
+            return await api.post('/api/sales', data);
+        } catch (err) {
+            console.error('saleService.create failed:', err);
+            throw err;
+        }
+    },
+    getShopStats: async (shopId) => {
+        try {
+            return await api.get(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('saleService.getShopStats failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+            return { data: cached || { success: true, data: {} }, status: 200, fromCache: true };
+        }
+    },
+    getReports: async (shopId) => {
+        try {
+            return await api.get(`/api/sales/reports${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('saleService.getReports failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/sales/reports${shopId ? `?shop=${shopId}` : ''}`);
+            return { data: cached || { success: true, data: {} }, status: 200, fromCache: true };
+        }
+    },
+    getHistory: async (range, shopId) => {
+        try {
+            return await api.get(`/api/sales/history?range=${range}${shopId ? `&shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('saleService.getHistory failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/sales/history?range=${range}${shopId ? `&shop=${shopId}` : ''}`);
+            return { data: cached || { success: true, data: [] }, status: 200, fromCache: true };
+        }
+    },
+    getSummaries: async (shopId) => {
+        try {
+            return await api.get(`/api/sales/summaries${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('saleService.getSummaries failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/sales/summaries${shopId ? `?shop=${shopId}` : ''}`);
+            return { data: cached || { success: true, data: [] }, status: 200, fromCache: true };
+        }
+    }
 };
 
 export const khataService = {
-    getCustomers: (shopId) => api.get(`/api/khata?shopId=${shopId}`),
-    getDetails: (id) => api.get(`/api/khata/${id}`),
-    receivePayment: (id, amount, note) => api.post(`/api/khata/${id}/pay`, { amount, note }),
-    addSale: (shopId, customerName, mobile, amount, note) => api.post('/api/khata/sale', { shopId, customerName, mobile, amount, note })
+    getCustomers: async (shopId) => {
+        try {
+            return await api.get(`/api/khata?shopId=${shopId}`);
+        } catch (err) {
+            console.warn('khataService.getCustomers failed, using IndexedDB fallback:', err);
+            const customers = await offlineDB.getKhata(shopId);
+            return { data: { success: true, data: customers }, status: 200, fromCache: true };
+        }
+    },
+    getDetails: async (id) => {
+        try {
+            return await api.get(`/api/khata/${id}`);
+        } catch (err) {
+            console.warn('khataService.getDetails failed, using IndexedDB fallback:', err);
+            const customer = await offlineDB.getKhataRecord(id);
+            return { data: { success: true, data: customer }, status: 200, fromCache: true };
+        }
+    },
+    receivePayment: async (id, amount, note) => {
+        try {
+            return await api.post(`/api/khata/${id}/pay`, { amount, note });
+        } catch (err) {
+            console.error('khataService.receivePayment failed:', err);
+            throw err;
+        }
+    },
+    addSale: async (shopId, customerName, mobile, amount, note) => {
+        try {
+            return await api.post('/api/khata/sale', { shopId, customerName, mobile, amount, note });
+        } catch (err) {
+            console.error('khataService.addSale failed:', err);
+            throw err;
+        }
+    }
 };
 
 export const purchaseService = {
-    getAll: (shopId) => api.get(`/api/purchases${shopId ? `?shop=${shopId}` : ''}`),
-    getPurchase: (id) => api.get(`/api/purchases/${id}`),
-    create: (data) => api.post('/api/purchases', data),
-    addPayment: (id, paymentData) => api.post(`/api/purchases/${id}/payment`, paymentData)
+    getAll: async (shopId) => {
+        try {
+            return await api.get(`/api/purchases${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('purchaseService.getAll failed, using IndexedDB fallback:', err);
+            const purchases = await offlineDB.getPurchases(shopId);
+            return { data: { success: true, data: purchases }, status: 200, fromCache: true };
+        }
+    },
+    getPurchase: async (id) => {
+        try {
+            return await api.get(`/api/purchases/${id}`);
+        } catch (err) {
+            console.warn('purchaseService.getPurchase failed, using IndexedDB fallback:', err);
+            const purchase = await offlineDB.getPurchase(id);
+            return { data: { success: true, data: purchase }, status: 200, fromCache: true };
+        }
+    },
+    create: async (data) => {
+        try {
+            return await api.post('/api/purchases', data);
+        } catch (err) {
+            console.error('purchaseService.create failed:', err);
+            throw err;
+        }
+    },
+    addPayment: async (id, paymentData) => {
+        try {
+            return await api.post(`/api/purchases/${id}/payment`, paymentData);
+        } catch (err) {
+            console.error('purchaseService.addPayment failed:', err);
+            throw err;
+        }
+    }
 };
 
 export const govSaleService = {
-    getAll: (shopId) => api.get(`/api/gov-sales${shopId ? `?shop=${shopId}` : ''}`),
-    getSale: (id) => api.get(`/api/gov-sales/${id}`),
-    getStats: (shopId) => api.get(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`)
+    getAll: async (shopId) => {
+        try {
+            return await api.get(`/api/gov-sales${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('govSaleService.getAll failed, using IndexedDB fallback:', err);
+            const govSales = await offlineDB.getGovSales(shopId);
+            return { data: { success: true, data: govSales }, status: 200, fromCache: true };
+        }
+    },
+    getSale: async (id) => {
+        try {
+            return await api.get(`/api/gov-sales/${id}`);
+        } catch (err) {
+            console.warn('govSaleService.getSale failed, using IndexedDB fallback:', err);
+            const govSale = await offlineDB.getGovSale(id);
+            return { data: { success: true, data: govSale }, status: 200, fromCache: true };
+        }
+    },
+    getStats: async (shopId) => {
+        try {
+            return await api.get(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+        } catch (err) {
+            console.warn('govSaleService.getStats failed, using IndexedDB fallback:', err);
+            const cached = await offlineDB.getQueryCache(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+            return { data: cached || { success: true, data: {} }, status: 200, fromCache: true };
+        }
+    }
 };
 
 export default api;

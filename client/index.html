@@ -10,20 +10,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      // Clear service workers in development to prevent caching issues
-      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname.includes('ngrok')) {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(registrations => {
-            for (let registration of registrations) {
-              registration.unregister().then(success => {
-                if (success) console.log('Successfully unregistered Service Worker');
-              });
-            }
-          });
-        }
-      }
-    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
