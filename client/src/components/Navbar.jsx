@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, Bell, Search, User, ChevronDown, Store, Zap, Plus, Settings } from 'lucide-react';
+import { Menu, Bell, Search, User, ChevronDown, Store, Zap, Plus, Settings, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { shopService } from '../services/api';
+import { useSync } from '../context/SyncContext';
 
 const Navbar = ({ toggleSidebar }) => {
     const { user } = useAuth();
@@ -10,6 +11,7 @@ const Navbar = ({ toggleSidebar }) => {
     const navigate = useNavigate();
     const [shops, setShops] = useState([]);
     const [currentShop, setCurrentShop] = useState(null);
+    const { isOnline, pendingCount, isSyncing, triggerSync } = useSync();
 
     useEffect(() => {
         const fetchShops = async () => {
@@ -68,6 +70,24 @@ const Navbar = ({ toggleSidebar }) => {
 
             <div className="nv-right">
                 <div className="nv-actions">
+                    <div className="sync-status-indicator" onClick={triggerSync} style={{ cursor: 'pointer' }}>
+                        {isSyncing ? (
+                            <div className="sync-badge syncing" title="Syncing pending changes...">
+                                <RefreshCw size={16} className="spin" />
+                                <span className="sync-text hide-mobile">Syncing...</span>
+                            </div>
+                        ) : !isOnline ? (
+                            <div className="sync-badge offline" title={`Offline Mode. ${pendingCount} changes pending sync.`}>
+                                <WifiOff size={16} />
+                                <span className="sync-text hide-mobile">{pendingCount > 0 ? `${pendingCount} Pending` : 'Offline'}</span>
+                            </div>
+                        ) : (
+                            <div className="sync-badge online" title="Online & Synced">
+                                <Wifi size={16} />
+                                <span className="sync-text hide-mobile">Synced</span>
+                            </div>
+                        )}
+                    </div>
                     <button className="action-circle-nav hide-mobile" onClick={() => navigate(`/shop/${shopId}/pos`)}>
                         <Plus size={20} />
                     </button>
@@ -205,6 +225,15 @@ const Navbar = ({ toggleSidebar }) => {
                     .navbar-premium { padding: 0 1rem; }
                     .shop-switcher-pill { min-width: 120px; }
                 }
+
+                .sync-status-indicator { display: flex; align-items: center; margin-right: 0.5rem; }
+                .sync-badge { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 10px; font-size: 0.75rem; font-weight: 800; }
+                .sync-badge.online { background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0; }
+                .sync-badge.offline { background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A; }
+                .sync-badge.syncing { background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE; }
+                .spin { animation: spin 2s linear infinite; }
+                @keyframes spin { 100% { transform: rotate(360deg); } }
+                .sync-text { font-family: 'Plus Jakarta Sans', sans-serif; }
             `}</style>
         </header>
     );

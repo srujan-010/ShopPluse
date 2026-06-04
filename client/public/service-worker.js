@@ -59,3 +59,16 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// Background sync support
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-mutations') {
+    event.waitUntil(
+      self.clients.matchAll().then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: 'SYNC_MUTATIONS' });
+        });
+      })
+    );
+  }
+});
