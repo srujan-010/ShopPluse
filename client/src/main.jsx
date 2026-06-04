@@ -16,8 +16,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>,
 );
 
-// Register Service Worker for Offline-First PWA capabilities
-if ('serviceWorker' in navigator) {
+// Register Service Worker for Offline-First PWA capabilities (production only)
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/service-worker.js')
       .then((reg) => {
@@ -26,5 +26,14 @@ if ('serviceWorker' in navigator) {
       .catch((err) => {
         console.error('Service Worker registration failed:', err);
       });
+  });
+} else if ('serviceWorker' in navigator) {
+  // Aggressively unregister service workers in development to prevent ESM/HMR interception issues
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (let registration of registrations) {
+      registration.unregister().then((success) => {
+        if (success) console.log('Successfully unregistered Service Worker for development');
+      });
+    }
   });
 }
