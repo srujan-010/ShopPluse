@@ -18,15 +18,18 @@ import {
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { khataService, shopService, saleService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader, MessageModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { invoiceService } from '../utils/invoiceService';
+import { useToast } from '../context/ToastContext';
 
 const KhataPage = () => {
     const { shopId } = useParams();
+    const { showToast } = useToast();
     const [shop, setShop] = useState(null);
     const [customers, setCustomers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -59,6 +62,10 @@ const KhataPage = () => {
     const [newCustName, setNewCustName] = useState('');
     const [newCustMobile, setNewCustMobile] = useState('');
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
+    
+    const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
+    const [isSaleSubmitting, setIsSaleSubmitting] = useState(false);
+    const [isNewAccountSubmitting, setIsNewAccountSubmitting] = useState(false);
 
     useEffect(() => {
         fetchInitialData();
@@ -69,12 +76,28 @@ const KhataPage = () => {
 
     const fetchInitialData = async () => {
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localShops = await offlineDB.getShops();
+            const activeShop = localShops.find(s => s._id === shopId);
+            if (activeShop) setShop(activeShop);
+
+            const localCustomers = await offlineDB.getKhata(shopId);
+            if (localCustomers && localCustomers.length > 0) {
+                setCustomers(localCustomers);
+                setLoading(false);
+            }
+
             const [shopRes, customersRes] = await Promise.all([
                 shopService.getAll(),
                 khataService.getCustomers(shopId)
             ]);
-            setShop(shopRes.data.data.find(s => s._id === shopId));
-            setCustomers(customersRes.data.data);
+            
+            const fetchedShops = shopRes.data?.data || [];
+            const fetchedCustomers = customersRes.data?.data || [];
+            
+            const newActiveShop = fetchedShops.find(s => s._id === shopId);
+            if (newActiveShop) setShop(newActiveShop);
+            setCustomers(fetchedCustomers);
         } catch (err) {
             console.error('Failed to load Khata records:', err);
         } finally {
@@ -111,38 +134,56 @@ const KhataPage = () => {
     };
 
     const handleReceivePayment = async () => {
-        if (!amountInput || amountInput <= 0) return;
+        if (!amountInput || amountInput <= 0) {
+            showToast('Please enter a valid amount.', 'warning');
+            return;
+        }
+        if (isPaymentSubmitting) return;
         try {
+            setIsPaymentSubmitting(true);
             await khataService.receivePayment(selectedCustomer._id, amountInput, noteInput);
             setIsPaymentModalOpen(false);
             setAmountInput('');
             setNoteInput('');
             await fetchDetails(selectedCustomer._id);
             fetchInitialData();
+            showToast('Payment received successfully.', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Operation Failed', message: err.response?.data?.message || 'Operation failed', type: 'error' });
+            showToast(err.response?.data?.message || 'Operation failed', 'error');
+        } finally {
+            setIsPaymentSubmitting(false);
         }
     };
 
     const handleCreateAccount = async () => {
         if (!newCustName.trim() || !newCustMobile.trim()) {
-            setAlertConfig({ open: true, title: 'Details Required', message: 'Name and Mobile Number are required.', type: 'error' });
+            showToast('Name and Mobile Number are required.', 'warning');
             return;
         }
+        if (isNewAccountSubmitting) return;
         try {
+            setIsNewAccountSubmitting(true);
             await khataService.addSale(shopId, newCustName.trim(), newCustMobile.trim(), 0, 'New Khata Account');
             setIsNewAccountModalOpen(false);
             setNewCustName('');
             setNewCustMobile('');
             fetchInitialData();
+            showToast('Khata account created successfully.', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Operation Failed', message: err.response?.data?.message || 'Operation failed', type: 'error' });
+            showToast(err.response?.data?.message || 'Operation failed', 'error');
+        } finally {
+            setIsNewAccountSubmitting(false);
         }
     };
 
     const handleAddSale = async () => {
-        if (!amountInput || amountInput <= 0) return;
+        if (!amountInput || amountInput <= 0) {
+            showToast('Please enter a valid amount.', 'warning');
+            return;
+        }
+        if (isSaleSubmitting) return;
         try {
+            setIsSaleSubmitting(true);
             await khataService.addSale(
                 shopId, 
                 selectedCustomer?.customerName, 
@@ -155,8 +196,11 @@ const KhataPage = () => {
             setNoteInput('');
             if (selectedCustomer) await fetchDetails(selectedCustomer._id);
             fetchInitialData();
+            showToast('Credit sale recorded successfully.', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Operation Failed', message: err.response?.data?.message || 'Operation failed', type: 'error' });
+            showToast(err.response?.data?.message || 'Operation failed', 'error');
+        } finally {
+            setIsSaleSubmitting(false);
         }
     };
 
@@ -752,7 +796,7 @@ const KhataPage = () => {
             {/* Payment Modal */}
             {isPaymentModalOpen && (
                 <div className="modal-overlay">
-                    <div className="modal-backdrop" onClick={() => setIsPaymentModalOpen(false)}></div>
+                    <div className="modal-backdrop" onClick={() => { if (!isPaymentSubmitting) setIsPaymentModalOpen(false); }}></div>
                     <div className="modal-content">
                         <h3>Receive Payment</h3>
                         <p>Recording payments from {selectedCustomer?.customerName}</p>
@@ -761,16 +805,20 @@ const KhataPage = () => {
                             placeholder="Amount in ₹" 
                             value={amountInput} 
                             onChange={(e) => setAmountInput(e.target.value)} 
+                            disabled={isPaymentSubmitting}
                         />
                         <input 
                             type="text" 
                             placeholder="Note (optional)" 
                             value={noteInput} 
                             onChange={(e) => setNoteInput(e.target.value)} 
+                            disabled={isPaymentSubmitting}
                         />
                         <div className="modal-actions">
-                            <button className="btn-cancel" onClick={() => setIsPaymentModalOpen(false)}>Cancel</button>
-                            <button className="btn-confirm" onClick={handleReceivePayment}>Save Payment</button>
+                            <button className="btn-cancel" onClick={() => setIsPaymentModalOpen(false)} disabled={isPaymentSubmitting}>Cancel</button>
+                            <button className="btn-confirm" onClick={handleReceivePayment} disabled={isPaymentSubmitting}>
+                                {isPaymentSubmitting ? 'Recording Payment...' : 'Save Payment'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -779,7 +827,7 @@ const KhataPage = () => {
             {/* Add Account Modal */}
             {isNewAccountModalOpen && (
                 <div className="modal-overlay">
-                    <div className="modal-backdrop" onClick={() => setIsNewAccountModalOpen(false)}></div>
+                    <div className="modal-backdrop" onClick={() => { if (!isNewAccountSubmitting) setIsNewAccountModalOpen(false); }}></div>
                     <div className="modal-content">
                         <h3>Add New Account</h3>
                         <p>Provide customer details to open a credit account</p>
@@ -788,16 +836,20 @@ const KhataPage = () => {
                             placeholder="Customer Full Name" 
                             value={newCustName} 
                             onChange={(e) => setNewCustName(e.target.value)} 
+                            disabled={isNewAccountSubmitting}
                         />
                         <input 
                             type="text" 
                             placeholder="Mobile Number" 
                             value={newCustMobile} 
                             onChange={(e) => setNewCustMobile(e.target.value)} 
+                            disabled={isNewAccountSubmitting}
                         />
                         <div className="modal-actions">
-                            <button className="btn-cancel" onClick={() => setIsNewAccountModalOpen(false)}>Cancel</button>
-                            <button className="btn-confirm" onClick={handleCreateAccount}>Create Account</button>
+                            <button className="btn-cancel" onClick={() => setIsNewAccountModalOpen(false)} disabled={isNewAccountSubmitting}>Cancel</button>
+                            <button className="btn-confirm" onClick={handleCreateAccount} disabled={isNewAccountSubmitting}>
+                                {isNewAccountSubmitting ? 'Creating Account...' : 'Create Account'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -806,7 +858,7 @@ const KhataPage = () => {
             {/* Add Sale Modal */}
             {isSaleModalOpen && (
                 <div className="modal-overlay">
-                    <div className="modal-backdrop" onClick={() => setIsSaleModalOpen(false)}></div>
+                    <div className="modal-backdrop" onClick={() => { if (!isSaleSubmitting) setIsSaleModalOpen(false); }}></div>
                     <div className="modal-content">
                         <h3>Add Credit Sale</h3>
                         <p>Recording due for {selectedCustomer?.customerName}</p>
@@ -815,16 +867,20 @@ const KhataPage = () => {
                             placeholder="Sale Amount in ₹" 
                             value={amountInput} 
                             onChange={(e) => setAmountInput(e.target.value)} 
+                            disabled={isSaleSubmitting}
                         />
                         <input 
                             type="text" 
                             placeholder="Note (optional)" 
                             value={noteInput} 
                             onChange={(e) => setNoteInput(e.target.value)} 
+                            disabled={isSaleSubmitting}
                         />
                         <div className="modal-actions">
-                            <button className="btn-cancel" onClick={() => setIsSaleModalOpen(false)}>Cancel</button>
-                            <button className="btn-confirm" onClick={handleAddSale}>Add Due Credit</button>
+                            <button className="btn-cancel" onClick={() => setIsSaleModalOpen(false)} disabled={isSaleSubmitting}>Cancel</button>
+                            <button className="btn-confirm" onClick={handleAddSale} disabled={isSaleSubmitting}>
+                                {isSaleSubmitting ? 'Adding Sale...' : 'Add Due Credit'}
+                            </button>
                         </div>
                     </div>
                 </div>

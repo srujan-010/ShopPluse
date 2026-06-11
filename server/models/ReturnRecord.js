@@ -1,16 +1,20 @@
 const mongoose = require('mongoose');
 
-const governmentSaleSchema = new mongoose.Schema({
+const returnRecordSchema = new mongoose.Schema({
     shop: {
         type: mongoose.Schema.ObjectId,
         ref: 'Shop',
         required: true
     },
-    linkedSaleId: {
+    originalSale: {
         type: mongoose.Schema.ObjectId,
-        ref: 'Sale'
+        ref: 'Sale',
+        required: true
     },
-    invoiceNumber: String,
+    invoiceNumber: {
+        type: String,
+        required: true
+    },
     customerName: String,
     customerMobile: String,
     items: [{
@@ -20,33 +24,30 @@ const governmentSaleSchema = new mongoose.Schema({
             required: true
         },
         productName: String,
-        soldQtyEntered: Number,
-        soldUnit: String,
-        soldQtyBaseUnit: Number,
-        pricePerBaseUnit: Number,
-        totalPrice: Number,
-        // Using governmentPrice to explicitly clarify the pricing model used
-        governmentPrice: Number,
-        returnedQty: {
+        quantity: {
             type: Number,
-            default: 0
+            required: true
         },
-        remainingQty: {
+        unit: String,
+        price: {
             type: Number,
-            default: function() {
-                return this.soldQtyEntered;
-            }
+            required: true
+        },
+        totalPrice: {
+            type: Number,
+            required: true
         }
     }],
-    totalAmount: {
+    totalRefundAmount: {
         type: Number,
         required: true
     },
-    paymentMethod: {
+    refundMethod: {
         type: String,
         required: true,
         enum: ['Cash', 'UPI', 'Khata']
     },
+    reason: String,
     date: {
         type: Date,
         default: Date.now
@@ -55,11 +56,9 @@ const governmentSaleSchema = new mongoose.Schema({
         type: mongoose.Schema.ObjectId,
         ref: 'User',
         required: true
-    },
-    isInspectionCopy: {
-        type: Boolean,
-        default: true
     }
+}, {
+    timestamps: true
 });
 
-module.exports = mongoose.model('GovernmentSale', governmentSaleSchema);
+module.exports = mongoose.model('ReturnRecord', returnRecordSchema);

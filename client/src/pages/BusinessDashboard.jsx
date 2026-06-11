@@ -18,6 +18,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { shopService, saleService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Skeleton, EmptyState } from '../components/PremiumUI';
 
@@ -34,14 +35,26 @@ const BusinessDashboard = () => {
     }, []);
 
     const fetchData = async () => {
-        setLoading(true);
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localShops = await offlineDB.getShops();
+            const localStats = await offlineDB.getQueryCache('/api/sales/stats');
+            if (localShops && localShops.length > 0) {
+                setShops(localShops);
+            }
+            if (localStats && localStats.data) {
+                setStats(localStats.data);
+            }
+            if (localShops && localShops.length > 0) {
+                setLoading(false);
+            }
+
             const [shopRes, statRes] = await Promise.all([
                 shopService.getAll(),
                 saleService.getShopStats() // No shopId = Global Stats
             ]);
-            setShops(shopRes.data.data);
-            setStats(statRes.data.data);
+            setShops(shopRes.data.data || []);
+            setStats(statRes.data.data || null);
         } catch (err) {
             console.error('Error fetching business data:', err);
         } finally {

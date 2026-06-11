@@ -4,10 +4,12 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, IndianRupee, Printer, Download, User, Phone, Calendar, FileText, CheckCircle, AlertCircle, Clock, Share2, ChevronDown } from 'lucide-react';
 import { purchaseService, shopService } from '../services/api';
 import { invoiceService } from '../utils/invoiceService';
+import { useToast } from '../context/ToastContext';
 
 const PurchaseDetailsPage = () => {
     const { shopId, purchaseId } = useParams();
     const navigate = useNavigate();
+    const { showToast } = useToast();
     const [purchase, setPurchase] = useState(null);
     const [shop, setShop] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -37,7 +39,7 @@ const PurchaseDetailsPage = () => {
             }
         } catch (error) {
             console.error("Failed to load purchase details:", error);
-            alert("Unable to retrieve purchase records.");
+            showToast("Unable to retrieve purchase records.", "error");
         } finally {
             setLoading(false);
         }
@@ -51,8 +53,9 @@ const PurchaseDetailsPage = () => {
 
     const handleReceivePayment = async (e) => {
         e.preventDefault();
+        if (isSaving) return;
         if (!paymentInput.amount || Number(paymentInput.amount) <= 0) {
-            alert("Please enter a valid amount.");
+            showToast("Please enter a valid amount.", "warning");
             return;
         }
         try {
@@ -62,13 +65,13 @@ const PurchaseDetailsPage = () => {
                 mode: paymentInput.mode,
                 note: paymentInput.note
             });
-            alert("Payment recorded successfully!");
+            showToast("Payment recorded successfully!", "success");
             setPaymentInput({ amount: '', mode: 'Cash', note: '' });
             setShowReceivePayment(false);
             fetchPurchaseDetails();
         } catch (error) {
             console.error("Payment failed:", error);
-            alert(error.response?.data?.message || "Failed to register payment.");
+            showToast(error.response?.data?.message || "Failed to register payment.", "error");
         } finally {
             setIsSaving(false);
         }
@@ -301,7 +304,7 @@ const PurchaseDetailsPage = () => {
                         style={{ position: 'fixed', bottom: 'calc(150px + env(safe-area-inset-bottom))', left: '12px', right: '12px', background: 'white', borderRadius: '20px', padding: '20px', boxShadow: '0 -8px 32px rgba(0,0,0,0.15)', border: '1.5px solid #FCD34D', zIndex: 60 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                             <span style={{ fontSize: '15px', fontWeight: '800', color: '#78350F' }}>Record Payment</span>
-                            <button onClick={() => setShowReceivePayment(false)} style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            <button onClick={() => { if (!isSaving) setShowReceivePayment(false); }} style={{ background: 'none', border: 'none', fontSize: '20px', color: '#94A3B8', cursor: 'pointer', lineHeight: 1 }}>×</button>
                         </div>
                         <form onSubmit={handleReceivePayment} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             <input type="number" required placeholder={`Max ₹${(purchase.dueAmount||0).toLocaleString()}`} max={purchase.dueAmount}
@@ -319,7 +322,7 @@ const PurchaseDetailsPage = () => {
                                     style={{ flex: 1, height: '44px', padding: '0 12px', borderRadius: '12px', border: '2px solid #E2E8F0', fontSize: '14px', outline: 'none' }} />
                             </div>
                             <div style={{ display: 'flex', gap: '10px' }}>
-                                <button type="button" onClick={() => setShowReceivePayment(false)}
+                                <button type="button" onClick={() => setShowReceivePayment(false)} disabled={isSaving}
                                     style={{ flex: 1, height: '48px', borderRadius: '12px', border: '2px solid #E2E8F0', background: 'white', color: '#475569', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
                                     Cancel
                                 </button>
@@ -607,6 +610,7 @@ const PurchaseDetailsPage = () => {
                                     <button 
                                         type="button" 
                                         onClick={() => setShowReceivePayment(false)}
+                                        disabled={isSaving}
                                         style={{ padding: '0 16px', height: '40px', background: 'none', border: '1px solid #FCD34D', color: '#92400E', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
                                     >
                                         Cancel

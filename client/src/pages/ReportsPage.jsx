@@ -14,7 +14,10 @@ import {
     Briefcase,
     Zap,
     Share2,
-    Search
+    Search,
+    RotateCcw,
+    RefreshCw,
+    AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader, CustomSelect } from '../components/PremiumUI';
@@ -273,6 +276,35 @@ const ReportsPage = () => {
                 </div>
             </section>
 
+            {/* Return & Exchange Summary Cards */}
+            <h2 className="section-title mt-6 mb-4" style={{ fontSize: '1.25rem', fontWeight: 800 }}>Returns & Exchanges Summary</h2>
+            <section className="reports-summary">
+                <div className="premium-card summary-card red">
+                    <div className="sc-icon"><RotateCcw size={24} /></div>
+                    <div className="sc-content">
+                        <span className="sc-label">Total Returns</span>
+                        <h3>₹{(reportData?.totalReturns || 0).toLocaleString()}</h3>
+                        <div className="sc-trend">Product refunds issued</div>
+                    </div>
+                </div>
+                <div className="premium-card summary-card purple">
+                    <div className="sc-icon"><RefreshCw size={24} /></div>
+                    <div className="sc-content">
+                        <span className="sc-label">Exchange Value</span>
+                        <h3>₹{(reportData?.exchangeValue || 0).toLocaleString()}</h3>
+                        <div className="sc-trend">Replacement item volume</div>
+                    </div>
+                </div>
+                <div className="premium-card summary-card rose">
+                    <div className="sc-icon"><AlertTriangle size={24} /></div>
+                    <div className="sc-content">
+                        <span className="sc-label">Return Losses</span>
+                        <h3>₹{(reportData?.returnLosses || 0).toLocaleString()}</h3>
+                        <div className="sc-trend">Deduction from net earnings</div>
+                    </div>
+                </div>
+            </section>
+
             {/* Comparative Cycles Summary */}
             <div className="summaries-grid-custom">
                 {['today', 'yesterday', 'weekly', 'monthly'].map(period => (
@@ -372,6 +404,9 @@ const ReportsPage = () => {
                 .summary-card.blue { background: linear-gradient(135deg, #2563eb, #3b82f6); color: white; }
                 .summary-card.green { background: linear-gradient(135deg, #059669, #10b981); color: white; }
                 .summary-card.orange { background: linear-gradient(135deg, #ea580c, #f97316); color: white; }
+                .summary-card.red { background: linear-gradient(135deg, #dc2626, #ef4444); color: white; }
+                .summary-card.purple { background: linear-gradient(135deg, #7c3aed, #8b5cf6); color: white; }
+                .summary-card.rose { background: linear-gradient(135deg, #be123c, #e11d48); color: white; }
 
                 .sc-icon { width: 52px; height: 52px; background: rgba(255,255,255,0.2); border-radius: 16px; display: flex; align-items: center; justify-content: center; }
                 .sc-label { font-size: 0.75rem; font-weight: 700; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px; }

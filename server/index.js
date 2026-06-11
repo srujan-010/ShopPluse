@@ -15,6 +15,10 @@ const app = express();
 // Body parser
 app.use(express.json());
 
+// Idempotency Middleware
+const { idempotency } = require('./middleware/idempotency');
+app.use(idempotency);
+
 // Enable CORS
 app.use(cors({
     origin: [
@@ -25,7 +29,7 @@ app.use(cors({
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Request-ID']
 }));
 
 

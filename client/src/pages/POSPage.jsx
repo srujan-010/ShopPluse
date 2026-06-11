@@ -36,11 +36,13 @@ import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
 import { offlineDB } from '../services/offlineDB';
 import { useSync } from '../context/SyncContext';
+import { useToast } from '../context/ToastContext';
 
 const POSPage = () => {
     const { shopId } = useParams();
     const navigate = useNavigate();
     const { isOnline } = useSync();
+    const { showToast } = useToast();
     const [products, setProducts] = useState([]);
     const [shop, setShop] = useState(null);
     const [cart, setCart] = useState([]);
@@ -208,9 +210,10 @@ const POSPage = () => {
     const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
 
     const handleCheckout = async () => {
+        if (isCheckingOut) return;
         if (cart.length === 0) return;
         if (paymentMethod === 'Khata' && (!customerName.trim() || !customerMobile.trim())) {
-            setAlertConfig({ open: true, title: 'Details Required', message: 'Customer Name and Mobile are required for Khata payment.', type: 'error' });
+            showToast('Customer Name and Mobile are required for Khata payment.', 'warning');
             return;
         }
         setIsCheckingOut(true);
@@ -228,8 +231,9 @@ const POSPage = () => {
             setCart([]);
             setIsCartDrawerOpen(false);
             fetchData();
+            showToast('Sale created successfully!', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Checkout Failed', message: err.response?.data?.message || 'Checkout failed', type: 'error' });
+            showToast(err.response?.data?.message || 'Checkout failed', 'error');
         } finally {
             setIsCheckingOut(false);
         }
@@ -326,13 +330,21 @@ const POSPage = () => {
                         })
                     ) : (
                         <div style={{ gridColumn: '1 / -1', padding: '40px 0' }}>
-                            <EmptyState 
-                                icon={ShoppingBag}
-                                title={searchTerm ? "No products found" : "Your catalog is empty"}
-                                description={searchTerm ? `We couldn't find anything matching "${searchTerm}".` : "Add products to your inventory to start selling."}
-                                actionLabel={searchTerm ? "Clear Search" : "Add Products"}
-                                onAction={searchTerm ? () => setSearchTerm('') : () => navigate(`/shop/${shopId}/inventory`)}
-                            />
+                            {!isOnline && products.length === 0 ? (
+                                <EmptyState 
+                                    icon={ShoppingBag}
+                                    title="No offline data cached yet"
+                                    description="Connect to the internet once to sync products and populate your local offline database."
+                                />
+                            ) : (
+                                <EmptyState 
+                                    icon={ShoppingBag}
+                                    title={searchTerm ? "No products found" : "Your catalog is empty"}
+                                    description={searchTerm ? `We couldn't find anything matching "${searchTerm}".` : "Add products to your inventory to start selling."}
+                                    actionLabel={searchTerm ? "Clear Search" : "Add Products"}
+                                    onAction={searchTerm ? () => setSearchTerm('') : () => navigate(`/shop/${shopId}/inventory`)}
+                                />
+                            )}
                         </div>
                     )}
                 </div>
@@ -415,10 +427,10 @@ const POSPage = () => {
             <AnimatePresence>
                 {isCartDrawerOpen && (
                     <div className="modal-overlay-v2">
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="m-backdrop-v2" onClick={() => setIsCartDrawerOpen(false)} />
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="m-backdrop-v2" onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }} />
                         <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} className="checkout-drawer-v2">
                             <div className="cdv2-header">
-                                <button className="btn-cdv2-back" onClick={() => setIsCartDrawerOpen(false)}><ChevronLeft size={24} /></button>
+                                <button className="btn-cdv2-back" onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }}><ChevronLeft size={24} /></button>
                                 <h3>Complete Transaction</h3>
                             </div>
                             <div className="cdv2-body">

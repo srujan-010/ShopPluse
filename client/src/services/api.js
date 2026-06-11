@@ -38,8 +38,27 @@ api.interceptors.request.use((config) => {
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Automatically generate idempotency key for state-changing requests (POST, PUT, DELETE)
+    if (config.method && ['post', 'put', 'delete'].includes(config.method.toLowerCase())) {
+        if (!config.headers['X-Idempotency-Key']) {
+            config.headers['X-Idempotency-Key'] = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        }
+    }
     return config;
 });
+
+const isEntityRoute = (url, entityPath, ignoreSubpaths = []) => {
+    if (!url) return false;
+    const urlPath = url.split('?')[0];
+    if (!urlPath.includes(entityPath)) return false;
+    for (const subpath of ignoreSubpaths) {
+        if (urlPath.includes(subpath)) {
+            return false;
+        }
+    }
+    return true;
+};
 
 // Handle errors and offline caching globally
 api.interceptors.response.use(
@@ -49,28 +68,30 @@ api.interceptors.response.use(
             try {
                 await offlineDB.saveQueryCache(response.config.url, response.data);
                 
+                const url = response.config.url || '';
+                
                 // Cache dedicated entities
-                if (response.config.url.includes('/api/products') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/products', ['restock', 'inventory-history']) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.saveProductsBulk(data);
                 }
-                if (response.config.url.includes('/api/sales') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/sales', ['stats', 'reports', 'history', 'summaries']) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.saveSalesBulk(data);
                 }
-                if (response.config.url.includes('/api/khata') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/khata', ['pay', 'sale']) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.saveKhataBulk(data);
                 }
-                if (response.config.url.includes('/api/gov-sales') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/gov-sales', ['stats']) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.saveGovSalesBulk(data);
                 }
-                if (response.config.url.includes('/api/purchases') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/purchases', ['payment']) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.savePurchasesBulk(data);
                 }
-                if (response.config.url.includes('/api/shops') && response.data && response.data.data) {
+                if (isEntityRoute(url, '/api/shops', []) && response.data && response.data.data) {
                     const data = Array.isArray(response.data.data) ? response.data.data : [response.data.data];
                     await offlineDB.saveShopsBulk(data);
                 }
@@ -98,7 +119,7 @@ api.interceptors.response.use(
             // Handle GET offline fallback
             if (method === 'get') {
                 try {
-                    if (url.includes('/api/products')) {
+                    if (isEntityRoute(url, '/api/products', ['restock', 'inventory-history'])) {
                         const shopIdMatch = url.match(/shop=([^&]+)/);
                         const shopId = shopIdMatch ? shopIdMatch[1] : null;
                         const products = await offlineDB.getProducts(shopId);
@@ -106,7 +127,7 @@ api.interceptors.response.use(
                             return Promise.resolve({ data: { success: true, data: products }, status: 200, fromCache: true });
                         }
                     }
-                    if (url.includes('/api/sales')) {
+                    if (isEntityRoute(url, '/api/sales', ['stats', 'reports', 'history', 'summaries'])) {
                         const shopIdMatch = url.match(/shop=([^&]+)/);
                         const shopId = shopIdMatch ? shopIdMatch[1] : null;
                         const sales = await offlineDB.getSales(shopId);
@@ -114,7 +135,7 @@ api.interceptors.response.use(
                             return Promise.resolve({ data: { success: true, data: sales }, status: 200, fromCache: true });
                         }
                     }
-                    if (url.includes('/api/khata')) {
+                    if (isEntityRoute(url, '/api/khata', ['pay', 'sale'])) {
                         const shopIdMatch = url.match(/shopId=([^&]+)/);
                         const shopId = shopIdMatch ? shopIdMatch[1] : null;
                         const customers = await offlineDB.getKhata(shopId);
@@ -122,7 +143,7 @@ api.interceptors.response.use(
                             return Promise.resolve({ data: { success: true, data: customers }, status: 200, fromCache: true });
                         }
                     }
-                    if (url.includes('/api/gov-sales')) {
+                    if (isEntityRoute(url, '/api/gov-sales', ['stats'])) {
                         const shopIdMatch = url.match(/shop=([^&]+)/);
                         const shopId = shopIdMatch ? shopIdMatch[1] : null;
                         const govSales = await offlineDB.getGovSales(shopId);
@@ -130,7 +151,7 @@ api.interceptors.response.use(
                             return Promise.resolve({ data: { success: true, data: govSales }, status: 200, fromCache: true });
                         }
                     }
-                    if (url.includes('/api/purchases')) {
+                    if (isEntityRoute(url, '/api/purchases', ['payment'])) {
                         const shopIdMatch = url.match(/shop=([^&]+)/);
                         const shopId = shopIdMatch ? shopIdMatch[1] : null;
                         const purchases = await offlineDB.getPurchases(shopId);
@@ -138,7 +159,7 @@ api.interceptors.response.use(
                             return Promise.resolve({ data: { success: true, data: purchases }, status: 200, fromCache: true });
                         }
                     }
-                    if (url.includes('/api/shops')) {
+                    if (isEntityRoute(url, '/api/shops', [])) {
                         const shops = await offlineDB.getShops();
                         if (shops && shops.length > 0) {
                             return Promise.resolve({ data: { success: true, data: shops }, status: 200, fromCache: true });
@@ -630,6 +651,22 @@ export const saleService = {
             console.warn('saleService.getSummaries failed, using IndexedDB fallback:', err);
             const cached = await offlineDB.getQueryCache(`/api/sales/summaries${shopId ? `?shop=${shopId}` : ''}`);
             return { data: cached || { success: true, data: [] }, status: 200, fromCache: true };
+        }
+    },
+    processReturn: async (id, data) => {
+        try {
+            return await api.post(`/api/sales/${id}/return`, data);
+        } catch (err) {
+            console.error('saleService.processReturn failed:', err);
+            throw err;
+        }
+    },
+    processExchange: async (id, data) => {
+        try {
+            return await api.post(`/api/sales/${id}/exchange`, data);
+        } catch (err) {
+            console.error('saleService.processExchange failed:', err);
+            throw err;
         }
     }
 };

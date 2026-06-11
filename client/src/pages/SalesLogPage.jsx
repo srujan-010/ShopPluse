@@ -14,14 +14,17 @@ import {
     ArrowDownCircle
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { saleService, shopService, khataService } from '../services/api';
+import { saleService, shopService, khataService, productService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
+import { useToast } from '../context/ToastContext';
 
 const SalesLogPage = () => {
     const { shopId } = useParams();
+    const { showToast } = useToast();
     const [sales, setSales] = useState([]);
     const [shop, setShop] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -45,6 +48,205 @@ const SalesLogPage = () => {
     const [invoiceLoading, setInvoiceLoading] = useState(false);
     const itemsPerPage = 20;
 
+    // Return & Exchange Modal States
+    const [showReturnModal, setShowReturnModal] = useState(false);
+    const [showExchangeModal, setShowExchangeModal] = useState(false);
+    const [saleToReturn, setSaleToReturn] = useState(null);
+    const [saleToExchange, setSaleToExchange] = useState(null);
+    const [returnQuantities, setReturnQuantities] = useState({}); // productId -> quantity
+    const [returnReason, setReturnReason] = useState('');
+    const [refundMethod, setRefundMethod] = useState('Cash');
+
+    const [exchangeReturnQuantities, setExchangeReturnQuantities] = useState({}); // productId -> quantity
+    const [replacementItems, setReplacementItems] = useState([]); // array of { product, productName, quantity, unit, price }
+    const [exchangePaymentMethod, setExchangePaymentMethod] = useState('Cash');
+    const [shopProducts, setShopProducts] = useState([]);
+    const [productSearch, setProductSearch] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+
+    const [isReturnSubmitting, setIsReturnSubmitting] = useState(false);
+    const [isExchangeSubmitting, setIsExchangeSubmitting] = useState(false);
+
+    const getAlreadyReturnedQuantities = (saleId) => {
+        const qtyMap = {};
+        sales.forEach(tx => {
+            if (tx.type === 'RETURN' && tx.originalSale === saleId) {
+                (tx.items || []).forEach(item => {
+                    const prodId = item.product.toString();
+                    qtyMap[prodId] = (qtyMap[prodId] || 0) + item.quantity;
+                });
+            }
+            if (tx.type === 'EXCHANGE' && tx.originalSale === saleId) {
+                (tx.returnedItems || []).forEach(item => {
+                    const prodId = item.product.toString();
+                    qtyMap[prodId] = (qtyMap[prodId] || 0) + item.quantity;
+                });
+            }
+        });
+        return qtyMap;
+    };
+
+    const handleOpenReturnModal = (sale) => {
+        const alreadyReturnedMap = getAlreadyReturnedQuantities(sale._id);
+        const initialReturnQty = {};
+        (sale.items || []).forEach(item => {
+            initialReturnQty[item.product] = 0;
+        });
+        setSaleToReturn(sale);
+        setReturnQuantities(initialReturnQty);
+        setReturnReason('');
+        setRefundMethod(sale.paymentMethod === 'Khata' ? 'Khata' : 'Cash');
+        setShowReturnModal(true);
+    };
+
+    const handleOpenExchangeModal = (sale) => {
+        const alreadyReturnedMap = getAlreadyReturnedQuantities(sale._id);
+        const initialReturnQty = {};
+        (sale.items || []).forEach(item => {
+            initialReturnQty[item.product] = 0;
+        });
+        setSaleToExchange(sale);
+        setExchangeReturnQuantities(initialReturnQty);
+        setReplacementItems([]);
+        setExchangePaymentMethod(sale.paymentMethod === 'Khata' ? 'Khata' : 'Cash');
+        fetchShopProducts();
+        setShowExchangeModal(true);
+    };
+
+    const fetchShopProducts = async () => {
+        try {
+            const res = await productService.getAll(shopId);
+            setShopProducts(res.data.data || []);
+        } catch (err) {
+            console.error('Failed to fetch shop products:', err);
+        }
+    };
+
+    useEffect(() => {
+        if (productSearch.trim() === '') {
+            setSearchResults([]);
+            return;
+        }
+        const filtered = shopProducts.filter(p => 
+            p.name.toLowerCase().includes(productSearch.toLowerCase()) || 
+            (p.brand && p.brand.toLowerCase().includes(productSearch.toLowerCase()))
+        );
+        setSearchResults(filtered);
+    }, [productSearch, shopProducts]);
+
+    const handleReturnSubmit = async (e) => {
+        e.preventDefault();
+        if (isReturnSubmitting) return;
+        
+        const alreadyReturnedMap = getAlreadyReturnedQuantities(saleToReturn._id);
+        const itemsToSubmit = [];
+        
+        for (const [productId, quantity] of Object.entries(returnQuantities)) {
+            const qty = Number(quantity);
+            if (qty <= 0) continue;
+            
+            const saleItem = saleToReturn.items.find(item => item.product === productId);
+            if (!saleItem) continue;
+            
+            const alreadyRet = alreadyReturnedMap[productId] || 0;
+            const multiplier = saleItem.multiplier || 1;
+            const maxReturnable = (saleItem.soldQtyBaseUnit - alreadyRet) / multiplier;
+            
+            if (qty > maxReturnable + 0.001) {
+                showToast(`Cannot return ${qty} of ${saleItem.productName}. Max remaining returnable: ${maxReturnable.toFixed(3)}.`, 'error');
+                return;
+            }
+            
+            itemsToSubmit.push({
+                product: productId,
+                productName: saleItem.productName,
+                quantity: qty
+            });
+        }
+
+        if (itemsToSubmit.length === 0) {
+            showToast('Please select at least one item and quantity to return.', 'warning');
+            return;
+        }
+
+        try {
+            setIsReturnSubmitting(true);
+            await saleService.processReturn(saleToReturn._id, {
+                returnedItems: itemsToSubmit,
+                reason: returnReason,
+                refundMethod
+            });
+            setShowReturnModal(false);
+            fetchInitialData();
+            showToast('Return processed successfully.', 'success');
+        } catch (err) {
+            showToast(err.response?.data?.message || 'Error processing return', 'error');
+        } finally {
+            setIsReturnSubmitting(false);
+        }
+    };
+
+    const handleExchangeSubmit = async (e) => {
+        e.preventDefault();
+        if (isExchangeSubmitting) return;
+        
+        const alreadyReturnedMap = getAlreadyReturnedQuantities(saleToExchange._id);
+        const returnedItemsToSubmit = [];
+        
+        for (const [productId, quantity] of Object.entries(exchangeReturnQuantities)) {
+            const qty = Number(quantity);
+            if (qty <= 0) continue;
+            
+            const saleItem = saleToExchange.items.find(item => item.product === productId);
+            if (!saleItem) continue;
+            
+            const alreadyRet = alreadyReturnedMap[productId] || 0;
+            const multiplier = saleItem.multiplier || 1;
+            const maxReturnable = (saleItem.soldQtyBaseUnit - alreadyRet) / multiplier;
+            
+            if (qty > maxReturnable + 0.001) {
+                showToast(`Cannot return ${qty} of ${saleItem.productName} for exchange. Max remaining returnable: ${maxReturnable.toFixed(3)}.`, 'error');
+                return;
+            }
+            
+            returnedItemsToSubmit.push({
+                product: productId,
+                productName: saleItem.productName,
+                quantity: qty
+            });
+        }
+
+        if (returnedItemsToSubmit.length === 0) {
+            showToast('Please select at least one returned item to exchange.', 'warning');
+            return;
+        }
+        if (replacementItems.length === 0) {
+            showToast('Please add at least one replacement item.', 'warning');
+            return;
+        }
+
+        try {
+            setIsExchangeSubmitting(true);
+            await saleService.processExchange(saleToExchange._id, {
+                returnedItems: returnedItemsToSubmit,
+                replacementItems: replacementItems.map(item => ({
+                    product: item.product,
+                    productName: item.productName,
+                    quantity: item.quantity,
+                    unit: item.unit
+                })),
+                paymentMethod: exchangePaymentMethod
+            });
+            setShowExchangeModal(false);
+            fetchInitialData();
+            showToast('Exchange processed successfully.', 'success');
+        } catch (err) {
+            showToast(err.response?.data?.message || 'Error processing exchange', 'error');
+        } finally {
+            setIsExchangeSubmitting(false);
+        }
+    };
+
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 1024);
         window.addEventListener('resize', handleResize);
@@ -52,7 +254,7 @@ const SalesLogPage = () => {
     }, []);
 
     // Lock body scroll when modal is open
-    useScrollLock(selectedSale || isInvoiceOpen);
+    useScrollLock(selectedSale || isInvoiceOpen || showReturnModal || showExchangeModal);
 
     useEffect(() => {
         if (selectedSale && selectedSale.paymentMethod === 'Khata' && selectedSale.customerMobile) {
@@ -79,8 +281,34 @@ const SalesLogPage = () => {
         fetchInitialData();
     }, [shopId]);
 
+    useEffect(() => {
+        const searchInvoice = searchParams.get('search') || searchParams.get('invoice');
+        if (searchInvoice && sales.length > 0) {
+            const sale = sales.find(s => s.invoiceNumber === searchInvoice || s._id === searchInvoice);
+            if (sale) {
+                const sDate = new Date(sale.date);
+                const yyyymmdd = `${sDate.getFullYear()}-${String(sDate.getMonth()+1).padStart(2,'0')}-${String(sDate.getDate()).padStart(2,'0')}`;
+                setPeriodFilter('custom');
+                setCustomDate(yyyymmdd);
+                setSearchQuery(searchInvoice);
+                setSelectedSale(sale);
+            }
+        }
+    }, [sales, searchParams]);
+
     const fetchInitialData = async () => {
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localSales = await offlineDB.getSales(shopId);
+            const localShops = await offlineDB.getShops();
+            
+            if (localSales && localSales.length > 0) {
+                setSales(localSales);
+                setLoading(false);
+            }
+            const activeShop = localShops.find(s => s._id === shopId);
+            if (activeShop) setShop(activeShop);
+
             const [salesRes, shopsRes] = await Promise.all([
                 saleService.getAll(shopId),
                 shopService.getAll()
@@ -321,9 +549,16 @@ const SalesLogPage = () => {
                                 onClick={() => setSelectedSale(sale)}
                             >
                                 <div className="sl-card-top">
-                                    <div className="sl-card-name">{sale.customerName || 'Walk-in Customer'}</div>
+                                    <div className="sl-card-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span className={`type-tag-mobile ${(sale.type || 'SALE').toLowerCase()}`}>
+                                            {sale.type || 'SALE'}
+                                        </span>
+                                        {sale.customerName || 'Walk-in Customer'}
+                                    </div>
                                     <div className="sl-card-amount-wrap">
-                                        <div className="sl-card-amount">₹{(sale.totalAmount || 0).toLocaleString()}</div>
+                                        <div className="sl-card-amount" style={{ color: sale.type === 'RETURN' ? '#DC2626' : sale.type === 'EXCHANGE' ? '#EA580C' : '#059669', fontWeight: 'bold' }}>
+                                            {sale.type === 'RETURN' ? '-' : ''}₹{Math.abs(sale.totalAmount || 0).toLocaleString()}
+                                        </div>
                                         <ChevronRight size={16} color="#98A2B3" />
                                     </div>
                                 </div>
@@ -338,7 +573,7 @@ const SalesLogPage = () => {
                                     <div className="sl-card-meta">
                                         <span>{new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                                         <span className="divider-dot">•</span>
-                                        <span>Bill #{sale._id.slice(-6).toUpperCase()}</span>
+                                        <span>Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                         <span className="divider-dot">•</span>
                                         <span className={`sl-cp-pay-badge ${sale.paymentMethod.toLowerCase()}`}>{sale.paymentMethod}</span>
                                     </div>
@@ -360,6 +595,7 @@ const SalesLogPage = () => {
                     <table className="radical-desktop-table">
                         <thead>
                             <tr>
+                                <th>Type</th>
                                 <th>Bill No</th>
                                 <th>Customer Name</th>
                                 <th>Date</th>
@@ -367,6 +603,7 @@ const SalesLogPage = () => {
                                 <th>Payment</th>
                                 <th style={{ textAlign: 'center' }}>History</th>
                                 <th style={{ textAlign: 'right' }}>Amount</th>
+                                <th style={{ textAlign: 'right' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -381,12 +618,17 @@ const SalesLogPage = () => {
                                 
                                 return (
                                     <tr key={sale._id} className="sl-desktop-row" onClick={() => setSelectedSale(sale)}>
+                                        <td className="sld-type">
+                                            <span className={`type-tag ${(sale.type || 'SALE').toLowerCase()}`}>
+                                                {sale.type || 'SALE'}
+                                            </span>
+                                        </td>
                                         <td className="sld-bill">
-                                            <span className="bill-badge">#{sale._id.slice(-6).toUpperCase()}</span>
+                                            <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                         </td>
                                         <td className="sld-cust">
                                             <div className="cust-main">{sale.customerName || 'Walk-in Customer'}</div>
-                                            {sale.customerPhone && <div className="cust-sub">{sale.customerPhone}</div>}
+                                            {sale.customerMobile && <div className="cust-sub">{sale.customerMobile}</div>}
                                         </td>
                                         <td className="sld-time">
                                             {new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -405,8 +647,21 @@ const SalesLogPage = () => {
                                         <td className="sld-prev" style={{ textAlign: 'center' }}>
                                             <span className="history-count">{prevOrders} Orders</span>
                                         </td>
-                                        <td className="sld-amt" style={{ textAlign: 'right' }}>
-                                            <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString()}</div>
+                                        <td className="sld-amt" style={{ textAlign: 'right', fontWeight: 'bold', color: sale.type === 'RETURN' ? '#DC2626' : sale.type === 'EXCHANGE' ? '#EA580C' : '#059669' }}>
+                                            <div className="amt-val">
+                                                {sale.type === 'RETURN' ? '-' : ''}₹{Math.abs(sale.totalAmount || 0).toLocaleString()}
+                                            </div>
+                                        </td>
+                                        <td className="sld-actions" style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                <button className="sl-btn-action view" onClick={() => handleViewBill(sale._id)}>View Bill</button>
+                                                {sale.type === 'SALE' && (
+                                                    <>
+                                                        <button className="sl-btn-action return" onClick={() => handleOpenReturnModal(sale)}>Return</button>
+                                                        <button className="sl-btn-action exchange" onClick={() => handleOpenExchangeModal(sale)}>Exchange</button>
+                                                    </>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 );
@@ -477,56 +732,206 @@ const SalesLogPage = () => {
                                 </div>
 
                                 <div className="radical-items-section">
-                                    <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: '#94a3b8', letterSpacing: '0.05em', marginBottom: '12px' }}>Items & Quantity</h4>
+                                    <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: '#94a3b8', letterSpacing: '0.05em', marginBottom: '12px' }}>
+                                        {selectedSale.type === 'SALE' ? 'Effective Sale Items' : selectedSale.type === 'RETURN' ? 'Returned Items' : 'Exchanged Items'}
+                                    </h4>
                                     <table className="radical-invoice-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Item Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Rate</th>
-                                                <th style={{ textAlign: 'right' }}>Total</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(selectedSale.items || []).map((item, i) => (
-                                                <tr key={i}>
-                                                    <td>
-                                                        <div className="rit-name">{item.productName}</div>
-                                                        <div className="rit-unit">{item.soldUnit || item.unit}</div>
-                                                    </td>
-                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.soldQtyEntered || item.quantity}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price).toLocaleString()}</td>
-                                                    <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{(item.totalPrice || (item.price * item.quantity)).toLocaleString()}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
+                                        {selectedSale.type === 'SALE' ? (
+                                            <>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Item Description</th>
+                                                        <th style={{ textAlign: 'center' }}>Sold</th>
+                                                        <th style={{ textAlign: 'center' }}>Returned</th>
+                                                        <th style={{ textAlign: 'center' }}>Remaining</th>
+                                                        <th style={{ textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right' }}>Total</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(() => {
+                                                        const alreadyReturnedMap = getAlreadyReturnedQuantities(selectedSale._id);
+                                                        return (selectedSale.items || []).map((item, i) => {
+                                                            const soldQty = item.soldQtyEntered || item.quantity || 0;
+                                                            const alreadyRet = alreadyReturnedMap[item.product] || 0;
+                                                            const multiplier = item.multiplier || 1;
+                                                            const returnedQty = parseFloat((alreadyRet / multiplier).toFixed(3));
+                                                            const remainingQty = Math.max(0, parseFloat((soldQty - returnedQty).toFixed(3)));
+                                                            const rate = item.pricePerBaseUnit || item.price || 0;
+                                                            const total = remainingQty * rate;
+
+                                                            return (
+                                                                <tr key={i}>
+                                                                    <td>
+                                                                        <div className="rit-name">{item.productName}</div>
+                                                                        <div className="rit-unit">{item.soldUnit || item.unit}</div>
+                                                                    </td>
+                                                                    <td style={{ textAlign: 'center', fontWeight: 600 }}>{soldQty}</td>
+                                                                    <td style={{ textAlign: 'center', color: '#dc2626', fontWeight: 600 }}>{returnedQty}</td>
+                                                                    <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700 }}>{remainingQty}</td>
+                                                                    <td style={{ textAlign: 'right' }}>₹{rate.toLocaleString()}</td>
+                                                                    <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{total.toLocaleString()}</td>
+                                                                </tr>
+                                                            );
+                                                        });
+                                                    })()}
+                                                </tbody>
+                                            </>
+                                        ) : selectedSale.type === 'EXCHANGE' ? (
+                                            <>
+                                                <thead>
+                                                    <tr>
+                                                        <th>Item Description</th>
+                                                        <th style={{ textAlign: 'center' }}>Type</th>
+                                                        <th style={{ textAlign: 'center' }}>Qty</th>
+                                                        <th style={{ textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right' }}>Total</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(selectedSale.items || []).map((item, i) => {
+                                                        const isRet = item.isReturnedInExchange;
+                                                        const qty = item.soldQtyEntered || item.quantity || 0;
+                                                        const rate = item.pricePerBaseUnit || item.price || 0;
+                                                        const total = qty * rate;
+
+                                                        return (
+                                                            <tr key={i} style={{ color: isRet ? '#b91c1c' : '#0f172a' }}>
+                                                                <td>
+                                                                    <div className="rit-name">{item.productName}</div>
+                                                                    <div className="rit-unit">{item.soldUnit || item.unit}</div>
+                                                                </td>
+                                                                <td style={{ textAlign: 'center' }}>
+                                                                    <span style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '11px', background: isRet ? '#fef2f2' : '#eff6ff', color: isRet ? '#b91c1c' : '#1e40af', fontWeight: 600 }}>
+                                                                        {isRet ? 'Returned' : 'Replacement'}
+                                                                    </span>
+                                                                </td>
+                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty}</td>
+                                                                <td style={{ textAlign: 'right' }}>₹{rate.toLocaleString()}</td>
+                                                                <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{total.toLocaleString()}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </>
+                                        ) : (
+                                            <>
+                                                {/* RETURN transaction */}
+                                                <thead>
+                                                    <tr>
+                                                        <th>Item Description</th>
+                                                        <th style={{ textAlign: 'center' }}>Qty</th>
+                                                        <th style={{ textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right' }}>Total</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(selectedSale.items || []).map((item, i) => {
+                                                        const qty = item.soldQtyEntered || item.quantity || 0;
+                                                        const rate = item.pricePerBaseUnit || item.price || 0;
+                                                        const total = qty * rate;
+
+                                                        return (
+                                                            <tr key={i} style={{ color: '#b91c1c' }}>
+                                                                <td>
+                                                                    <div className="rit-name">{item.productName}</div>
+                                                                    <div className="rit-unit">{item.soldUnit || item.unit}</div>
+                                                                </td>
+                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty}</td>
+                                                                <td style={{ textAlign: 'right' }}>₹{rate.toLocaleString()}</td>
+                                                                <td style={{ textAlign: 'right', fontWeight: 800 }}>₹{total.toLocaleString()}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </>
+                                        )}
                                     </table>
                                 </div>
 
                                 <div className="radical-summary-section">
-                                    <div className="rs-row">
-                                        <span>Subtotal</span>
-                                        <span>₹{(selectedSale.salesAmount || selectedSale.totalAmount + (selectedSale.discount || 0)).toLocaleString()}</span>
-                                    </div>
-                                    {selectedSale.discount > 0 && (
-                                        <div className="rs-row discount">
-                                            <span>Discount</span>
-                                            <span>- ₹{selectedSale.discount.toLocaleString()}</span>
-                                        </div>
+                                    {selectedSale.type === 'SALE' ? (
+                                        (() => {
+                                            const alreadyReturnedMap = getAlreadyReturnedQuantities(selectedSale._id);
+                                            const effectiveSubtotal = (selectedSale.items || []).reduce((sum, item) => {
+                                                const soldQty = item.soldQtyEntered || item.quantity || 0;
+                                                const alreadyRet = alreadyReturnedMap[item.product] || 0;
+                                                const multiplier = item.multiplier || 1;
+                                                const returnedQty = parseFloat((alreadyRet / multiplier).toFixed(3));
+                                                const remainingQty = Math.max(0, parseFloat((soldQty - returnedQty).toFixed(3)));
+                                                const rate = item.pricePerBaseUnit || item.price || 0;
+                                                return sum + (remainingQty * rate);
+                                            }, 0);
+                                            const discount = selectedSale.discount || 0;
+                                            const effectiveGrandTotal = Math.max(0, effectiveSubtotal - discount);
+
+                                            return (
+                                                <>
+                                                    <div className="rs-row">
+                                                        <span>Subtotal (Effective)</span>
+                                                        <span>₹{effectiveSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    {discount > 0 && (
+                                                        <div className="rs-row discount">
+                                                            <span>Discount</span>
+                                                            <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="rs-row grand">
+                                                        <span>Grand Total</span>
+                                                        <strong>₹{effectiveGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()
+                                    ) : selectedSale.type === 'EXCHANGE' ? (
+                                        <>
+                                            <div className="rs-row">
+                                                <span>Total Returned</span>
+                                                <span style={{ color: '#b91c1c', fontWeight: 600 }}>₹{selectedSale.totalReturnedValue?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}</span>
+                                            </div>
+                                            <div className="rs-row">
+                                                <span>Total Replacement</span>
+                                                <span style={{ color: '#1e40af', fontWeight: 600 }}>₹{selectedSale.totalReplacementValue?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}</span>
+                                            </div>
+                                            <div className="rs-row grand" style={{ 
+                                                color: selectedSale.balanceDifference >= 0 ? '#1e40af' : '#b91c1c' 
+                                            }}>
+                                                <span>{selectedSale.balanceDifference >= 0 ? 'Balance Due' : 'Refund Due'}</span>
+                                                <strong>₹{Math.abs(selectedSale.balanceDifference || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        /* RETURN transaction */
+                                        <>
+                                            <div className="rs-row grand" style={{ color: '#b91c1c' }}>
+                                                <span>Total Refund</span>
+                                                <strong>₹{Math.abs(selectedSale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                            </div>
+                                        </>
                                     )}
-                                    <div className="rs-row grand">
-                                        <span>Grand Total</span>
-                                        <strong>₹{(selectedSale.totalAmount || 0).toLocaleString()}</strong>
-                                    </div>
                                 </div>
                             </div>
 
-                            <div className="radical-sticky-footer">
+                            <div className="radical-sticky-footer" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                 <button className="r-btn r-btn-primary" onClick={() => handleViewBill(selectedSale._id)}>
                                     <Receipt size={18} />
-                                    <span>View Full Bill</span>
+                                    <span>View Bill</span>
                                 </button>
                                 
+                                {selectedSale.type === 'SALE' && (
+                                    <>
+                                        <button className="r-btn r-btn-warning" style={{ background: '#FFF7ED', color: '#EA580C', border: '1px solid #FFEDD5' }} onClick={() => { handleOpenReturnModal(selectedSale); setSelectedSale(null); }}>
+                                            <ArrowDownCircle size={18} />
+                                            <span>Return</span>
+                                        </button>
+                                        <button className="r-btn r-btn-info" style={{ background: '#EEF2FF', color: '#4F46E5', border: '1px solid #E0E7FF' }} onClick={() => { handleOpenExchangeModal(selectedSale); setSelectedSale(null); }}>
+                                            <ArrowDownCircle size={18} />
+                                            <span>Exchange</span>
+                                        </button>
+                                    </>
+                                )}
+
                                 {selectedSale.paymentMethod === 'Khata' && (
                                     <button className="r-btn r-btn-success" onClick={() => window.location.href = `/khata/${shopId}`}>
                                         <ArrowDownCircle size={18} />
@@ -616,73 +1021,303 @@ const SalesLogPage = () => {
                                         </div>
                                     </div>
 
-                                    <table className="pis-items-table-v2">
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '40px' }}>Sl</th>
-                                                <th>Product Description</th>
-                                                <th style={{ textAlign: 'center' }}>Qty</th>
-                                                <th style={{ textAlign: 'right' }}>Rate</th>
-                                                <th style={{ textAlign: 'right' }}>Amount</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                                <tr key={i}>
-                                                    <td>{i + 1}</td>
-                                                    <td>{item.productName}</td>
-                                                    <td style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
-                                                    <td style={{ textAlign: 'right' }}>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                                    {selectedSaleForInvoice.type === 'SALE' ? (
+                                        <>
+                                            {/* Original Sale Bill: Dynamic Effective Sale */}
+                                            <span className="pis-info-label" style={{ color: '#2563eb' }}>Current Effective Items (In Possession)</span>
+                                            <table className="pis-items-table-v2">
+                                                <thead>
+                                                    <tr>
+                                                        <th style={{ width: '40px' }}>Sl</th>
+                                                        <th>Product Description</th>
+                                                        <th style={{ textAlign: 'center' }}>Qty</th>
+                                                        <th style={{ textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right' }}>Amount</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(selectedSaleForInvoice.items || [])
+                                                        .filter(item => (item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity) > 0)
+                                                        .map((item, idx) => {
+                                                            const qty = item.remainingQty !== undefined ? item.remainingQty : (item.soldQtyEntered || item.quantity || 0);
+                                                            const rate = item.pricePerBaseUnit || item.price || 0;
+                                                            return (
+                                                                <tr key={idx}>
+                                                                    <td>{idx + 1}</td>
+                                                                    <td>{item.productName}</td>
+                                                                    <td style={{ textAlign: 'center' }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
+                                                                    <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
+                                                                    <td style={{ textAlign: 'right' }}>₹{(qty * rate).toFixed(2)}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                </tbody>
+                                            </table>
 
-                                    {/* Mobile Item Cards (Stacked Layout) */}
-                                    <div className="pis-items-mobile-list">
-                                        {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                            <div key={i} className="pis-mobile-item-card">
-                                                <div className="pmic-header">
-                                                    <span className="pmic-sl">#{i + 1}</span>
-                                                    <span className="pmic-name">{item.productName}</span>
-                                                </div>
-                                                <div className="pmic-body">
-                                                    <div className="pmic-col">
-                                                        <label>Qty</label>
-                                                        <span>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Rate</label>
-                                                        <span>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Amount</label>
-                                                        <strong>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</strong>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    <div className="pis-summary-v2">
-                                        <div className="pis-summary-box">
-                                            <div className="pis-sum-row">
-                                                <span>Subtotal:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount + (selectedSaleForInvoice.discount || 0)).toLocaleString()}</span>
-                                            </div>
-                                            {selectedSaleForInvoice.discount > 0 && (
-                                                <div className="pis-sum-row discount">
-                                                    <span>Discount:</span>
-                                                    <span>- ₹{selectedSaleForInvoice.discount.toLocaleString()}</span>
+                                            {/* Show returns in a separate table if any exist */}
+                                            {(selectedSaleForInvoice.items || []).some(item => (item.returnedQty || 0) > 0) && (
+                                                <div style={{ marginTop: '24px' }}>
+                                                    <span className="pis-info-label" style={{ color: '#EF4444' }}>Returned / Exchanged Items</span>
+                                                    <table className="pis-items-table-v2" style={{ borderColor: '#FEE2E2', marginTop: '8px' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#FEF2F2' }}>
+                                                                <th style={{ width: '40px', color: '#991B1B' }}>Sl</th>
+                                                                <th style={{ color: '#991B1B' }}>Product Description</th>
+                                                                <th style={{ textAlign: 'center', color: '#991B1B' }}>Qty Returned</th>
+                                                                <th style={{ textAlign: 'right', color: '#991B1B' }}>Rate</th>
+                                                                <th style={{ textAlign: 'right', color: '#991B1B' }}>Refunded Value</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {(selectedSaleForInvoice.items || [])
+                                                                .filter(item => (item.returnedQty || 0) > 0)
+                                                                .map((item, idx) => {
+                                                                    const rQty = item.returnedQty || 0;
+                                                                    const rate = item.pricePerBaseUnit || item.price || 0;
+                                                                    return (
+                                                                        <tr key={idx} style={{ color: '#991B1B' }}>
+                                                                            <td>{idx + 1}</td>
+                                                                            <td>{item.productName}</td>
+                                                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{rQty} {item.soldUnit || item.unit || 'Pc'}</td>
+                                                                            <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
+                                                                            <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{(rQty * rate).toFixed(2)}</td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                        </tbody>
+                                                    </table>
                                                 </div>
                                             )}
-                                            <div className="pis-sum-row grand">
-                                                <span>GRAND TOTAL:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount || 0).toLocaleString()}</span>
+
+                                            {/* Mobile Item Cards */}
+                                            <div className="pis-items-mobile-list">
+                                                {(selectedSaleForInvoice.items || [])
+                                                    .filter(item => (item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity) > 0)
+                                                    .map((item, idx) => {
+                                                        const qty = item.remainingQty !== undefined ? item.remainingQty : (item.soldQtyEntered || item.quantity || 0);
+                                                        const rate = item.pricePerBaseUnit || item.price || 0;
+                                                        return (
+                                                            <div key={idx} className="pis-mobile-item-card">
+                                                                <div className="pmic-header">
+                                                                    <span className="pmic-sl">#{idx + 1}</span>
+                                                                    <span className="pmic-name">{item.productName}</span>
+                                                                </div>
+                                                                <div className="pmic-body">
+                                                                    <div className="pmic-col">
+                                                                        <label>Qty</label>
+                                                                        <span>{qty} {item.soldUnit || item.unit || 'Pc'}</span>
+                                                                    </div>
+                                                                    <div className="pmic-col">
+                                                                        <label>Rate</label>
+                                                                        <span>₹{rate.toFixed(2)}</span>
+                                                                    </div>
+                                                                    <div className="pmic-col">
+                                                                        <label>Amount</label>
+                                                                        <strong>₹{(qty * rate).toFixed(2)}</strong>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
                                             </div>
-                                        </div>
-                                    </div>
+
+                                            {/* Subtotal calculation based on effective items */}
+                                            {(() => {
+                                                const effectiveSubtotal = (selectedSaleForInvoice.items || [])
+                                                    .reduce((sum, item) => sum + ((item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity || 0) * (item.pricePerBaseUnit || item.price || 0)), 0);
+                                                const discount = selectedSaleForInvoice.discount || 0;
+                                                const grandTotal = Math.max(0, effectiveSubtotal - discount);
+                                                return (
+                                                    <div className="pis-summary-v2">
+                                                        <div className="pis-summary-box">
+                                                            <div className="pis-sum-row">
+                                                                <span>Subtotal (Effective):</span>
+                                                                <span>₹{effectiveSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                            {discount > 0 && (
+                                                                <div className="pis-sum-row discount">
+                                                                    <span>Discount:</span>
+                                                                    <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                                </div>
+                                                            )}
+                                                            <div className="pis-sum-row grand">
+                                                                <span>GRAND TOTAL:</span>
+                                                                <span>₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </>
+                                    ) : selectedSaleForInvoice.type === 'RETURN' ? (
+                                        <>
+                                            {/* Return Receipt */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', background: '#F8FAFC', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+                                                <span style={{ fontWeight: 700, fontSize: '13px', color: '#64748B' }}>LINKED BILL:</span>
+                                                <span style={{ fontWeight: 800, fontSize: '14px', color: '#0F172A' }}>#{selectedSaleForInvoice.originalSaleInvoice || 'N/A'}</span>
+                                            </div>
+
+                                            <span className="pis-info-label" style={{ color: '#EF4444' }}>Returned Items (Refunded)</span>
+                                            <table className="pis-items-table-v2" style={{ borderColor: '#FEE2E2', marginTop: '6px' }}>
+                                                <thead>
+                                                    <tr style={{ background: '#FEF2F2' }}>
+                                                        <th style={{ width: '40px', color: '#991B1B' }}>Sl</th>
+                                                        <th style={{ color: '#991B1B' }}>Product Description</th>
+                                                        <th style={{ textAlign: 'center', color: '#991B1B' }}>Qty</th>
+                                                        <th style={{ textAlign: 'right', color: '#991B1B' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right', color: '#991B1B' }}>Amount</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(selectedSaleForInvoice.items || []).map((item, idx) => {
+                                                        const qty = item.soldQtyEntered || item.quantity || 0;
+                                                        const rate = item.pricePerBaseUnit || item.price || 0;
+                                                        return (
+                                                            <tr key={idx} style={{ color: '#991B1B' }}>
+                                                                <td>{idx + 1}</td>
+                                                                <td>{item.productName}</td>
+                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
+                                                                <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
+                                                                <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{(qty * rate).toFixed(2)}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+
+                                            {/* Remaining active items */}
+                                            {selectedSaleForInvoice.remainingActiveItems && selectedSaleForInvoice.remainingActiveItems.length > 0 && (
+                                                <div style={{ marginTop: '24px' }}>
+                                                    <span className="pis-info-label" style={{ color: '#16A34A' }}>Remaining Items (In Possession After Return)</span>
+                                                    <table className="pis-items-table-v2" style={{ borderColor: '#DCFCE7', marginTop: '8px' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#F0FDF4' }}>
+                                                                <th style={{ width: '40px', color: '#166534' }}>Sl</th>
+                                                                <th style={{ color: '#166534' }}>Product Description</th>
+                                                                <th style={{ textAlign: 'center', color: '#166534' }}>Qty Remaining</th>
+                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Rate</th>
+                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Total</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {selectedSaleForInvoice.remainingActiveItems.map((item, idx) => (
+                                                                <tr key={idx} style={{ color: '#166534' }}>
+                                                                    <td>{idx + 1}</td>
+                                                                    <td>{item.productName}</td>
+                                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity} {item.unit || 'Pc'}</td>
+                                                                    <td style={{ textAlign: 'right' }}>₹{item.price.toFixed(2)}</td>
+                                                                    <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{item.totalPrice.toFixed(2)}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+
+                                            <div className="pis-summary-v2">
+                                                <div className="pis-summary-box">
+                                                    <div className="pis-sum-row grand" style={{ background: '#FEF2F2', borderColor: '#FCA5A5', color: '#B91C1C' }}>
+                                                        <span>TOTAL REFUND:</span>
+                                                        <span>₹{selectedSaleForInvoice.totalRefundAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {/* Exchange Receipt */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', background: '#F8FAFC', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+                                                <span style={{ fontWeight: 700, fontSize: '13px', color: '#64748B' }}>LINKED BILL:</span>
+                                                <span style={{ fontWeight: 800, fontSize: '14px', color: '#0F172A' }}>#{selectedSaleForInvoice.originalSaleInvoice || 'N/A'}</span>
+                                            </div>
+
+                                            {/* Exchanged Details */}
+                                            <span className="pis-info-label" style={{ color: '#EA580C' }}>Items Returned / Replaced</span>
+                                            <table className="pis-items-table-v2" style={{ marginTop: '6px' }}>
+                                                <thead>
+                                                    <tr>
+                                                        <th style={{ width: '40px' }}>Sl</th>
+                                                        <th>Product Description</th>
+                                                        <th style={{ textAlign: 'center' }}>Type</th>
+                                                        <th style={{ textAlign: 'center' }}>Qty</th>
+                                                        <th style={{ textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ textAlign: 'right' }}>Amount</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(selectedSaleForInvoice.items || []).map((item, idx) => {
+                                                        const isRet = item.isReturnedInExchange;
+                                                        const qty = item.soldQtyEntered || item.quantity || 0;
+                                                        const rate = item.pricePerBaseUnit || item.price || 0;
+                                                        return (
+                                                            <tr key={idx} style={{ color: isRet ? '#B91C1C' : '#0F172A' }}>
+                                                                <td>{idx + 1}</td>
+                                                                <td>{item.productName}</td>
+                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>
+                                                                    <span style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '11px', background: isRet ? '#FEF2F2' : '#EFF6FF', color: isRet ? '#B91C1C' : '#1E40AF' }}>
+                                                                        {isRet ? 'Returned' : 'Replacement'}
+                                                                    </span>
+                                                                </td>
+                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
+                                                                <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
+                                                                <td style={{ textAlign: 'right' }}>₹{(qty * rate).toFixed(2)}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+
+                                            {/* Remaining active items */}
+                                            {selectedSaleForInvoice.remainingActiveItems && selectedSaleForInvoice.remainingActiveItems.length > 0 && (
+                                                <div style={{ marginTop: '24px' }}>
+                                                    <span className="pis-info-label" style={{ color: '#16A34A' }}>Remaining Items (In Possession After Exchange)</span>
+                                                    <table className="pis-items-table-v2" style={{ borderColor: '#DCFCE7', marginTop: '8px' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#F0FDF4' }}>
+                                                                <th style={{ width: '40px', color: '#166534' }}>Sl</th>
+                                                                <th style={{ color: '#166534' }}>Product Description</th>
+                                                                <th style={{ textAlign: 'center', color: '#166534' }}>Qty Remaining</th>
+                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Rate</th>
+                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Total</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {selectedSaleForInvoice.remainingActiveItems.map((item, idx) => (
+                                                                <tr key={idx} style={{ color: '#166534' }}>
+                                                                    <td>{idx + 1}</td>
+                                                                    <td>{item.productName}</td>
+                                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity} {item.unit || 'Pc'}</td>
+                                                                    <td style={{ textAlign: 'right' }}>₹{item.price.toFixed(2)}</td>
+                                                                    <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{item.totalPrice.toFixed(2)}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+
+                                            <div className="pis-summary-v2">
+                                                <div className="pis-summary-box">
+                                                    <div className="pis-sum-row">
+                                                        <span>Total Returned:</span>
+                                                        <span style={{ color: '#B91C1C', fontWeight: 700 }}>₹{selectedSaleForInvoice.totalReturnedValue?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
+                                                    </div>
+                                                    <div className="pis-sum-row">
+                                                        <span>Total Replacement:</span>
+                                                        <span style={{ color: '#1E40AF', fontWeight: 700 }}>₹{selectedSaleForInvoice.totalReplacementValue?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
+                                                    </div>
+                                                    <div className="pis-sum-row grand" style={{ 
+                                                        background: selectedSaleForInvoice.balanceDifference >= 0 ? '#EFF6FF' : '#FEF2F2',
+                                                        borderColor: selectedSaleForInvoice.balanceDifference >= 0 ? '#BFDBFE' : '#FCA5A5',
+                                                        color: selectedSaleForInvoice.balanceDifference >= 0 ? '#1E40AF' : '#B91C1C' 
+                                                    }}>
+                                                        <span>{selectedSaleForInvoice.balanceDifference >= 0 ? 'BALANCE DUE:' : 'REFUND DUE:'}</span>
+                                                        <span>₹{Math.abs(selectedSaleForInvoice.balanceDifference || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
 
                                     <div className="pis-footer-v2">
                                         <div className="pis-footer-divider"></div>
@@ -710,6 +1345,323 @@ const SalesLogPage = () => {
                             </button>
                         </div>
                     </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Return Modal */}
+            <AnimatePresence>
+                {showReturnModal && saleToReturn && (
+                    <div className="sl-modal-overlay-custom">
+                        <div className="sl-modal-backdrop-custom" onClick={() => { if (!isReturnSubmitting) setShowReturnModal(false); }} />
+                        <div className="sl-modal-sheet-custom">
+                            <div className="sl-modal-header-custom">
+                                <div>
+                                    <h3>Process Product Return</h3>
+                                    <p>Bill #{saleToReturn.invoiceNumber || saleToReturn._id.slice(-6).toUpperCase()} • {saleToReturn.customerName || 'Walk-in Customer'}</p>
+                                </div>
+                                <button className="sl-modal-close-custom" onClick={() => { if (!isReturnSubmitting) setShowReturnModal(false); }} disabled={isReturnSubmitting}><X size={18} /></button>
+                            </div>
+                            <form onSubmit={handleReturnSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                                <div className="sl-modal-content-custom">
+                                    <div className="item-list-container">
+                                        <div className="item-row-custom header">
+                                            <span>Item</span>
+                                            <span style={{ textAlign: 'center' }}>Sold Qty</span>
+                                            <span style={{ textAlign: 'center' }}>Already Ret</span>
+                                            <span style={{ textAlign: 'center' }}>Return Qty</span>
+                                        </div>
+                                        {saleToReturn.items.map(item => {
+                                            const alreadyRet = getAlreadyReturnedQuantities(saleToReturn._id)[item.product] || 0;
+                                            const multiplier = item.multiplier || 1;
+                                            const maxReturnable = (item.soldQtyBaseUnit - alreadyRet) / multiplier;
+
+                                            return (
+                                                <div key={item.product} className="item-row-custom">
+                                                    <div>
+                                                        <div style={{ fontWeight: 800, fontSize: '14px', color: '#1E293B' }}>{item.productName}</div>
+                                                        <div style={{ fontSize: '11px', color: '#64748B' }}>₹{item.pricePerBaseUnit || item.price} / {item.soldUnit || item.unit}</div>
+                                                    </div>
+                                                    <span style={{ textAlign: 'center', fontWeight: 600 }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit}</span>
+                                                    <span style={{ textAlign: 'center', color: '#EF4444', fontWeight: 600 }}>{alreadyRet / multiplier} {item.soldUnit || item.unit}</span>
+                                                    <div className="qty-input-wrap" style={{ justifyContent: 'center' }}>
+                                                        <input 
+                                                            type="number" 
+                                                            min="0" 
+                                                            max={maxReturnable} 
+                                                            step="any"
+                                                            value={returnQuantities[item.product] || 0} 
+                                                            onChange={(e) => {
+                                                                const val = Number(e.target.value);
+                                                                setReturnQuantities(prev => ({
+                                                                    ...prev,
+                                                                    [item.product]: val
+                                                                }));
+                                                            }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div>
+                                        <label style={{ fontSize: '13px', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '6px' }}>Return Reason</label>
+                                        <textarea 
+                                            rows="2" 
+                                            className="reason-input-textarea" 
+                                            placeholder="Specify reason for return (e.g. defective product, customer change of mind)..."
+                                            value={returnReason}
+                                            onChange={(e) => setReturnReason(e.target.value)}
+                                        />
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                        <div>
+                                            <label style={{ fontSize: '13px', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '6px' }}>Refund Method</label>
+                                            <select 
+                                                className="select-refund-method"
+                                                value={refundMethod}
+                                                onChange={(e) => setRefundMethod(e.target.value)}
+                                            >
+                                                <option value="Cash">Cash</option>
+                                                <option value="UPI">UPI / Online</option>
+                                                {saleToReturn.paymentMethod === 'Khata' && <option value="Khata">Khata Dues Reduction</option>}
+                                            </select>
+                                        </div>
+                                        <div className="summary-box-custom" style={{ justifyContent: 'center' }}>
+                                            <div className="summary-row-custom total">
+                                                <span>Total Refund</span>
+                                                <span>₹{Object.entries(returnQuantities).reduce((acc, [productId, qty]) => {
+                                                    const saleItem = saleToReturn.items.find(item => item.product === productId);
+                                                    const rate = saleItem.pricePerBaseUnit || saleItem.price || 0;
+                                                    const mult = saleItem.multiplier || 1;
+                                                    return acc + (qty * mult * rate);
+                                                }, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="sl-modal-footer-custom">
+                                    <button type="button" className="sl-btn-action view" onClick={() => setShowReturnModal(false)} disabled={isReturnSubmitting}>Cancel</button>
+                                    <button type="submit" className="sl-btn-action return" style={{ color: 'white', background: '#EF4444' }} disabled={isReturnSubmitting}>
+                                        {isReturnSubmitting ? 'Processing Return...' : 'Confirm Return'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Exchange Modal */}
+            <AnimatePresence>
+                {showExchangeModal && saleToExchange && (
+                    <div className="sl-modal-overlay-custom">
+                        <div className="sl-modal-backdrop-custom" onClick={() => { if (!isExchangeSubmitting) setShowExchangeModal(false); }} />
+                        <div className="sl-modal-sheet-custom" style={{ maxWidth: '800px' }}>
+                            <div className="sl-modal-header-custom">
+                                <div>
+                                    <h3>Process Exchange</h3>
+                                    <p>Exchange items for Bill #{saleToExchange.invoiceNumber || saleToExchange._id.slice(-6).toUpperCase()}</p>
+                                </div>
+                                <button className="sl-modal-close-custom" onClick={() => { if (!isExchangeSubmitting) setShowExchangeModal(false); }} disabled={isExchangeSubmitting}><X size={18} /></button>
+                            </div>
+                            <form onSubmit={handleExchangeSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                                <div className="sl-modal-content-custom" style={{ gap: '16px' }}>
+                                    
+                                    {/* 1. Returned Items section */}
+                                    <div>
+                                        <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>1. Select Items to Return</h4>
+                                        <div className="item-list-container">
+                                            <div className="item-row-custom header">
+                                                <span>Item</span>
+                                                <span style={{ textAlign: 'center' }}>Sold Qty</span>
+                                                <span style={{ textAlign: 'center' }}>Already Ret</span>
+                                                <span style={{ textAlign: 'center' }}>Return Qty</span>
+                                            </div>
+                                            {saleToExchange.items.map(item => {
+                                                const alreadyRet = getAlreadyReturnedQuantities(saleToExchange._id)[item.product] || 0;
+                                                const multiplier = item.multiplier || 1;
+                                                const maxReturnable = (item.soldQtyBaseUnit - alreadyRet) / multiplier;
+
+                                                return (
+                                                    <div key={item.product} className="item-row-custom">
+                                                        <div>
+                                                            <div style={{ fontWeight: 800, fontSize: '13px' }}>{item.productName}</div>
+                                                            <div style={{ fontSize: '11px', color: '#64748B' }}>₹{item.pricePerBaseUnit || item.price} / {item.soldUnit || item.unit}</div>
+                                                        </div>
+                                                        <span style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit}</span>
+                                                        <span style={{ textAlign: 'center', color: '#EF4444' }}>{alreadyRet / multiplier} {item.soldUnit || item.unit}</span>
+                                                        <div className="qty-input-wrap" style={{ justifyContent: 'center' }}>
+                                                            <input 
+                                                                type="number" 
+                                                                min="0" 
+                                                                max={maxReturnable} 
+                                                                step="any"
+                                                                value={exchangeReturnQuantities[item.product] || 0} 
+                                                                onChange={(e) => {
+                                                                    const val = Number(e.target.value);
+                                                                    setExchangeReturnQuantities(prev => ({
+                                                                        ...prev,
+                                                                        [item.product]: val
+                                                                    }));
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    {/* 2. Replacement Items section */}
+                                    <div>
+                                        <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#475569', marginBottom: '8px' }}>2. Select Replacement Products</h4>
+                                        <div className="search-replacement-wrap">
+                                            <input 
+                                                type="text" 
+                                                className="reason-input-textarea" 
+                                                style={{ height: '44px', padding: '0 12px' }}
+                                                placeholder="Search replacement products by name or brand..."
+                                                value={productSearch}
+                                                onChange={(e) => setProductSearch(e.target.value)}
+                                            />
+                                            {searchResults.length > 0 && (
+                                                <div className="search-replacement-results">
+                                                    {searchResults.map(prod => (
+                                                        <div 
+                                                            key={prod._id} 
+                                                            className="search-result-item"
+                                                            onClick={() => {
+                                                                const exists = replacementItems.find(item => item.product === prod._id);
+                                                                if (exists) {
+                                                                    showToast('Product already added as replacement.', 'warning');
+                                                                } else {
+                                                                    setReplacementItems(prev => [
+                                                                        ...prev,
+                                                                        {
+                                                                            product: prod._id,
+                                                                            productName: prod.name,
+                                                                            quantity: 1,
+                                                                            unit: prod.unit || 'Piece',
+                                                                            price: prod.sellPrice,
+                                                                            maxQty: prod.quantity
+                                                                        }
+                                                                    ]);
+                                                                }
+                                                                setProductSearch('');
+                                                                setSearchResults([]);
+                                                            }}
+                                                        >
+                                                            <span>{prod.name} {prod.brand ? `(${prod.brand})` : ''}</span>
+                                                            <strong style={{ color: '#059669' }}>₹{prod.sellPrice} (Stock: {prod.quantity})</strong>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {replacementItems.length > 0 && (
+                                            <div className="item-list-container" style={{ marginTop: '12px' }}>
+                                                <div className="item-row-custom header" style={{ gridTemplateColumns: '2fr 1.5fr 1fr 0.5fr' }}>
+                                                    <span>Replacement Item</span>
+                                                    <span style={{ textAlign: 'center' }}>Qty</span>
+                                                    <span style={{ textAlign: 'right' }}>Total</span>
+                                                    <span></span>
+                                                </div>
+                                                {replacementItems.map((item, idx) => (
+                                                    <div key={item.product} className="item-row-custom" style={{ gridTemplateColumns: '2fr 1.5fr 1fr 0.5fr' }}>
+                                                        <div>
+                                                            <div style={{ fontWeight: 800, fontSize: '13px' }}>{item.productName}</div>
+                                                            <div style={{ fontSize: '11px', color: '#64748B' }}>₹{item.price} / {item.unit}</div>
+                                                        </div>
+                                                        <div className="qty-input-wrap" style={{ justifyContent: 'center' }}>
+                                                            <input 
+                                                                type="number" 
+                                                                min="0.001" 
+                                                                step="any"
+                                                                value={item.quantity} 
+                                                                onChange={(e) => {
+                                                                    const val = Number(e.target.value);
+                                                                    setReplacementItems(prev => prev.map((it, i) => 
+                                                                        i === idx ? { ...it, quantity: val } : it
+                                                                    ));
+                                                                }}
+                                                            />
+                                                            <span style={{ fontSize: '11px', fontWeight: 600 }}>{item.unit}</span>
+                                                        </div>
+                                                        <span style={{ textAlign: 'right', fontWeight: 800 }}>₹{(item.quantity * item.price).toFixed(2)}</span>
+                                                        <button 
+                                                            type="button" 
+                                                            style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', fontWeight: 'bold', textAlign: 'right' }}
+                                                            onClick={() => setReplacementItems(prev => prev.filter((_, i) => i !== idx))}
+                                                        >
+                                                            ✕
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* 3. Summary and settling */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '8px' }}>
+                                        <div>
+                                            <label style={{ fontSize: '13px', fontWeight: 800, color: '#334155', display: 'block', marginBottom: '6px' }}>Difference Payment Method</label>
+                                            <select 
+                                                className="select-refund-method"
+                                                value={exchangePaymentMethod}
+                                                onChange={(e) => setExchangePaymentMethod(e.target.value)}
+                                            >
+                                                <option value="Cash">Cash</option>
+                                                <option value="UPI">UPI / Online</option>
+                                                {saleToExchange.paymentMethod === 'Khata' && <option value="Khata">Khata Dues Adjustment</option>}
+                                            </select>
+                                        </div>
+                                        <div className="summary-box-custom">
+                                            <div className="summary-row-custom">
+                                                <span>Returned Credit:</span>
+                                                <span style={{ color: '#EF4444', fontWeight: 700 }}>- ₹{Object.entries(exchangeReturnQuantities).reduce((acc, [productId, qty]) => {
+                                                    const saleItem = saleToExchange.items.find(item => item.product === productId);
+                                                    const rate = saleItem.pricePerBaseUnit || saleItem.price || 0;
+                                                    const mult = saleItem.multiplier || 1;
+                                                    return acc + (qty * mult * rate);
+                                                }, 0).toFixed(2)}</span>
+                                            </div>
+                                            <div className="summary-row-custom">
+                                                <span>Replacement Value:</span>
+                                                <span style={{ color: '#059669', fontWeight: 700 }}>+ ₹{replacementItems.reduce((acc, it) => acc + (it.quantity * it.price), 0).toFixed(2)}</span>
+                                            </div>
+                                            <div className="summary-row-custom total">
+                                                <span>Balance Difference</span>
+                                                {(() => {
+                                                    const retVal = Object.entries(exchangeReturnQuantities).reduce((acc, [productId, qty]) => {
+                                                        const saleItem = saleToExchange.items.find(item => item.product === productId);
+                                                        const rate = saleItem.pricePerBaseUnit || saleItem.price || 0;
+                                                        const mult = saleItem.multiplier || 1;
+                                                        return acc + (qty * mult * rate);
+                                                    }, 0);
+                                                    const repVal = replacementItems.reduce((acc, it) => acc + (it.quantity * it.price), 0);
+                                                    const diff = repVal - retVal;
+                                                    if (diff >= 0) {
+                                                        return <strong style={{ color: '#059669' }}>Customer Pays: ₹{diff.toFixed(2)}</strong>;
+                                                    } else {
+                                                        return <strong style={{ color: '#EF4444' }}>Refund Customer: ₹{Math.abs(diff).toFixed(2)}</strong>;
+                                                    }
+                                                })()}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="sl-modal-footer-custom">
+                                    <button type="button" className="sl-btn-action view" onClick={() => setShowExchangeModal(false)} disabled={isExchangeSubmitting}>Cancel</button>
+                                    <button type="submit" className="sl-btn-action exchange" style={{ color: 'white', background: '#EA580C' }} disabled={isExchangeSubmitting}>
+                                        {isExchangeSubmitting ? 'Exchanging...' : 'Confirm Exchange'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
                 )}
             </AnimatePresence>
 
@@ -1323,6 +2275,251 @@ const SalesLogPage = () => {
                     .sl-m-actions-v3 { padding: 12px 16px; }
                     .btn-v3-primary, .btn-v3-success, .btn-v3-secondary { height: 44px; font-size: 13px; border-radius: 10px; }
                 }
+
+                /* Return & Exchange Styles */
+                .sl-btn-action {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    cursor: pointer;
+                    border: 1px solid transparent;
+                    transition: all 0.2s ease;
+                }
+                .sl-btn-action.view { background: #F2F4F7; color: #344054; border-color: #D0D5DD; }
+                .sl-btn-action.return { background: #FEF2F2; color: #DC2626; border-color: #FEE2E2; }
+                .sl-btn-action.exchange { background: #FFF7ED; color: #EA580C; border-color: #FFEDD5; }
+                .sl-btn-action:hover { opacity: 0.85; transform: translateY(-1px); }
+
+                .type-tag {
+                    display: inline-block;
+                    padding: 2px 6px;
+                    border-radius: 6px;
+                    font-size: 10px;
+                    font-weight: 800;
+                    text-transform: uppercase;
+                }
+                .type-tag.sale { background: #E1F8EB; color: #00B26B; }
+                .type-tag.return { background: #FEE2E2; color: #FF4D4F; }
+                .type-tag.exchange { background: #FFEDD5; color: #EA580C; }
+
+                .type-tag-mobile {
+                    display: inline-block;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-size: 9px;
+                    font-weight: 800;
+                    text-transform: uppercase;
+                }
+                .type-tag-mobile.sale { background: #E1F8EB; color: #00B26B; }
+                .type-tag-mobile.return { background: #FEE2E2; color: #FF4D4F; }
+                .type-tag-mobile.exchange { background: #FFEDD5; color: #EA580C; }
+
+                .sl-modal-overlay-custom {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    z-index: 2000;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 16px;
+                }
+                .sl-modal-backdrop-custom {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(15, 23, 42, 0.4);
+                    backdrop-filter: blur(8px);
+                }
+                .sl-modal-sheet-custom {
+                    position: relative;
+                    background: white;
+                    width: 100%;
+                    max-width: 680px;
+                    max-height: 90vh;
+                    border-radius: 24px;
+                    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                    z-index: 2001;
+                    border: 1px solid #E2E8F0;
+                }
+                .sl-modal-header-custom {
+                    padding: 20px 24px;
+                    border-bottom: 1px solid #F1F5F9;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .sl-modal-header-custom h3 {
+                    font-size: 18px;
+                    font-weight: 800;
+                    color: #0F172A;
+                    margin: 0;
+                }
+                .sl-modal-header-custom p {
+                    font-size: 12px;
+                    color: #64748B;
+                    margin: 4px 0 0 0;
+                    font-weight: 600;
+                }
+                .sl-modal-close-custom {
+                    background: #F1F5F9;
+                    border: none;
+                    border-radius: 50%;
+                    width: 32px;
+                    height: 32px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    color: #64748B;
+                    transition: all 0.2s ease;
+                }
+                .sl-modal-close-custom:hover { background: #E2E8F0; color: #0F172A; }
+
+                .sl-modal-content-custom {
+                    padding: 24px;
+                    overflow-y: auto;
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 20px;
+                }
+                .sl-modal-footer-custom {
+                    padding: 16px 24px;
+                    background: #F8FAFC;
+                    border-top: 1px solid #E2E8F0;
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 12px;
+                }
+
+                .item-list-container {
+                    border: 1px solid #E2E8F0;
+                    border-radius: 16px;
+                    overflow: hidden;
+                }
+                .item-row-custom {
+                    display: grid;
+                    grid-template-columns: 2fr 1fr 1fr 1.2fr;
+                    padding: 12px 16px;
+                    border-bottom: 1px solid #E2E8F0;
+                    align-items: center;
+                }
+                .item-row-custom.header {
+                    background: #F8FAFC;
+                    font-weight: 800;
+                    font-size: 11px;
+                    color: #64748B;
+                    text-transform: uppercase;
+                }
+                .item-row-custom:last-child {
+                    border-bottom: none;
+                }
+                .qty-input-wrap {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .qty-input-wrap input {
+                    width: 65px;
+                    padding: 6px;
+                    border: 1.5px solid #CBD5E1;
+                    border-radius: 8px;
+                    text-align: center;
+                    font-weight: 800;
+                    outline: none;
+                }
+                .qty-input-wrap input:focus {
+                    border-color: #1E6BFF;
+                }
+                .reason-input-textarea {
+                    width: 100%;
+                    padding: 12px;
+                    border: 1.5px solid #CBD5E1;
+                    border-radius: 12px;
+                    font-family: inherit;
+                    resize: none;
+                    font-size: 14px;
+                    outline: none;
+                }
+                .reason-input-textarea:focus {
+                    border-color: #1E6BFF;
+                }
+                .select-refund-method {
+                    padding: 10px 12px;
+                    border: 1.5px solid #CBD5E1;
+                    border-radius: 12px;
+                    font-size: 14px;
+                    background: white;
+                    width: 100%;
+                    outline: none;
+                }
+                .select-refund-method:focus {
+                    border-color: #1E6BFF;
+                }
+
+                .summary-box-custom {
+                    background: #F8FAFC;
+                    padding: 16px;
+                    border: 1.5px solid #E2E8F0;
+                    border-radius: 16px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+                .summary-row-custom {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 13px;
+                    color: #475569;
+                    font-weight: 600;
+                }
+                .summary-row-custom.total {
+                    font-size: 15px;
+                    font-weight: 800;
+                    color: #0F172A;
+                    border-top: 1px dashed #E2E8F0;
+                    padding-top: 8px;
+                    margin-top: 4px;
+                }
+
+                .search-replacement-wrap {
+                    position: relative;
+                }
+                .search-replacement-results {
+                    position: absolute;
+                    top: 100%;
+                    left: 0;
+                    right: 0;
+                    background: white;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 12px;
+                    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+                    z-index: 2002;
+                    max-height: 200px;
+                    overflow-y: auto;
+                    margin-top: 4px;
+                }
+                .search-result-item {
+                    padding: 10px 16px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 13px;
+                }
+                .search-result-item:hover { background: #F1F5F9; }
             `}</style>
         </div>
     );

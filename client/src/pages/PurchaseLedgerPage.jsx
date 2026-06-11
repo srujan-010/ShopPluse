@@ -21,16 +21,19 @@ import {
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { purchaseService, productService, shopService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader, CustomSelect, PremiumDatePicker, MessageModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
+import { useToast } from '../context/ToastContext';
 
 const PurchaseLedgerPage = () => {
     const { shopId } = useParams();
     const navigate = useNavigate();
+    const { showToast } = useToast();
     const [purchases, setPurchases] = useState([]);
     const [products, setProducts] = useState([]);
     const [shop, setShop] = useState(null);
@@ -97,7 +100,24 @@ const PurchaseLedgerPage = () => {
 
     const fetchInitialData = async () => {
         try {
-            setLoading(true);
+            // Offline-first load: Instant render from local IndexedDB
+            const localPurchases = await offlineDB.getPurchases(shopId);
+            const localProducts = await offlineDB.getProducts(shopId);
+            const localShops = await offlineDB.getShops();
+            
+            if (localPurchases && localPurchases.length > 0) {
+                setPurchases(localPurchases);
+            }
+            if (localProducts && localProducts.length > 0) {
+                setProducts(localProducts);
+            }
+            const activeShop = localShops.find(s => s._id === shopId);
+            if (activeShop) setShop(activeShop);
+            
+            if ((localPurchases && localPurchases.length > 0) || (localProducts && localProducts.length > 0)) {
+                setLoading(false);
+            }
+
             const [purRes, prodRes, shopsRes] = await Promise.all([
                 purchaseService.getAll(shopId),
                 productService.getAll(shopId),
@@ -117,7 +137,7 @@ const PurchaseLedgerPage = () => {
 
     const handleAddItem = () => {
         if (!itemInput.productName || !itemInput.quantity || !itemInput.purchaseRate) {
-            alert('Please fill item details');
+            showToast('Please fill item details', 'warning');
             return;
         }
 
@@ -152,8 +172,9 @@ const PurchaseLedgerPage = () => {
     };
     const handleReceivePayment = async (e) => {
         e.preventDefault();
+        if (isSaving) return;
         if (!paymentInput.amount || parseFloat(paymentInput.amount) <= 0) {
-            alert('Please enter a valid amount');
+            showToast('Please enter a valid amount', 'warning');
             return;
         }
         try {
@@ -168,17 +189,19 @@ const PurchaseLedgerPage = () => {
                 setSelectedPurchase(res.data.data);
                 setPaymentInput({ amount: '', mode: 'Cash', note: '' });
                 setShowReceivePayment(false);
+                showToast('Payment recorded successfully', 'success');
             }
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Error', message: err.response?.data?.message || 'Error recording payment', type: 'error' });
+            showToast(err.response?.data?.message || 'Error recording payment', 'error');
         } finally {
             setIsSaving(false);
         }
     };
     const handleSavePurchase = async (e) => {
         e.preventDefault();
+        if (isSaving) return;
         if (purchaseForm.items.length === 0) {
-            setAlertConfig({ open: true, title: 'Items Required', message: 'Add at least one item', type: 'error' });
+            showToast('Add at least one item', 'warning');
             return;
         }
 
@@ -205,8 +228,9 @@ const PurchaseLedgerPage = () => {
                 items: []
             });
             fetchInitialData();
+            showToast('Purchase recorded successfully', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Save Failed', message: err.response?.data?.message || 'Failed to save purchase', type: 'error' });
+            showToast(err.response?.data?.message || 'Failed to save purchase', 'error');
         } finally {
             setIsSaving(false);
         }
@@ -694,7 +718,7 @@ const PurchaseLedgerPage = () => {
             <AnimatePresence>
                 {showAddModal && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="sl-modal-overlay">
-                        <div className="sl-backdrop" onClick={() => setShowAddModal(false)} />
+                        <div className="sl-backdrop" onClick={() => { if (!isSaving) setShowAddModal(false); }} />
                         <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="pl-add-sheet">
                             <div className="sl-sheet-handle"></div>
                             <div className="sl-m-header-v2">
@@ -702,7 +726,7 @@ const PurchaseLedgerPage = () => {
                                     <h3>New Purchase Entry</h3>
                                     <p>Enter bill details from supplier</p>
                                 </div>
-                                <button className="sl-m-close-v2" onClick={() => setShowAddModal(false)}><X size={20} /></button>
+                                <button className="sl-m-close-v2" onClick={() => { if (!isSaving) setShowAddModal(false); }} disabled={isSaving}><X size={20} /></button>
                             </div>
 
                             <form onSubmit={handleSavePurchase} className="pl-form">

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { offlineDB, db } from '../services/offlineDB';
 import api from '../services/api';
 
@@ -10,6 +10,7 @@ export const SyncProvider = ({ children }) => {
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [pendingCount, setPendingCount] = useState(0);
     const [isSyncing, setIsSyncing] = useState(false);
+    const isSyncingRef = useRef(false);
 
     const checkPendingCount = useCallback(async () => {
         try {
@@ -21,7 +22,7 @@ export const SyncProvider = ({ children }) => {
     }, []);
 
     // Remap temporary offline IDs in IndexedDB and subsequent mutations
-    const remapIds = async (tempId, realId) => {
+    const remapIds = useCallback(async (tempId, realId) => {
         try {
             // 1. Update mutation queue
             const queue = await offlineDB.getMutationQueue();
@@ -125,14 +126,35 @@ export const SyncProvider = ({ children }) => {
         } catch (e) {
             console.error('Error remapping offline IDs:', e);
         }
-    };
+    }, []);
 
     // Pull the latest data from server and perform conflict-aware bulk sync
-    const syncAllCollections = async () => {
-        const shopId = window.location.pathname.match(/\/shop\/([^/]+)/)?.[1];
-        if (!shopId) return;
-
+    const syncAllCollections = useCallback(async () => {
         try {
+            // Check if authenticated
+            const token = localStorage.getItem('token');
+            if (!token) return;
+
+            // 1. Sync shops first to cache shop metadata
+            const shopsRes = await api.get('/api/shops');
+            const serverShops = shopsRes.data?.data || [];
+            const shopsArray = Array.isArray(serverShops) ? serverShops : [serverShops];
+            
+            for (const shop of shopsArray) {
+                const localShop = await db.shops.get(shop._id);
+                if (!localShop || !localShop.updatedAt || new Date(shop.updatedAt) > new Date(localShop.updatedAt)) {
+                    await db.shops.put(shop);
+                }
+            }
+
+            // Sync global stats for business dashboard
+            api.get('/api/sales/stats').catch(() => {});
+
+            // 2. Determine target shops to sync (the one in url path if present, otherwise all user shops)
+            const urlShopId = window.location.pathname.match(/\/shop\/([^/]+)/)?.[1];
+            const targetShops = urlShopId ? shopsArray.filter(s => s._id === urlShopId) : shopsArray;
+
+            // 3. Helper to merge a server collection with local IndexedDB using updatedAt timestamp
             const mergeCollection = async (localTable, fetchPromise) => {
                 try {
                     const res = await fetchPromise;
@@ -147,29 +169,70 @@ export const SyncProvider = ({ children }) => {
                         }
                     }
                 } catch (err) {
-                    console.error('Failed to sync collection', localTable.name, err);
+                    console.error(`Failed to sync collection ${localTable.name}:`, err);
                 }
             };
 
-            await Promise.all([
-                mergeCollection(db.products, api.get(`/api/products?shop=${shopId}`)),
-                mergeCollection(db.sales, api.get(`/api/sales?shop=${shopId}`)),
-                mergeCollection(db.khata, api.get(`/api/khata?shopId=${shopId}`)),
-                mergeCollection(db.purchases, api.get(`/api/purchases?shop=${shopId}`)),
-                mergeCollection(db.governmentSales, api.get(`/api/gov-sales?shop=${shopId}`))
-            ]);
+            // 4. Concurrently sync target shops
+            const syncPromises = targetShops.map(async (shop) => {
+                const shopId = shop._id;
+                await Promise.all([
+                    mergeCollection(db.products, api.get(`/api/products?shop=${shopId}`)),
+                    mergeCollection(db.sales, api.get(`/api/sales?shop=${shopId}`)),
+                    mergeCollection(db.khata, api.get(`/api/khata?shopId=${shopId}`)),
+                    mergeCollection(db.purchases, api.get(`/api/purchases?shop=${shopId}`)),
+                    mergeCollection(db.governmentSales, api.get(`/api/gov-sales?shop=${shopId}`)),
+                    api.get(`/api/sales/stats?shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/reports?shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/summaries?shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/history?range=monthly&shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/history?range=today&shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/history?range=weekly&shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/sales/history?range=yearly&shop=${shopId}`).catch(() => {}),
+                    api.get(`/api/gov-sales/stats?shop=${shopId}`).catch(() => {})
+                ]);
+            });
+
+            await Promise.all(syncPromises);
+
+            // 5. If we synced a specific shop, trigger background sync for the other shops to cache their data as well
+            if (urlShopId && shopsArray.length > 1) {
+                const otherShops = shopsArray.filter(s => s._id !== urlShopId);
+                setTimeout(async () => {
+                    for (const shop of otherShops) {
+                        const shopId = shop._id;
+                        await Promise.all([
+                            mergeCollection(db.products, api.get(`/api/products?shop=${shopId}`)).catch(() => {}),
+                            mergeCollection(db.sales, api.get(`/api/sales?shop=${shopId}`)).catch(() => {}),
+                            mergeCollection(db.khata, api.get(`/api/khata?shopId=${shopId}`)).catch(() => {}),
+                            mergeCollection(db.purchases, api.get(`/api/purchases?shop=${shopId}`)).catch(() => {}),
+                            mergeCollection(db.governmentSales, api.get(`/api/gov-sales?shop=${shopId}`)).catch(() => {}),
+                            api.get(`/api/sales/stats?shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/reports?shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/summaries?shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/history?range=monthly&shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/history?range=today&shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/history?range=weekly&shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/sales/history?range=yearly&shop=${shopId}`).catch(() => {}),
+                            api.get(`/api/gov-sales/stats?shop=${shopId}`).catch(() => {})
+                        ]);
+                    }
+                }, 2000); // 2-second delay to prioritize active shop load
+            }
         } catch (e) {
             console.error('Collection background sync failed:', e);
         }
-    };
+    }, []);
 
     const flushQueue = useCallback(async () => {
-        if (isSyncing || !navigator.onLine) return;
+        if (isSyncingRef.current || !navigator.onLine) return;
         
+        isSyncingRef.current = true;
         setIsSyncing(true);
         try {
             const queue = await offlineDB.getMutationQueue();
             if (queue.length === 0) {
+                isSyncingRef.current = false;
                 setIsSyncing(false);
                 return;
             }
@@ -225,9 +288,10 @@ export const SyncProvider = ({ children }) => {
             console.error('Error flushing queue:', error);
         } finally {
             await checkPendingCount();
+            isSyncingRef.current = false;
             setIsSyncing(false);
         }
-    }, [isSyncing, checkPendingCount]);
+    }, [checkPendingCount, remapIds, syncAllCollections]);
 
     useEffect(() => {
         const handleOnline = () => {
@@ -265,6 +329,7 @@ export const SyncProvider = ({ children }) => {
             checkPendingCount();
             if (navigator.onLine) {
                 flushQueue();
+                syncAllCollections();
             }
         }, 30000);
 
@@ -275,20 +340,22 @@ export const SyncProvider = ({ children }) => {
             navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage);
             clearInterval(interval);
         };
-    }, [checkPendingCount, flushQueue]);
+    }, [checkPendingCount, flushQueue, syncAllCollections]);
 
     useEffect(() => {
         if (isOnline) {
             flushQueue();
+            syncAllCollections();
         }
-    }, [isOnline, flushQueue]);
+    }, [isOnline, flushQueue, syncAllCollections]);
 
     const triggerSync = useCallback(async () => {
         await checkPendingCount();
         if (isOnline) {
             await flushQueue();
+            await syncAllCollections();
         }
-    }, [isOnline, checkPendingCount, flushQueue]);
+    }, [isOnline, checkPendingCount, flushQueue, syncAllCollections]);
 
     return (
         <SyncContext.Provider value={{ isOnline, pendingCount, isSyncing, triggerSync, syncAllCollections }}>

@@ -38,9 +38,12 @@ import { EmptyState, Skeleton, PageHeader, CustomSelect, SearchableSelect, Confi
 import { useScrollLock } from '../hooks/useScrollLock';
 import { offlineDB } from '../services/offlineDB';
 import { useSync } from '../context/SyncContext';
+import { useToast } from '../context/ToastContext';
 
 const InventoryPage = () => {
     const { shopId } = useParams();
+    const { showToast } = useToast();
+
     const navigate = useNavigate();
     const { isOnline } = useSync();
     const [products, setProducts] = useState([]);
@@ -51,8 +54,9 @@ const InventoryPage = () => {
     const [showModal, setShowModal] = useState(false);
     const [showRestockModal, setShowRestockModal] = useState(false);
     const [currentProduct, setCurrentProduct] = useState(null);
-    
     const [isSaving, setIsSaving] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [isFetchingHistory, setIsFetchingHistory] = useState(false);
     const [restockHistory, setRestockHistory] = useState([]);
     
     const [supplierDetailsList, setSupplierDetailsList] = useState([]);
@@ -60,13 +64,8 @@ const InventoryPage = () => {
     const [deleteConfirm, setDeleteConfirm] = useState({ open: false, id: null });
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
 
-    // History Modal State
-    const [showHistoryModal, setShowHistoryModal] = useState(false);
-    const [inventoryHistory, setInventoryHistory] = useState([]);
-    const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-
     // Lock body scroll when main modals are open
-    useScrollLock(showModal || showRestockModal || showHistoryModal);
+    useScrollLock(showModal || showRestockModal);
 
     const getLocalToday = () => {
         const d = new Date();
@@ -337,23 +336,10 @@ const InventoryPage = () => {
         setShowRestockModal(true);
     };
 
-    const handleOpenHistoryModal = async (product) => {
-        setCurrentProduct(product);
-        setShowHistoryModal(true);
-        setIsHistoryLoading(true);
-        try {
-            const res = await productService.getInventoryHistory(product._id);
-            setInventoryHistory(res.data.data || []);
-        } catch (err) {
-            console.error('Failed to fetch inventory history:', err);
-            setAlertConfig({ open: true, title: 'Error', message: 'Failed to load item history.', type: 'error' });
-        } finally {
-            setIsHistoryLoading(false);
-        }
-    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (isSaving) return;
         
         const payload = {
             ...formData,
@@ -365,15 +351,15 @@ const InventoryPage = () => {
         };
 
         if (payload.sellPrice < 0) {
-            setAlertConfig({ open: true, title: 'Invalid Price', message: 'Selling price cannot be negative', type: 'error' });
+            showToast('Selling price cannot be negative', 'error');
             return;
         }
         if (payload.quantity < 0) {
-            setAlertConfig({ open: true, title: 'Invalid Stock', message: 'Stock cannot be negative', type: 'error' });
+            showToast('Stock cannot be negative', 'error');
             return;
         }
         if (payload.allowPartialSelling && (!payload.allowedUnits || payload.allowedUnits.length === 0)) {
-            setAlertConfig({ open: true, title: 'Units Required', message: 'Please select at least one allowed unit for partial selling', type: 'error' });
+            showToast('Please select at least one allowed unit for partial selling', 'error');
             return;
         }
 
@@ -384,11 +370,11 @@ const InventoryPage = () => {
             } else {
                 await productService.create(payload);
             }
-            setAlertConfig({ open: true, title: 'Success', message: 'Product saved successfully!', type: 'success' });
+            showToast('Product saved successfully!', 'success');
             setShowModal(false);
             fetchData();
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Error', message: err.response?.data?.message || 'Error saving product', type: 'error' });
+            showToast(err.response?.data?.message || 'Error saving product', 'error');
         } finally {
             setIsSaving(false);
         }
@@ -396,14 +382,15 @@ const InventoryPage = () => {
 
     const handleRestockSubmit = async (e) => {
         e.preventDefault();
+        if (isSaving) return;
 
         const targetProductId = restockData.productId || (currentProduct && currentProduct._id);
         if (!targetProductId) {
-            setAlertConfig({ open: true, title: 'Selection Required', message: 'Please select a product to add stock', type: 'error' });
+            showToast('Please select a product to add stock', 'warning');
             return;
         }
         if (restockData.quantityAdded <= 0) {
-            setAlertConfig({ open: true, title: 'Invalid Quantity', message: 'Please enter valid quantity', type: 'error' });
+            showToast('Please enter valid quantity', 'warning');
             return;
         }
 
@@ -412,8 +399,9 @@ const InventoryPage = () => {
             await productService.restock(targetProductId, restockData);
             fetchData();
             setShowRestockModal(false);
+            showToast('Product restocked successfully!', 'success');
         } catch (err) {
-            setAlertConfig({ open: true, title: 'Restock Error', message: err.response?.data?.message || 'Error adding stock', type: 'error' });
+            showToast(err.response?.data?.message || 'Error adding stock', 'error');
         } finally {
             setIsSaving(false);
         }
@@ -424,12 +412,16 @@ const InventoryPage = () => {
     };
 
     const confirmDelete = async () => {
+        if (isDeleting) return;
+        setIsDeleting(true);
         try {
             await productService.delete(deleteConfirm.id);
             fetchData();
+            showToast('Product deleted successfully!', 'success');
         } catch (err) {
-            console.error('Error deleting product:', err);
+            showToast(err.response?.data?.message || 'Error deleting product', 'error');
         } finally {
+            setIsDeleting(false);
             setDeleteConfirm({ open: false, id: null });
         }
     };
@@ -580,7 +572,7 @@ const InventoryPage = () => {
                                             <span style={{ fontWeight: '800', color: '#475467' }}>{product.unit}</span>
                                         </div>
                                     </div>
-                                    <button className="btn-history-mobile" onClick={() => handleOpenHistoryModal(product)} style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '8px 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '800', color: '#059669', cursor: 'pointer' }}>
+                                    <button className="btn-history-mobile" onClick={() => navigate(`/shop/${shopId}/inventory/${product._id}/ledger`)} style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '8px 12px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '800', color: '#059669', cursor: 'pointer' }}>
                                         <History size={16} /> History
                                     </button>
                                 </div>
@@ -597,15 +589,25 @@ const InventoryPage = () => {
                                     </button>
                                 </div>
                             </motion.div>
-                        ))
+                            ))
                         ) : (
-                            <EmptyState 
-                                icon={Package}
-                                title="No Products Found"
-                                description={searchQuery ? `No products match your search "${searchQuery}".` : "Your inventory is currently empty."}
-                                actionLabel={searchQuery ? "Clear Search" : "Add Your First Product"}
-                                onAction={searchQuery ? () => setSearchQuery('') : () => handleOpenModal()}
-                            />
+                            <div style={{ gridColumn: '1 / -1', padding: '40px 0' }}>
+                                {!isOnline && products.length === 0 ? (
+                                    <EmptyState 
+                                        icon={Package}
+                                        title="No offline data cached yet"
+                                        description="Connect to the internet once to sync products and populate your local offline database."
+                                    />
+                                ) : (
+                                    <EmptyState 
+                                        icon={Package}
+                                        title="No Products Found"
+                                        description={searchQuery ? `No products match your search "${searchQuery}".` : "Your inventory is currently empty."}
+                                        actionLabel={searchQuery ? "Clear Search" : "Add Your First Product"}
+                                        onAction={searchQuery ? () => setSearchQuery('') : () => handleOpenModal()}
+                                    />
+                                )}
+                            </div>
                         )}
                     </div>
 
@@ -623,13 +625,21 @@ const InventoryPage = () => {
                         
                         {filteredProducts.length === 0 ? (
                             <div style={{ padding: '60px 0' }}>
-                                <EmptyState 
-                                    icon={Package}
-                                    title="No Results Found"
-                                    description="Adjust your filters or search to see products."
-                                    actionLabel="Clear All Filters"
-                                    onAction={() => { setSearchQuery(''); setSelectedCategory('All'); setShowOnlyLowStock(false); }}
-                                />
+                                {!isOnline && products.length === 0 ? (
+                                    <EmptyState 
+                                        icon={Package}
+                                        title="No offline data cached yet"
+                                        description="Connect to the internet once to sync products and populate your local offline database."
+                                    />
+                                ) : (
+                                    <EmptyState 
+                                        icon={Package}
+                                        title="No Results Found"
+                                        description="Adjust your filters or search to see products."
+                                        actionLabel="Clear All Filters"
+                                        onAction={() => { setSearchQuery(''); setSelectedCategory('All'); setShowOnlyLowStock(false); }}
+                                    />
+                                )}
                             </div>
                         ) : (
                             <div className="table-responsive-wrapper">
@@ -676,7 +686,7 @@ const InventoryPage = () => {
                                                 </td>
                                                 <td className="sld-actions" style={{ textAlign: 'right' }}>
                                                     <div className="table-action-group">
-                                                        <button className="t-btn history-btn" title="Item History" onClick={() => handleOpenHistoryModal(product)} style={{ background: '#F0FDF4', color: '#059669', borderColor: '#BBF7D0', width: 'auto', padding: '0 12px', gap: '6px' }}>
+                                                        <button className="t-btn history-btn" title="Item History" onClick={() => navigate(`/shop/${shopId}/inventory/${product._id}/ledger`)} style={{ background: '#F0FDF4', color: '#059669', borderColor: '#BBF7D0', width: 'auto', padding: '0 12px', gap: '6px' }}>
                                                             <History size={16} /> <span style={{ fontWeight: 700 }}>History</span>
                                                         </button>
                                                         <button className="t-btn edit" title="Edit Product" onClick={() => handleOpenModal(product)}><Edit3 size={16} /></button>
@@ -698,7 +708,7 @@ const InventoryPage = () => {
             <AnimatePresence>
                 {showModal && (
                     <div className="old-modal-overlay">
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => setShowModal(false)} />
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => { if (!isSaving) setShowModal(false); }} />
                         <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="old-m-sheet">
                             <div className="old-m-header">
                                 <div className="old-m-line"></div>
@@ -924,7 +934,7 @@ const InventoryPage = () => {
 
                 {showRestockModal && (
                     <div className="old-modal-overlay">
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => setShowRestockModal(false)} />
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => { if (!isSaving) setShowRestockModal(false); }} />
                         <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="old-m-sheet">
                             <div className="old-m-header">
                                 <div className="old-m-line"></div>
@@ -1063,123 +1073,7 @@ const InventoryPage = () => {
                     </div>
                 )}
 
-                {/* History Modal */}
-                {showHistoryModal && (
-                    <div className="old-modal-overlay">
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="old-m-backdrop" onClick={() => setShowHistoryModal(false)} />
-                        <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="old-m-sheet" style={{ height: '90vh', display: 'flex', flexDirection: 'column' }}>
-                            <div className="old-m-header" style={{ paddingBottom: '0' }}>
-                                <div className="old-m-line"></div>
-                                <h2>Stock History</h2>
-                                <p style={{ margin: '4px 0 16px 0', color: '#667085', fontWeight: 600 }}>{currentProduct?.name}</p>
-                            </div>
-                            
-                            {/* Sticky Stock Summary */}
-                            <div style={{ padding: '0 24px 16px 24px', borderBottom: '1px solid #F2F4F7' }}>
-                                <div style={{ background: '#F9FAFB', border: '1.5px solid #E4E7EC', borderRadius: '16px', padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div>
-                                        <div style={{ fontSize: '12px', fontWeight: 800, color: '#667085', textTransform: 'uppercase' }}>Current Available Stock</div>
-                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '4px' }}>
-                                            <span style={{ fontSize: '32px', fontWeight: 900, color: currentProduct?.quantity === 0 ? '#DC2626' : currentProduct?.quantity <= (currentProduct?.lowStockLimit || 5) ? '#EA580C' : '#059669' }}>
-                                                {currentProduct?.quantity}
-                                            </span>
-                                            <span style={{ fontSize: '16px', fontWeight: 700, color: '#475467' }}>{currentProduct?.unit}</span>
-                                        </div>
-                                    </div>
-                                    <PackageOpen size={40} color="#D0D5DD" />
-                                </div>
-                            </div>
 
-                            <div className="old-m-scroll" style={{ padding: '16px 24px', background: '#F9FAFB', flex: 1 }}>
-                                {isHistoryLoading ? (
-                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
-                                        <div className="old-loader-circle" style={{ borderColor: '#E4E7EC', borderTopColor: '#059669' }}></div>
-                                    </div>
-                                ) : inventoryHistory.length === 0 ? (
-                                    <EmptyState icon={History} title="No History Yet" description="Stock movements will appear here chronologically." />
-                                ) : (
-                                    <div className="history-timeline" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                        {inventoryHistory.map((log) => {
-                                            const isAddition = ['STOCK_ADDED', 'PURCHASE_ENTRY', 'STOCK_RETURNED'].includes(log.actionType);
-                                            const isManual = log.actionType === 'STOCK_UPDATED' || log.actionType === 'STOCK_ADJUSTED';
-                                            const isSold = log.actionType === 'STOCK_SOLD';
-                                            
-                                            let icon = <Package size={16} />;
-                                            let color = '#475467';
-                                            let bg = '#F2F4F7';
-
-                                            if (isAddition) {
-                                                icon = <TrendingUp size={16} />;
-                                                color = '#059669';
-                                                bg = '#D1FAE5';
-                                            } else if (isSold) {
-                                                icon = <ShoppingCart size={16} />;
-                                                color = '#DC2626';
-                                                bg = '#FEE2E2';
-                                            } else if (isManual) {
-                                                icon = <Edit3 size={16} />;
-                                                color = '#D97706';
-                                                bg = '#FEF3C7';
-                                            }
-
-                                            return (
-                                                <div 
-                                                    key={log._id} 
-                                                    className={`history-card ${isSold ? 'history-card-clickable' : ''}`} 
-                                                    style={{ background: 'white', borderRadius: '16px', padding: '16px', border: '1px solid #F2F4F7', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}
-                                                    onClick={() => {
-                                                        if (isSold) {
-                                                            const d = new Date(log.createdAt);
-                                                            const localDateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                                                            navigate(`/shop/${shopId}/gov-sales-log?date=${localDateStr}`);
-                                                        }
-                                                    }}
-                                                >
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                                                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#98A2B3' }}>
-                                                            {new Date(log.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                        </span>
-                                                        {log.referenceId && (
-                                                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#667085', background: '#F2F4F7', padding: '2px 8px', borderRadius: '6px' }}>
-                                                                Ref: {log.referenceId}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    
-                                                    <div style={{ display: 'flex', gap: '12px' }}>
-                                                        <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: bg, color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                                            {icon}
-                                                        </div>
-                                                        <div style={{ flex: 1 }}>
-                                                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#101828', marginBottom: (!isSold) ? '4px' : '12px' }}>
-                                                                {isAddition && `+ Added ${log.quantity} ${log.unit}`}
-                                                                {isSold && `- Sold ${log.quantity} ${log.unit}`}
-                                                                {isManual && `Stock Adjusted by ${log.quantity} ${log.unit}`}
-                                                            </div>
-                                                            
-                                                            {(!isSold) && (
-                                                                <div style={{ fontSize: '13px', color: '#667085', fontWeight: 600, marginBottom: '12px' }}>
-                                                                    {log.notes} {(log.source && log.source !== 'Daily Summary' && log.source !== 'System') ? `(${log.source})` : ''}
-                                                                </div>
-                                                            )}
-                                                            
-                                                            <div style={{ background: '#F9FAFB', border: '1px dashed #E4E7EC', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                <span style={{ fontSize: '12px', fontWeight: 800, color: '#667085', textTransform: 'uppercase' }}>Stock Transition</span>
-                                                                <span style={{ fontSize: '14px', fontWeight: 800, color: '#101828' }}>
-                                                                    {log.previousStock} <ArrowUpRight size={14} style={{ margin: '0 4px', color: '#98A2B3' }} /> {log.newStock} {log.unit}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
             </AnimatePresence>
 
             <style jsx="true">{`
@@ -1376,7 +1270,7 @@ const InventoryPage = () => {
                 
                 .sld-cust .cust-main { font-weight: 800; color: #0F172A; }
                 .sld-cust .cust-sub { font-size: 11px; color: #94A3B8; font-weight: 700; margin-top: 2px; }
-                .cat-pill { background: #F1F5F9; color: #475569; font-weight: 700; padding: 4px 10px; border-radius: 8px; font-size: 12px; }
+                .cat-pill { background: #F1F5F9; color: #475467; font-weight: 700; padding: 4px 10px; border-radius: 8px; font-size: 12px; }
                 
                 .stock-level { display: flex; align-items: center; font-weight: 800; }
                 .stock-level.low { color: #FF4D4F; }
@@ -1420,11 +1314,11 @@ const InventoryPage = () => {
             `}</style>
             <ConfirmModal 
                 isOpen={deleteConfirm.open}
-                title="Delete Product?"
+                title={isDeleting ? "Deleting..." : "Delete Product?"}
                 message="Are you sure you want to delete this product? This action cannot be undone."
                 onConfirm={confirmDelete}
-                onCancel={() => setDeleteConfirm({ open: false, id: null })}
-                confirmLabel="Delete"
+                onCancel={() => { if (!isDeleting) setDeleteConfirm({ open: false, id: null }); }}
+                confirmLabel={isDeleting ? "Deleting..." : "Delete"}
                 cancelLabel="Cancel"
                 type="danger"
             />

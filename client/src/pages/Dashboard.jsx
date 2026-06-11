@@ -29,10 +29,13 @@ import {
     Filter,
     Clock,
     LayoutGrid,
-    MapPin
+    MapPin,
+    RotateCcw,
+    RefreshCw
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { saleService, shopService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton } from '../components/PremiumUI';
 // Chart registration removed as chart was deleted
@@ -61,14 +64,27 @@ const Dashboard = () => {
     }, [shopId]);
 
     const fetchShopStats = async () => {
-        setLoading(true);
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localShops = await offlineDB.getShops();
+            const activeShop = localShops.find(s => s._id === shopId);
+            if (activeShop) setShop(activeShop);
+
+            const localStats = await offlineDB.getQueryCache(`/api/sales/stats?shop=${shopId}`);
+            if (localStats && localStats.data) {
+                setStats(localStats.data);
+            }
+
+            if (activeShop) {
+                setLoading(false);
+            }
+
             const [statRes, shopRes] = await Promise.all([
                 saleService.getShopStats(shopId),
                 shopService.getAll()
             ]);
-            setStats(statRes.data.data);
-            setShop(shopRes.data.data.find(s => s._id === shopId));
+            setStats(statRes.data.data || null);
+            setShop(shopRes.data.data.find(s => s._id === shopId) || null);
         } catch (err) {
             console.error('Dashboard Error:', err);
         } finally {
@@ -315,21 +331,53 @@ const Dashboard = () => {
                                 return false;
                             })
                             .slice(0, 5)
-                            .map((sale, i) => (
-                                <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="activity-item-premium" onClick={() => navigate(`/shop/${shopId}/sales-log`)}>
-                                    <div className="aip-icon-box" style={{ background: sale.paymentMethod === 'Khata' ? '#FEF3F2' : '#F0F9FF' }}>
-                                        {sale.paymentMethod === 'Khata' ? <Clock size={18} color="#B42318" /> : <ShoppingCart size={18} color="#026AA2" />}
-                                    </div>
-                                    <div className="aip-info">
-                                        <div className="aip-title">{sale.customerName || 'Walk-in Customer'}</div>
-                                        <div className="aip-time">
-                                            {sale.paymentMethod} • {sale?.date ? new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                            .map((sale, i) => {
+                                const isReturn = sale.type === 'RETURN';
+                                const isExchange = sale.type === 'EXCHANGE';
+                                
+                                let iconBoxBg = '#F0F9FF';
+                                let iconColor = '#026AA2';
+                                let IconComponent = ShoppingCart;
+                                
+                                if (isReturn) {
+                                    iconBoxBg = '#FEF2F2';
+                                    iconColor = '#EF4444';
+                                    IconComponent = RotateCcw;
+                                } else if (isExchange) {
+                                    iconBoxBg = '#FFF7ED';
+                                    iconColor = '#F97316';
+                                    IconComponent = RefreshCw;
+                                } else if (sale.paymentMethod === 'Khata') {
+                                    iconBoxBg = '#FEF3F2';
+                                    iconColor = '#B42318';
+                                    IconComponent = Clock;
+                                }
+                                
+                                let displayTitle = sale.customerName || 'Walk-in Customer';
+                                if (isReturn) {
+                                    displayTitle = `Return - ${displayTitle}`;
+                                } else if (isExchange) {
+                                    displayTitle = `Exchange - ${displayTitle}`;
+                                }
+                                
+                                return (
+                                    <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="activity-item-premium" onClick={() => navigate(`/shop/${shopId}/sales-log`)}>
+                                        <div className="aip-icon-box" style={{ background: iconBoxBg }}>
+                                            <IconComponent size={18} color={iconColor} />
                                         </div>
-                                    </div>
-                                    <div className="aip-amount">₹{((sale?.totalAmount || sale?.salesAmount) || 0).toLocaleString()}</div>
-                                    {!isMobile && <ChevronRight size={18} className="aip-arrow" />}
-                                </motion.div>
-                            ))
+                                        <div className="aip-info">
+                                            <div className="aip-title">{displayTitle}</div>
+                                            <div className="aip-time">
+                                                {sale.paymentMethod} • {sale?.date ? new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                                            </div>
+                                        </div>
+                                        <div className="aip-amount" style={{ color: isReturn ? '#EF4444' : isExchange ? '#F97316' : '#101828' }}>
+                                            {isReturn ? '-' : ''}₹{Math.abs(sale?.totalAmount || sale?.salesAmount || 0).toLocaleString()}
+                                        </div>
+                                        {!isMobile && <ChevronRight size={18} className="aip-arrow" />}
+                                    </motion.div>
+                                );
+                            })
                         ) : (
                             <EmptyState 
                                 icon={Activity}

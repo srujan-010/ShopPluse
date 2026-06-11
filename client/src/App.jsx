@@ -25,8 +25,10 @@ import PurchaseDetailsPage from './pages/PurchaseDetailsPage';
 import SupplierLedgerPage from './pages/SupplierLedgerPage';
 import GovSalesLogPage from './pages/GovSalesLogPage';
 import GovReportsPage from './pages/GovReportsPage';
+import StockLedgerPage from './pages/StockLedgerPage';
 
 import { InstallProvider } from './context/InstallContext';
+import { ToastProvider } from './context/ToastContext';
 
 function App() {
   useEffect(() => {
@@ -55,51 +57,54 @@ function App() {
 
   return (
     <AuthProvider>
-      <SyncProvider>
-        <InstallProvider>
-          <Router>
-              <Routes>
-                {/* Public Routes - Only accessible when NOT logged in */}
-                <Route element={<PublicRoute />}>
-                  <Route path="/" element={<LandingPage />} />
-                  <Route path="/login" element={<LoginPage />} />
-                  <Route path="/register" element={<RegisterPage />} />
-                </Route>
-  
-                {/* Protected Routes - Only accessible when logged in */}
-                <Route element={<ProtectedRoute />}>
-                  <Route element={<Layout />}>
-                    {/* Business Level - My Businesses */}
-                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                    <Route path="/dashboard" element={<BusinessDashboard />} />
-                    <Route path="/shops" element={<ShopsPage />} />
-                    
-                    {/* Shop Specific Routes - Strictly for ONE shop */}
-                    <Route path="/shop/:shopId/dashboard" element={<Dashboard />} />
-                    <Route path="/shop/:shopId/inventory" element={<InventoryPage />} />
-                    <Route path="/shop/:shopId/pos" element={<POSPage />} />
-                    <Route path="/shop/:shopId/sales" element={<SalesPage />} />
-                    <Route path="/shop/:shopId/sales-log" element={<SalesLogPage />} />
-                    <Route path="/shop/:shopId/reports" element={<ReportsPage />} />
-                    <Route path="/shop/:shopId/khata" element={<KhataPage />} />
-                    <Route path="/shop/:shopId/purchase-ledger" element={<PurchaseLedgerPage />} />
-                    <Route path="/shop/:shopId/purchase-ledger/:purchaseId" element={<PurchaseDetailsPage />} />
-                    <Route path="/shop/:shopId/suppliers/:supplierName" element={<SupplierLedgerPage />} />
-                    
-                    {/* Government Records Routes */}
-                    <Route path="/shop/:shopId/gov-sales-log" element={<GovSalesLogPage />} />
-                    <Route path="/shop/:shopId/gov-reports" element={<GovReportsPage />} />
-                    
-                    <Route path="/profile" element={<ProfilePage />} />
+      <ToastProvider>
+        <SyncProvider>
+          <InstallProvider>
+            <Router>
+                <Routes>
+                  {/* Public Routes - Only accessible when NOT logged in */}
+                  <Route element={<PublicRoute />}>
+                    <Route path="/" element={<LandingPage />} />
+                    <Route path="/login" element={<LoginPage />} />
+                    <Route path="/register" element={<RegisterPage />} />
                   </Route>
-                </Route>
-  
-              {/* Redirect all unknown routes to landing */}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Router>
-        </InstallProvider>
-      </SyncProvider>
+    
+                  {/* Protected Routes - Only accessible when logged in */}
+                  <Route element={<ProtectedRoute />}>
+                    <Route element={<Layout />}>
+                      {/* Business Level - My Businesses */}
+                      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="/dashboard" element={<BusinessDashboard />} />
+                      <Route path="/shops" element={<ShopsPage />} />
+                      
+                      {/* Shop Specific Routes - Strictly for ONE shop */}
+                      <Route path="/shop/:shopId/dashboard" element={<Dashboard />} />
+                      <Route path="/shop/:shopId/inventory" element={<InventoryPage />} />
+                      <Route path="/shop/:shopId/inventory/:productId/ledger" element={<StockLedgerPage />} />
+                      <Route path="/shop/:shopId/pos" element={<POSPage />} />
+                      <Route path="/shop/:shopId/sales" element={<SalesPage />} />
+                      <Route path="/shop/:shopId/sales-log" element={<SalesLogPage />} />
+                      <Route path="/shop/:shopId/reports" element={<ReportsPage />} />
+                      <Route path="/shop/:shopId/khata" element={<KhataPage />} />
+                      <Route path="/shop/:shopId/purchase-ledger" element={<PurchaseLedgerPage />} />
+                      <Route path="/shop/:shopId/purchase-ledger/:purchaseId" element={<PurchaseDetailsPage />} />
+                      <Route path="/shop/:shopId/suppliers/:supplierName" element={<SupplierLedgerPage />} />
+                      
+                      {/* Government Records Routes */}
+                      <Route path="/shop/:shopId/gov-sales-log" element={<GovSalesLogPage />} />
+                      <Route path="/shop/:shopId/gov-reports" element={<GovReportsPage />} />
+                      
+                      <Route path="/profile" element={<ProfilePage />} />
+                    </Route>
+                  </Route>
+    
+                {/* Redirect all unknown routes to landing */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Router>
+          </InstallProvider>
+        </SyncProvider>
+      </ToastProvider>
     </AuthProvider>
   );
 }

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { govSaleService, shopService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -31,6 +32,8 @@ const GovSalesLogPage = () => {
     // Filters & Pagination
     const [searchParams] = useSearchParams();
     const initialDate = searchParams.get('date');
+    const initialProduct = searchParams.get('product');
+    const [productFilter, setProductFilter] = useState(initialProduct || '');
     const [periodFilter, setPeriodFilter] = useState(initialDate ? 'custom' : 'month'); 
     const [paymentFilter, setPaymentFilter] = useState('All'); 
     const getLocalToday = () => {
@@ -56,9 +59,34 @@ const GovSalesLogPage = () => {
         fetchInitialData();
     }, [shopId]);
 
+    useEffect(() => {
+        const searchInvoice = searchParams.get('search') || searchParams.get('invoice');
+        if (searchInvoice && sales.length > 0) {
+            const sale = sales.find(s => s.invoiceNumber === searchInvoice || s._id === searchInvoice);
+            if (sale) {
+                const sDate = new Date(sale.date);
+                const yyyymmdd = `${sDate.getFullYear()}-${String(sDate.getMonth()+1).padStart(2,'0')}-${String(sDate.getDate()).padStart(2,'0')}`;
+                setPeriodFilter('custom');
+                setCustomDate(yyyymmdd);
+                setSearchQuery(searchInvoice);
+                handleViewBill(sale);
+            }
+        }
+    }, [sales, searchParams]);
+
     const fetchInitialData = async () => {
-        setLoading(true);
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localSales = await offlineDB.getGovSales(shopId);
+            const localShops = await offlineDB.getShops();
+            
+            if (localSales && localSales.length > 0) {
+                setSales(localSales);
+                setLoading(false);
+            }
+            const activeShop = localShops.find(s => s._id === shopId);
+            if (activeShop) setShop(activeShop);
+
             const [salesRes, shopsRes] = await Promise.all([
                 govSaleService.getAll(shopId),
                 shopService.getAll()
@@ -129,7 +157,11 @@ const GovSalesLogPage = () => {
         const matchesPayment = paymentFilter === 'All' || 
             (sale.paymentMethod && sale.paymentMethod.toLowerCase() === paymentFilter.toLowerCase());
 
-        return matchesPeriod && matchesSearch && matchesPayment;
+        const matchesProduct = !productFilter || (sale.items || []).some(item => 
+            (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
+        );
+
+        return matchesPeriod && matchesSearch && matchesPayment && matchesProduct;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
     const paginatedSales = filteredSales.slice(0, page * itemsPerPage);
@@ -206,6 +238,26 @@ const GovSalesLogPage = () => {
                 </div>
             </div>
 
+            {productFilter && (
+                <div className="sl-active-filters">
+                    <div className="active-filter-badge">
+                        <span>Product Audit: <strong>{productFilter}</strong></span>
+                        <button 
+                            className="btn-clear-filter" 
+                            onClick={() => {
+                                setProductFilter('');
+                                const params = new URLSearchParams(window.location.search);
+                                params.delete('product');
+                                navigate(`/shop/${shopId}/gov-sales-log?${params.toString()}`, { replace: true });
+                                setPage(1);
+                            }}
+                        >
+                            <X size={14} />
+                        </button>
+                    </div>
+                </div>
+            )}
+
             <div className="sl-summary-grid">
                 <div className="sl-sum-card">
                     <span className="sl-sum-label">Total Official Sales</span>
@@ -274,40 +326,53 @@ const GovSalesLogPage = () => {
             ) : (
                 <>
                     <div className="sl-list sl-mobile-only">
-                        {paginatedSales.map((sale) => (
-                            <motion.div 
-                                whileTap={{ scale: 0.98 }}
-                                key={sale._id} 
-                                className="sl-card-premium"
-                                onClick={() => handleViewBill(sale)}
-                            >
-                                <div className="sl-card-top">
-                                    <div className="sl-card-name">{sale.customerName || 'Walk-in Customer'}</div>
-                                    <div className="sl-card-amount-wrap">
-                                        <div className="sl-card-amount">₹{(sale.totalAmount || 0).toLocaleString()}</div>
-                                        <ChevronRight size={16} color="#98A2B3" />
+                        {paginatedSales.map((sale) => {
+                            const isAuditMatched = productFilter && (sale.items || []).some(item => 
+                                (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
+                            );
+
+                            return (
+                                <motion.div 
+                                    whileTap={{ scale: 0.98 }}
+                                    key={sale._id} 
+                                    className={`sl-card-premium ${isAuditMatched ? 'audit-highlighted' : ''}`}
+                                    onClick={() => handleViewBill(sale)}
+                                >
+                                    <div className="sl-card-top">
+                                        <div className="sl-card-name" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                            <span>{sale.customerName || 'Walk-in Customer'}</span>
+                                            {isAuditMatched && (
+                                                <span className="audit-highlight-badge">
+                                                    🔍 Audit Match
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="sl-card-amount-wrap">
+                                            <div className="sl-card-amount">₹{(sale.totalAmount || 0).toLocaleString()}</div>
+                                            <ChevronRight size={16} color="#98A2B3" />
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="sl-card-mid">
-                                    <div className="sl-card-qty">
-                                        {(sale.items || []).length === 1 
-                                            ? `${sale.items[0].productName} • ${sale.items[0].soldQtyEntered || sale.items[0].quantity} ${sale.items[0].soldUnit || sale.items[0].unit || 'Piece'}`
-                                            : `${(sale.items || []).length} Items Purchased`}
+                                    <div className="sl-card-mid">
+                                        <div className="sl-card-qty">
+                                            {(sale.items || []).length === 1 
+                                                ? `${sale.items[0].productName} • ${sale.items[0].soldQtyEntered || sale.items[0].quantity} ${sale.items[0].soldUnit || sale.items[0].unit || 'Piece'}`
+                                                : `${(sale.items || []).length} Items Purchased`}
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="sl-card-bot">
-                                    <div className="sl-card-meta">
-                                        <span>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                        <span className="divider-dot">•</span>
-                                        <span>Gov Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
-                                        <span className="divider-dot">•</span>
-                                        <span className="sl-cp-pay-badge upi" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                            <ShieldCheck size={12} /> Official
-                                        </span>
+                                    <div className="sl-card-bot">
+                                        <div className="sl-card-meta">
+                                            <span>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                            <span className="divider-dot">•</span>
+                                            <span>Gov Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
+                                            <span className="divider-dot">•</span>
+                                            <span className="sl-cp-pay-badge upi" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                <ShieldCheck size={12} /> Official
+                                            </span>
+                                        </div>
                                     </div>
-                                </div>
-                            </motion.div>
-                        ))}
+                                </motion.div>
+                            );
+                        })}
                     </div>
 
                     <div className="sl-desktop-only radical-desktop-container">
@@ -332,35 +397,52 @@ const GovSalesLogPage = () => {
                                 </tr>
                             </thead>
                             <tbody>
-                                {paginatedSales.map((sale) => (
-                                    <tr key={sale._id} className="sl-desktop-row" onClick={() => handleViewBill(sale)}>
-                                        <td className="sld-bill">
-                                            <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
-                                        </td>
-                                        <td className="sld-cust">
-                                            <div className="cust-main">{sale.customerName || 'Walk-in Customer'}</div>
-                                            {sale.customerMobile && <div className="cust-sub">{sale.customerMobile}</div>}
-                                        </td>
-                                        <td className="sld-time">
-                                            <div style={{ fontWeight: 600 }}>{new Date(sale.date).toLocaleDateString('en-IN')}</div>
-                                            <div style={{ fontSize: '12px', color: '#64748b' }}>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                                        </td>
-                                        <td className="sld-items">
-                                            <div className="items-preview">
-                                                {(sale.items || []).slice(0, 2).map(item => `${item.productName}`).join(', ')}
-                                                {sale.items?.length > 2 && ` +${sale.items.length - 2} more`}
-                                            </div>
-                                        </td>
-                                        <td className="sld-prev" style={{ textAlign: 'center' }}>
-                                            <span className="status-badge paid" style={{ background: '#ECFDF5', color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                <ShieldCheck size={14} /> Logged
-                                            </span>
-                                        </td>
-                                        <td className="sld-amt" style={{ textAlign: 'right' }}>
-                                            <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {paginatedSales.map((sale) => {
+                                    const isAuditMatched = productFilter && (sale.items || []).some(item => 
+                                        (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
+                                    );
+
+                                    return (
+                                        <tr 
+                                            key={sale._id} 
+                                            className={`sl-desktop-row ${isAuditMatched ? 'audit-highlighted' : ''}`} 
+                                            onClick={() => handleViewBill(sale)}
+                                        >
+                                            <td className="sld-bill">
+                                                <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
+                                            </td>
+                                            <td className="sld-cust">
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span className="cust-main">{sale.customerName || 'Walk-in Customer'}</span>
+                                                    {isAuditMatched && (
+                                                        <span className="audit-highlight-badge">
+                                                            🔍 Audit Match
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {sale.customerMobile && <div className="cust-sub">{sale.customerMobile}</div>}
+                                            </td>
+                                            <td className="sld-time">
+                                                <div style={{ fontWeight: 600 }}>{new Date(sale.date).toLocaleDateString('en-IN')}</div>
+                                                <div style={{ fontSize: '12px', color: '#64748b' }}>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                            </td>
+                                            <td className="sld-items">
+                                                <div className="items-preview">
+                                                    {(sale.items || []).slice(0, 2).map(item => `${item.productName}`).join(', ')}
+                                                    {sale.items?.length > 2 && ` +${sale.items.length - 2} more`}
+                                                </div>
+                                            </td>
+                                            <td className="sld-prev" style={{ textAlign: 'center' }}>
+                                                <span className="status-badge paid" style={{ background: '#ECFDF5', color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                    <ShieldCheck size={14} /> Logged
+                                                </span>
+                                            </td>
+                                            <td className="sld-amt" style={{ textAlign: 'right' }}>
+                                                <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -412,7 +494,7 @@ const GovSalesLogPage = () => {
                                         <div style={{ fontWeight: 700, fontSize: '16px', color: '#101828' }}>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</div>
                                         {selectedSaleForInvoice.customerMobile && <div style={{ color: '#667085' }}>{selectedSaleForInvoice.customerMobile}</div>}
                                     </div>
-                                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right' }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Date & Time</div>
                                         <div style={{ fontWeight: 600, color: '#101828' }}>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</div>
                                         <div style={{ color: '#667085' }}>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -423,20 +505,31 @@ const GovSalesLogPage = () => {
                                     <thead>
                                         <tr style={{ borderBottom: '2px solid #F2F4F7' }}>
                                             <th style={{ textAlign: 'left', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Fertilizer Details</th>
-                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Qty</th>
+                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Sold</th>
+                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Returned</th>
+                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Remaining</th>
                                             <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Gov Rate</th>
                                             <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Amount</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                            <tr key={i} style={{ borderBottom: '1px solid #F2F4F7' }}>
-                                                <td style={{ padding: '16px 0', fontWeight: 600, color: '#101828' }}>{item.productName}</td>
-                                                <td style={{ padding: '16px 0', textAlign: 'center', color: '#475467' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit}</td>
-                                                <td style={{ padding: '16px 0', textAlign: 'right', color: '#475467' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
-                                                <td style={{ padding: '16px 0', textAlign: 'right', fontWeight: 700, color: '#101828' }}>₹{((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity)).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
+                                        {(selectedSaleForInvoice.items || []).map((item, i) => {
+                                            const soldVal = item.soldQtyEntered || item.quantity || 0;
+                                            const returnedVal = item.returnedQty || 0;
+                                            const remainingVal = item.remainingQty !== undefined ? item.remainingQty : Math.max(0, soldVal - returnedVal);
+                                            const unitStr = item.soldUnit || item.unit || 'Pc';
+                                            
+                                            return (
+                                                <tr key={i} style={{ borderBottom: '1px solid #F2F4F7' }}>
+                                                    <td style={{ padding: '16px 0', fontWeight: 600, color: '#101828' }}>{item.productName}</td>
+                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#475467' }}>{soldVal} {unitStr}</td>
+                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#EF4444', fontWeight: returnedVal > 0 ? 700 : 500 }}>{returnedVal} {unitStr}</td>
+                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{remainingVal} {unitStr}</td>
+                                                    <td style={{ padding: '16px 0', textAlign: 'right', color: '#475467' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
+                                                    <td style={{ padding: '16px 0', textAlign: 'right', fontWeight: 700, color: '#101828' }}>₹{(remainingVal * (item.pricePerBaseUnit || item.price)).toFixed(2)}</td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
 
@@ -470,8 +563,67 @@ const GovSalesLogPage = () => {
 
             <style jsx="true">{`
 
-                .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
-                .radical-desktop-container { background: white; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0,0,0,0.05); overflow: hidden; margin-top: 24px; }
+                 .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
+                 .sl-active-filters {
+                     display: flex;
+                     gap: 10px;
+                     flex-wrap: wrap;
+                     margin-top: -8px;
+                     margin-bottom: 8px;
+                 }
+                 .active-filter-badge {
+                     display: inline-flex;
+                     align-items: center;
+                     gap: 8px;
+                     background: #F0FDF4;
+                     color: #166534;
+                     border: 1px solid #BBF7D0;
+                     padding: 6px 12px;
+                     border-radius: 99px;
+                     font-size: 13px;
+                     font-weight: 700;
+                 }
+                 .btn-clear-filter {
+                     background: transparent;
+                     border: none;
+                     color: #166534;
+                     cursor: pointer;
+                     display: flex;
+                     align-items: center;
+                     justify-content: center;
+                     padding: 2px;
+                     border-radius: 50%;
+                     transition: background 0.2s;
+                 }
+                 .btn-clear-filter:hover {
+                     background: rgba(22, 101, 52, 0.1);
+                 }
+                 .audit-highlight-badge {
+                     display: inline-flex;
+                     align-items: center;
+                     gap: 4px;
+                     font-size: 11px;
+                     font-weight: 850;
+                     padding: 2px 8px;
+                     border-radius: 6px;
+                     background: #DCFCE7;
+                     color: #15803D;
+                     border: 1px solid #A7F3D0;
+                 }
+                 .sl-desktop-row.audit-highlighted {
+                     background-color: #F0FDF4 !important;
+                 }
+                 .sl-desktop-row.audit-highlighted:hover {
+                     background-color: #DCFCE7 !important;
+                 }
+                 .sl-desktop-row.audit-highlighted td:first-child {
+                     border-left: 4px solid #16A34A !important;
+                 }
+                 .sl-card-premium.audit-highlighted {
+                     background-color: #F0FDF4 !important;
+                     border-left: 4px solid #16A34A !important;
+                 }
+                 .radical-desktop-container { background: white; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0,0,0,0.05); overflow: hidden; margin-top: 24px; }
                 .rdc-header { padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
                 .rdch-left h3 { font-size: 18px; font-weight: 800; color: #0f172a; margin: 0; }
                 .rdch-left p { font-size: 13px; color: #64748b; font-weight: 600; margin-top: 4px; }

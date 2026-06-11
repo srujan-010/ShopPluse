@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, Edit2, Trash2, MapPin, Phone, Store, ArrowRight, MoreHorizontal, LayoutGrid, List } from 'lucide-react';
 import { shopService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, CustomSelect, ConfirmModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -40,8 +41,17 @@ const ShopsPage = () => {
 
     const fetchShops = async () => {
         try {
+            // Offline-first load: Instant render from local IndexedDB
+            const localShops = await offlineDB.getShops();
+            if (localShops && localShops.length > 0) {
+                setShops(localShops);
+                setLoading(false);
+            }
+
             const res = await shopService.getAll();
-            setShops(res.data.data);
+            if (res.data && res.data.data) {
+                setShops(res.data.data);
+            }
         } catch (err) {
             console.error('Error fetching shops:', err);
         } finally {
