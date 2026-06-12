@@ -608,24 +608,49 @@ const KhataPage = () => {
                                         ))}
                                     </div>
 
-                                    <div className="pis-summary-v2">
-                                        <div className="pis-summary-box">
-                                            <div className="pis-sum-row">
-                                                <span>Subtotal:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount + (selectedSaleForInvoice.discount || 0)).toLocaleString()}</span>
-                                            </div>
-                                            {selectedSaleForInvoice.discount > 0 && (
-                                                <div className="pis-sum-row discount">
-                                                    <span>Discount:</span>
-                                                    <span>- ₹{selectedSaleForInvoice.discount.toLocaleString()}</span>
+                                    {(() => {
+                                        const discount = selectedSaleForInvoice.discount || selectedSaleForInvoice.discountAmount || 0;
+                                        const grandTotal = selectedSaleForInvoice.totalAmount || 0;
+                                        const subtotal = grandTotal + discount;
+                                        const paidAmount = selectedSaleForInvoice.paidAmount !== undefined ? selectedSaleForInvoice.paidAmount : (selectedSaleForInvoice.paymentStatus === 'Paid' || !selectedSaleForInvoice.paymentStatus ? grandTotal : 0);
+                                        const remainingAmount = selectedSaleForInvoice.remainingAmount !== undefined ? selectedSaleForInvoice.remainingAmount : (selectedSaleForInvoice.paymentStatus === 'Unpaid' ? grandTotal : 0);
+                                        const paymentStatus = selectedSaleForInvoice.paymentStatus || 'Paid';
+                                        
+                                        return (
+                                            <div className="pis-summary-v2">
+                                                <div className="pis-summary-box">
+                                                    <div className="pis-sum-row">
+                                                        <span>Subtotal:</span>
+                                                        <span>₹{subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    {discount > 0 && (
+                                                        <div className="pis-sum-row discount">
+                                                            <span>Discount:</span>
+                                                            <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="pis-sum-row grand">
+                                                        <span>GRAND TOTAL:</span>
+                                                        <span>₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    <div className="pis-sum-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
+                                                        <span>Paid Amount:</span>
+                                                        <span style={{ color: '#067647', fontWeight: 600 }}>₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    <div className="pis-sum-row">
+                                                        <span>Due Amount:</span>
+                                                        <span style={{ color: remainingAmount > 0 ? '#B45309' : '#64748B', fontWeight: 600 }}>₹{remainingAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    <div className="pis-sum-row">
+                                                        <span>Payment Status:</span>
+                                                        <span className={`status-badge-new ${paymentStatus.toLowerCase()}`} style={{ padding: '2px 8px', fontSize: '11px', borderRadius: '6px' }}>
+                                                            {paymentStatus === 'Paid' ? '🟢 Paid' : paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                                        </span>
+                                                    </div>
                                                 </div>
-                                            )}
-                                            <div className="pis-sum-row grand">
-                                                <span>GRAND TOTAL:</span>
-                                                <span>₹{(selectedSaleForInvoice.totalAmount || 0).toLocaleString()}</span>
                                             </div>
-                                        </div>
-                                    </div>
+                                        );
+                                    })()}
 
                                     <div className="pis-footer-v2">
                                         <div className="pis-footer-divider"></div>
@@ -817,7 +842,14 @@ const KhataPage = () => {
                         <div className="modal-actions">
                             <button className="btn-cancel" onClick={() => setIsPaymentModalOpen(false)} disabled={isPaymentSubmitting}>Cancel</button>
                             <button className="btn-confirm" onClick={handleReceivePayment} disabled={isPaymentSubmitting}>
-                                {isPaymentSubmitting ? 'Recording Payment...' : 'Save Payment'}
+                                {isPaymentSubmitting ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <span className="spinner-mini"></span>
+                                        <span>Processing Transaction...</span>
+                                    </span>
+                                ) : (
+                                    'Save Payment'
+                                )}
                             </button>
                         </div>
                     </div>
@@ -848,7 +880,14 @@ const KhataPage = () => {
                         <div className="modal-actions">
                             <button className="btn-cancel" onClick={() => setIsNewAccountModalOpen(false)} disabled={isNewAccountSubmitting}>Cancel</button>
                             <button className="btn-confirm" onClick={handleCreateAccount} disabled={isNewAccountSubmitting}>
-                                {isNewAccountSubmitting ? 'Creating Account...' : 'Create Account'}
+                                {isNewAccountSubmitting ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <span className="spinner-mini"></span>
+                                        <span>Processing Transaction...</span>
+                                    </span>
+                                ) : (
+                                    'Create Account'
+                                )}
                             </button>
                         </div>
                     </div>
@@ -879,7 +918,14 @@ const KhataPage = () => {
                         <div className="modal-actions">
                             <button className="btn-cancel" onClick={() => setIsSaleModalOpen(false)} disabled={isSaleSubmitting}>Cancel</button>
                             <button className="btn-confirm" onClick={handleAddSale} disabled={isSaleSubmitting}>
-                                {isSaleSubmitting ? 'Adding Sale...' : 'Add Due Credit'}
+                                {isSaleSubmitting ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <span className="spinner-mini"></span>
+                                        <span>Processing Transaction...</span>
+                                    </span>
+                                ) : (
+                                    'Add Due Credit'
+                                )}
                             </button>
                         </div>
                     </div>
@@ -1397,6 +1443,23 @@ const KhataPage = () => {
                     .khata-controls { flex-direction: row; align-items: center; }
                     .khata-mobile-list { display: none; }
                     .khata-desktop-table-wrapper { display: block; }
+                }
+
+                .status-badge-new { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+                .status-badge-new.paid { background: #ECFDF5; color: #067647; border: 1px solid #ABEFC6; }
+                .status-badge-new.partial { background: #FFFBEB; color: #B45309; border: 1px solid #FCD34D; }
+                .status-badge-new.unpaid { background: #FEF3F2; color: #B42318; border: 1px solid #FECDCA; }
+                .spinner-mini {
+                    width: 14px;
+                    height: 14px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                    border-radius: 50%;
+                    border-top-color: white;
+                    animation: spin 0.8s linear infinite;
+                    display: inline-block;
+                }
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
                 }
             `}</style>
             <MessageModal 

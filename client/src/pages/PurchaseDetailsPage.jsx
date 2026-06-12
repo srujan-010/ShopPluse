@@ -328,7 +328,14 @@ const PurchaseDetailsPage = () => {
                                 </button>
                                 <button type="submit" disabled={isSaving}
                                     style={{ flex: 2, height: '48px', borderRadius: '12px', border: 'none', background: '#D97706', color: 'white', fontSize: '15px', fontWeight: '800', cursor: 'pointer', opacity: isSaving ? 0.7 : 1 }}>
-                                    {isSaving ? 'Saving…' : 'Save Payment'}
+                                    {isSaving ? (
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center', width: '100%' }}>
+                                            <span className="spinner-mini"></span>
+                                            <span>Processing Transaction...</span>
+                                        </span>
+                                    ) : (
+                                        'Save Payment'
+                                    )}
                                 </button>
                             </div>
                         </form>
@@ -620,7 +627,14 @@ const PurchaseDetailsPage = () => {
                                         disabled={isSaving}
                                         style={{ padding: '0 20px', height: '40px', background: '#D97706', border: 'none', color: 'white', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
                                     >
-                                        {isSaving ? 'Processing...' : 'Save Payment'}
+                                        {isSaving ? (
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                                <span className="spinner-mini"></span>
+                                                <span>Processing Transaction...</span>
+                                            </span>
+                                        ) : (
+                                            'Save Payment'
+                                        )}
                                     </button>
                                 </div>
                             </form>
@@ -635,6 +649,15 @@ const PurchaseDetailsPage = () => {
                     .pd-main-layout {
                         grid-template-columns: 1fr !important;
                     }
+                }
+                .spinner-mini {
+                    width: 14px;
+                    height: 14px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                    border-radius: 50%;
+                    border-top-color: white;
+                    animation: spin 0.8s linear infinite;
+                    display: inline-block;
                 }
             `}</style>
         </div>

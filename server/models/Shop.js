@@ -30,6 +30,7 @@ const shopSchema = new mongoose.Schema({
         default: '₹'
     },
     gstNumber: String,
+    fertilizerLicense: String,
     email: String,
     footerMessage: {
         type: String,
@@ -48,6 +49,14 @@ const shopSchema = new mongoose.Schema({
         type: mongoose.Schema.ObjectId,
         ref: 'User',
         required: true
+    },
+    isSuspended: {
+        type: Boolean,
+        default: false
+    },
+    isLoginDisabled: {
+        type: Boolean,
+        default: false
     },
     createdAt: {
         type: Date,

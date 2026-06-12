@@ -87,7 +87,7 @@ exports.getSales = async (req, res) => {
 // @access  Private
 exports.createSale = async (req, res) => {
     try {
-        const { shop, items, paymentMethod, date, customerName, customerMobile } = req.body;
+        const { shop, items, paymentMethod, date, customerName, customerMobile, discountType, discountValue, paidAmount } = req.body;
         const ownerId = req.user.id;
 
         let totalAmount = 0;
@@ -155,6 +155,52 @@ exports.createSale = async (req, res) => {
             });
         }
 
+        // --- DISCOUNT & PARTIAL PAYMENT CALCULATION & VALIDATIONS ---
+        const subtotal = totalAmount;
+        let calculatedDiscountAmount = 0;
+
+        if (discountType === 'flat') {
+            calculatedDiscountAmount = Number(discountValue) || 0;
+        } else if (discountType === 'percentage') {
+            const pct = Number(discountValue) || 0;
+            calculatedDiscountAmount = parseFloat(((subtotal * pct) / 100).toFixed(2));
+        }
+
+        // Validations
+        if (Number(discountValue) < 0) {
+            return res.status(400).json({ success: false, message: 'Discount value cannot be negative.' });
+        }
+        if (calculatedDiscountAmount > subtotal) {
+            return res.status(400).json({ success: false, message: 'Discount cannot exceed subtotal.' });
+        }
+
+        const finalAmount = parseFloat((subtotal - calculatedDiscountAmount).toFixed(2));
+        const netProfit = parseFloat((totalProfit - calculatedDiscountAmount).toFixed(2));
+
+        let finalPaidAmount = finalAmount;
+        let finalRemainingAmount = 0;
+        let finalPaymentStatus = 'Paid';
+
+        if (paymentMethod === 'Khata') {
+            const paidAmountVal = typeof paidAmount !== 'undefined' ? Number(paidAmount) : 0;
+            if (paidAmountVal < 0) {
+                return res.status(400).json({ success: false, message: 'Paid amount cannot be negative.' });
+            }
+            if (paidAmountVal > finalAmount + 0.01) {
+                return res.status(400).json({ success: false, message: 'Paid amount cannot exceed final amount.' });
+            }
+            finalPaidAmount = paidAmountVal;
+            finalRemainingAmount = parseFloat((finalAmount - paidAmountVal).toFixed(2));
+            
+            if (finalRemainingAmount === 0) {
+                finalPaymentStatus = 'Paid';
+            } else if (finalPaidAmount > 0) {
+                finalPaymentStatus = 'Partial';
+            } else {
+                finalPaymentStatus = 'Unpaid';
+            }
+        }
+
         const Shop = require('../models/Shop');
         const shopRecord = await Shop.findById(shop);
         let invoiceNumber = `INV-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -173,8 +219,15 @@ exports.createSale = async (req, res) => {
             customerName: customerName || 'Walk-in Customer',
             customerMobile: customerMobile || '',
             items: processedItems,
-            totalAmount,
-            totalProfit,
+            totalAmount: finalAmount,
+            totalProfit: netProfit,
+            discountType: discountType || 'none',
+            discountValue: Number(discountValue) || 0,
+            discountAmount: calculatedDiscountAmount,
+            discount: calculatedDiscountAmount, // Legacy compatibility
+            paidAmount: finalPaidAmount,
+            remainingAmount: finalRemainingAmount,
+            paymentStatus: finalPaymentStatus,
             paymentMethod,
             date: date || new Date(),
             owner: ownerId
@@ -233,22 +286,24 @@ exports.createSale = async (req, res) => {
                 });
             }
             
-            khataRecord.outstandingDue += totalAmount;
-            khataRecord.transactions.push({
-                type: 'due',
-                amount: totalAmount,
-                date: date || new Date(),
-                note: `Sale recorded via POS (Bill #${sale._id.toString().slice(-6).toUpperCase()})`,
-                saleId: sale._id,
-                isPOSSale: true,
-                paymentMethod: 'Khata',
-                items: processedItems.map(item => ({
-                    productName: item.productName,
-                    quantity: item.soldQtyEntered,
-                    unit: item.soldUnit,
-                    price: item.pricePerBaseUnit || item.price
-                }))
-            });
+            if (finalRemainingAmount > 0) {
+                khataRecord.outstandingDue += finalRemainingAmount;
+                khataRecord.transactions.push({
+                    type: 'due',
+                    amount: finalRemainingAmount,
+                    date: date || new Date(),
+                    note: `Sale recorded via POS (Bill #${sale._id.toString().slice(-6).toUpperCase()})`,
+                    saleId: sale._id,
+                    isPOSSale: true,
+                    paymentMethod: 'Khata',
+                    items: processedItems.map(item => ({
+                        productName: item.productName,
+                        quantity: item.soldQtyEntered,
+                        unit: item.soldUnit,
+                        price: item.pricePerBaseUnit || item.price
+                    }))
+                });
+            }
             
             await khataRecord.save();
         }
@@ -548,37 +603,131 @@ exports.getReports = async (req, res) => {
             }
         }
 
-        // Best Selling Products (Requires unwinding items)
-        const bestSelling = await Sale.aggregate([
-            { $match: match },
-            {
-                $project: {
-                    items: {
-                        $cond: {
-                            if: { $isArray: "$items" },
-                            then: "$items",
-                            else: [{
-                                product: "$product",
-                                productName: "$productName",
-                                quantity: "$quantity",
-                                price: "$salesAmount"
-                            }]
+        // Best Selling Products (Requires unwinding items, adjusted for returns and exchanges)
+        const [bestSellingSales, returnsItems, exchangesReturned, exchangesReplaced] = await Promise.all([
+            Sale.aggregate([
+                { $match: match },
+                {
+                    $project: {
+                        items: {
+                            $cond: {
+                                if: { $isArray: "$items" },
+                                then: "$items",
+                                else: [{
+                                    product: "$product",
+                                    productName: "$productName",
+                                    soldQtyBaseUnit: "$quantity",
+                                    totalPrice: "$salesAmount"
+                                }]
+                            }
                         }
                     }
+                },
+                { $unwind: '$items' },
+                {
+                    $group: {
+                        _id: '$items.product',
+                        productName: { $first: '$items.productName' },
+                        totalSold: { $sum: { $ifNull: ['$items.soldQtyBaseUnit', '$items.quantity'] } },
+                        totalSales: { $sum: { $ifNull: ['$items.totalPrice', { $multiply: ['$items.price', '$items.quantity'] }] } }
+                    }
                 }
-            },
-            { $unwind: '$items' },
-            {
-                $group: {
-                    _id: '$items.product',
-                    productName: { $first: '$items.productName' },
-                    totalSold: { $sum: '$items.quantity' },
-                    totalSales: { $sum: { $multiply: ['$items.price', '$items.quantity'] } }
+            ]),
+            ReturnRecord.aggregate([
+                { $match: match },
+                { $unwind: '$items' },
+                {
+                    $group: {
+                        _id: '$items.product',
+                        productName: { $first: '$items.productName' },
+                        totalReturned: { $sum: '$items.quantity' },
+                        totalRefund: { $sum: '$items.totalPrice' }
+                    }
                 }
-            },
-            { $sort: { totalSold: -1 } },
-            { $limit: 5 }
+            ]),
+            ExchangeRecord.aggregate([
+                { $match: match },
+                { $unwind: '$returnedItems' },
+                {
+                    $group: {
+                        _id: '$returnedItems.product',
+                        productName: { $first: '$returnedItems.productName' },
+                        totalReturned: { $sum: '$returnedItems.quantity' },
+                        totalRefund: { $sum: '$returnedItems.totalPrice' }
+                    }
+                }
+            ]),
+            ExchangeRecord.aggregate([
+                { $match: match },
+                { $unwind: '$replacementItems' },
+                {
+                    $group: {
+                        _id: '$replacementItems.product',
+                        productName: { $first: '$replacementItems.productName' },
+                        totalReplaced: { $sum: '$replacementItems.quantity' },
+                        totalReplacedSales: { $sum: '$replacementItems.totalPrice' }
+                    }
+                }
+            ])
         ]);
+
+        const productMap = {};
+
+        bestSellingSales.forEach(item => {
+            if (item._id) {
+                const prodId = item._id.toString();
+                productMap[prodId] = {
+                    _id: item._id,
+                    productName: item.productName || 'Unknown Product',
+                    totalSold: item.totalSold || 0,
+                    totalSales: item.totalSales || 0
+                };
+            }
+        });
+
+        const mergeReturns = (returnsList) => {
+            returnsList.forEach(item => {
+                if (item._id) {
+                    const prodId = item._id.toString();
+                    if (!productMap[prodId]) {
+                        productMap[prodId] = {
+                            _id: item._id,
+                            productName: item.productName || 'Unknown Product',
+                            totalSold: 0,
+                            totalSales: 0
+                        };
+                    }
+                    productMap[prodId].totalSold -= (item.totalReturned || 0);
+                    productMap[prodId].totalSales -= (item.totalRefund || 0);
+                }
+            });
+        };
+
+        const mergeReplacements = (replacementsList) => {
+            replacementsList.forEach(item => {
+                if (item._id) {
+                    const prodId = item._id.toString();
+                    if (!productMap[prodId]) {
+                        productMap[prodId] = {
+                            _id: item._id,
+                            productName: item.productName || 'Unknown Product',
+                            totalSold: 0,
+                            totalSales: 0
+                        };
+                    }
+                    productMap[prodId].totalSold += (item.totalReplaced || 0);
+                    productMap[prodId].totalSales += (item.totalReplacedSales || 0);
+                }
+            });
+        };
+
+        mergeReturns(returnsItems);
+        mergeReturns(exchangesReturned);
+        mergeReplacements(exchangesReplaced);
+
+        const bestSelling = Object.values(productMap)
+            .sort((a, b) => b.totalSold - a.totalSold)
+            .slice(0, 5);
 
         const sixMonthsAgo = new Date();
         sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -701,18 +850,107 @@ exports.getSalesHistory = async (req, res) => {
             match.shop = new mongoose.Types.ObjectId(shopId);
         }
 
-        const history = await Sale.aggregate([
-            { $match: match },
-            {
-                $group: {
-                    _id: groupBy,
-                    totalSales: { $sum: { $ifNull: ['$totalAmount', '$salesAmount'] } },
-                    totalProfit: { $sum: { $ifNull: ['$totalProfit', '$profit'] } },
-                    count: { $sum: 1 }
+        const [salesHistory, returnsHistory, exchangesHistory] = await Promise.all([
+            Sale.aggregate([
+                { $match: match },
+                {
+                    $group: {
+                        _id: groupBy,
+                        totalSales: { $sum: { $ifNull: ['$totalAmount', '$salesAmount'] } },
+                        totalProfit: { $sum: { $ifNull: ['$totalProfit', '$profit'] } },
+                        count: { $sum: 1 }
+                    }
                 }
-            },
-            { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1, '_id.hour': 1 } }
+            ]),
+            ReturnRecord.aggregate([
+                { $match: match },
+                {
+                    $group: {
+                        _id: groupBy,
+                        totalRefunds: { $sum: '$totalRefundAmount' },
+                        totalProfitImpact: { $sum: { $ifNull: ['$totalProfit', 0] } }
+                    }
+                }
+            ]),
+            ExchangeRecord.aggregate([
+                { $match: match },
+                {
+                    $group: {
+                        _id: groupBy,
+                        balanceDiff: { $sum: '$balanceDifference' },
+                        totalProfitImpact: { $sum: { $ifNull: ['$totalProfit', 0] } }
+                    }
+                }
+            ])
         ]);
+
+        const getKey = (id) => {
+            if (!id) return '';
+            if (id.hour !== undefined) return `h-${id.hour}`;
+            if (id.day !== undefined && id.month !== undefined && id.year !== undefined) return `d-${id.year}-${id.month}-${id.day}`;
+            if (id.day !== undefined) return `d-${id.day}`;
+            if (id.month !== undefined && id.year !== undefined) return `m-${id.year}-${id.month}`;
+            if (id.month !== undefined) return `m-${id.month}`;
+            return '';
+        };
+
+        const historyMap = {};
+
+        salesHistory.forEach(item => {
+            const key = getKey(item._id);
+            historyMap[key] = {
+                _id: item._id,
+                totalSales: item.totalSales,
+                totalProfit: item.totalProfit,
+                count: item.count
+            };
+        });
+
+        returnsHistory.forEach(item => {
+            const key = getKey(item._id);
+            if (!historyMap[key]) {
+                historyMap[key] = {
+                    _id: item._id,
+                    totalSales: 0,
+                    totalProfit: 0,
+                    count: 0
+                };
+            }
+            historyMap[key].totalSales -= item.totalRefunds;
+            historyMap[key].totalProfit += item.totalProfitImpact;
+        });
+
+        exchangesHistory.forEach(item => {
+            const key = getKey(item._id);
+            if (!historyMap[key]) {
+                historyMap[key] = {
+                    _id: item._id,
+                    totalSales: 0,
+                    totalProfit: 0,
+                    count: 0
+                };
+            }
+            historyMap[key].totalSales += item.balanceDiff;
+            historyMap[key].totalProfit += item.totalProfitImpact;
+        });
+
+        const history = Object.values(historyMap).sort((a, b) => {
+            const yA = a._id.year || 0;
+            const yB = b._id.year || 0;
+            if (yA !== yB) return yA - yB;
+
+            const mA = a._id.month || 0;
+            const mB = b._id.month || 0;
+            if (mA !== mB) return mA - mB;
+
+            const dA = a._id.day || 0;
+            const dB = b._id.day || 0;
+            if (dA !== dB) return dA - dB;
+
+            const hA = a._id.hour || 0;
+            const hB = b._id.hour || 0;
+            return hA - hB;
+        });
 
         res.status(200).json({ success: true, data: history });
     } catch (error) {
@@ -747,18 +985,49 @@ exports.getAggregatedSummaries = async (req, res) => {
             const query = { ...match, date: { $gte: start } };
             if (end) query.date.$lte = end;
 
-            const agg = await Sale.aggregate([
-                { $match: query },
-                {
-                    $group: {
-                        _id: null,
-                        totalSales: { $sum: { $ifNull: ['$totalAmount', '$salesAmount'] } },
-                        totalProfit: { $sum: { $ifNull: ['$totalProfit', '$profit'] } },
-                        orders: { $sum: 1 }
+            const [salesAgg, returnsAgg, exchangesAgg] = await Promise.all([
+                Sale.aggregate([
+                    { $match: query },
+                    {
+                        $group: {
+                            _id: null,
+                            totalSales: { $sum: { $ifNull: ['$totalAmount', '$salesAmount'] } },
+                            totalProfit: { $sum: { $ifNull: ['$totalProfit', '$profit'] } },
+                            orders: { $sum: 1 }
+                        }
                     }
-                }
+                ]),
+                ReturnRecord.aggregate([
+                    { $match: query },
+                    {
+                        $group: {
+                            _id: null,
+                            totalRefunds: { $sum: '$totalRefundAmount' },
+                            totalProfitImpact: { $sum: { $ifNull: ['$totalProfit', 0] } }
+                        }
+                    }
+                ]),
+                ExchangeRecord.aggregate([
+                    { $match: query },
+                    {
+                        $group: {
+                            _id: null,
+                            balanceDiff: { $sum: '$balanceDifference' },
+                            totalProfitImpact: { $sum: { $ifNull: ['$totalProfit', 0] } }
+                        }
+                    }
+                ])
             ]);
-            return agg[0] || { totalSales: 0, totalProfit: 0, orders: 0 };
+
+            const sales = salesAgg[0] || { totalSales: 0, totalProfit: 0, orders: 0 };
+            const returns = returnsAgg[0] || { totalRefunds: 0, totalProfitImpact: 0 };
+            const exchanges = exchangesAgg[0] || { balanceDiff: 0, totalProfitImpact: 0 };
+
+            return {
+                totalSales: parseFloat((sales.totalSales - returns.totalRefunds + exchanges.balanceDiff).toFixed(2)),
+                totalProfit: parseFloat((sales.totalProfit + returns.totalProfitImpact + exchanges.totalProfitImpact).toFixed(2)),
+                orders: sales.orders
+            };
         };
 
         const [today, yesterday, weekly, monthly] = await Promise.all([
@@ -801,13 +1070,26 @@ exports.getSaleById = async (req, res) => {
             const prevExchanges = await ExchangeRecord.find({ originalSale: id }).lean();
 
             const returnedQtyMap = {};
+            let totalRefundAmount = 0;
+            let totalReturnsProfitImpact = 0;
+
             prevReturns.forEach(ret => {
+                totalRefundAmount += ret.totalRefundAmount;
+                totalReturnsProfitImpact += (ret.totalProfit || 0);
                 ret.items.forEach(item => {
                     const prodId = item.product.toString();
                     returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
                 });
             });
+
+            let totalExchangeReturnedValue = 0;
+            let totalExchangeProfitImpact = 0;
+            let totalExchangesDiff = 0;
+
             prevExchanges.forEach(exc => {
+                totalExchangeReturnedValue += exc.totalReturnedValue;
+                totalExchangeProfitImpact += (exc.totalProfit || 0);
+                totalExchangesDiff += exc.balanceDifference;
                 exc.returnedItems.forEach(item => {
                     const prodId = item.product.toString();
                     returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
@@ -829,6 +1111,20 @@ exports.getSaleById = async (req, res) => {
                     remainingQty: Math.max(0, remainingQty)
                 };
             });
+
+            // Dynamic financial summary
+            const originalSaleAmount = transaction.totalAmount;
+            const originalProfit = transaction.totalProfit;
+            const returnedAmount = totalRefundAmount + totalExchangeReturnedValue;
+            const netSaleAmount = originalSaleAmount - totalRefundAmount + totalExchangesDiff;
+            const netProfitAmount = originalProfit + totalReturnsProfitImpact + totalExchangeProfitImpact;
+
+            transaction.financialSummary = {
+                originalSaleAmount: parseFloat(originalSaleAmount.toFixed(2)),
+                returnedAmount: parseFloat(returnedAmount.toFixed(2)),
+                netSaleAmount: parseFloat(Math.max(0, netSaleAmount).toFixed(2)),
+                netProfitAmount: parseFloat(netProfitAmount.toFixed(2))
+            };
 
             return res.status(200).json({ success: true, data: transaction });
         }

@@ -59,6 +59,56 @@ const POSPage = () => {
     const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
     const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024);
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
+
+    // Discount & Partial Payment states
+    const [discountType, setDiscountType] = useState('none');
+    const [discountValue, setDiscountValue] = useState('');
+    const [paidAmount, setPaidAmount] = useState('');
+
+    const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
+
+    const discountAmount = useMemo(() => {
+        if (discountType === 'flat') {
+            return Math.min(subtotal, Number(discountValue) || 0);
+        }
+        if (discountType === 'percentage') {
+            const pct = Number(discountValue) || 0;
+            return Math.min(subtotal, parseFloat(((subtotal * pct) / 100).toFixed(2)));
+        }
+        return 0;
+    }, [subtotal, discountType, discountValue]);
+
+    const finalAmount = Math.max(0, parseFloat((subtotal - discountAmount).toFixed(2)));
+
+    const remainingAmount = useMemo(() => {
+        if (paymentMethod === 'Khata') {
+            const paid = Number(paidAmount) || 0;
+            return Math.max(0, parseFloat((finalAmount - paid).toFixed(2)));
+        }
+        return 0;
+    }, [finalAmount, paymentMethod, paidAmount]);
+
+    const checkoutBtnText = useMemo(() => {
+        if (isCheckingOut) {
+            return (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                    <div className="spinner-mini" style={{ width: '18px', height: '18px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }}></div>
+                    <span>Processing Transaction...</span>
+                </div>
+            );
+        }
+        
+        if (paymentMethod === 'Cash' || paymentMethod === 'UPI') {
+            return `Collect ₹${finalAmount.toLocaleString()}`;
+        }
+        
+        // Khata
+        const paid = Number(paidAmount) || 0;
+        if (paid === 0) {
+            return 'Save Khata Due';
+        }
+        return `Collect ₹${paid.toLocaleString()}`;
+    }, [isCheckingOut, paymentMethod, finalAmount, paidAmount]);
     
     // Sell Modal for measured items
     const [sellingProduct, setSellingProduct] = useState(null);
@@ -207,15 +257,59 @@ const POSPage = () => {
         }).filter(Boolean));
     };
 
-    const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
-
     const handleCheckout = async () => {
         if (isCheckingOut) return;
+
+        // Expiry & Suspension check
+        const isYearly = shop?.subscription?.planType === 'Yearly';
+        const isExpired = isYearly && shop?.subscription?.planEndDate && new Date() > new Date(shop?.subscription?.planEndDate);
+        const isSuspended = shop?.isSuspended;
+        if (isExpired || isSuspended) {
+            showToast(isSuspended ? 'Cannot process transaction: Shop is suspended.' : 'Cannot process transaction: Subscription expired.', 'error');
+            return;
+        }
+
         if (cart.length === 0) return;
         if (paymentMethod === 'Khata' && (!customerName.trim() || !customerMobile.trim())) {
             showToast('Customer Name and Mobile are required for Khata payment.', 'warning');
             return;
         }
+
+        // Validations
+        if (Number(discountValue) < 0) {
+            showToast('Discount value cannot be negative.', 'warning');
+            return;
+        }
+        if (discountAmount > subtotal) {
+            showToast('Discount cannot exceed subtotal.', 'warning');
+            return;
+        }
+        
+        let reqPaidAmount = finalAmount;
+        let reqRemainingAmount = 0;
+        let reqPaymentStatus = 'Paid';
+
+        if (paymentMethod === 'Khata') {
+            const paid = Number(paidAmount) || 0;
+            if (paid < 0) {
+                showToast('Paid amount cannot be negative.', 'warning');
+                return;
+            }
+            if (paid > finalAmount + 0.01) {
+                showToast('Paid amount cannot exceed final amount.', 'warning');
+                return;
+            }
+            reqPaidAmount = paid;
+            reqRemainingAmount = parseFloat((finalAmount - paid).toFixed(2));
+            if (reqRemainingAmount === 0) {
+                reqPaymentStatus = 'Paid';
+            } else if (reqPaidAmount > 0) {
+                reqPaymentStatus = 'Partial';
+            } else {
+                reqPaymentStatus = 'Unpaid';
+            }
+        }
+
         setIsCheckingOut(true);
         try {
             const res = await saleService.create({
@@ -224,12 +318,24 @@ const POSPage = () => {
                 paymentMethod,
                 customerName,
                 customerMobile,
+                discountType,
+                discountValue: Number(discountValue) || 0,
+                discountAmount,
+                paidAmount: reqPaidAmount,
+                remainingAmount: reqRemainingAmount,
+                paymentStatus: reqPaymentStatus,
                 date: new Date()
             });
             setLastCreatedSale(res.data.data);
             setOrderSuccess(true);
             setCart([]);
             setIsCartDrawerOpen(false);
+            
+            // Reset discount and payment inputs
+            setDiscountType('none');
+            setDiscountValue('');
+            setPaidAmount('');
+
             fetchData();
             showToast('Sale created successfully!', 'success');
         } catch (err) {
@@ -457,9 +563,78 @@ const POSPage = () => {
 
                                     <div className="pbc-divider" />
                                     
-                                    <div className="pbc-total-row">
-                                        <span>Grand Total</span>
-                                        <span className="pbc-grand-total">₹{subtotal.toLocaleString()}</span>
+                                    <div className="pbc-summary-rows" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '16px 20px 4px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', color: '#667085', fontWeight: '600' }}>
+                                            <span>Subtotal</span>
+                                            <span>₹{subtotal.toLocaleString()}</span>
+                                        </div>
+                                        {discountAmount > 0 && (
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', color: '#10B981', fontWeight: '700' }}>
+                                                <span>Discount {discountType === 'percentage' ? `(${discountValue}%)` : ''}</span>
+                                                <span>- ₹{discountAmount.toLocaleString()}</span>
+                                            </div>
+                                        )}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', color: '#101828', fontWeight: '900', paddingTop: '8px', borderTop: '1px dashed #F2F4F7' }}>
+                                            <span>Final Amount</span>
+                                            <span>₹{finalAmount.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* DISCOUNT SECTION */}
+                                <div className="discount-section-v2" style={{ margin: '16px 0', padding: '16px', background: '#F8FAFC', borderRadius: '18px', border: '1.5px solid #F1F5F9' }}>
+                                    <label style={{ fontSize: '14px', fontWeight: '800', color: '#334155', display: 'block', marginBottom: '10px' }}>Apply Discount</label>
+                                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                        <div style={{ display: 'flex', background: '#E2E8F0', padding: '3px', borderRadius: '12px', flexShrink: 0 }}>
+                                            <button 
+                                                type="button"
+                                                onClick={() => { setDiscountType('none'); setDiscountValue(''); }} 
+                                                style={{ border: 'none', background: discountType === 'none' ? 'white' : 'transparent', color: discountType === 'none' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                            >
+                                                None
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onClick={() => { setDiscountType('flat'); setDiscountValue(''); }} 
+                                                style={{ border: 'none', background: discountType === 'flat' ? 'white' : 'transparent', color: discountType === 'flat' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                            >
+                                                ₹ Flat
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onClick={() => { setDiscountType('percentage'); setDiscountValue(''); }} 
+                                                style={{ border: 'none', background: discountType === 'percentage' ? 'white' : 'transparent', color: discountType === 'percentage' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                            >
+                                                % Pct
+                                            </button>
+                                        </div>
+
+                                        {discountType !== 'none' && (
+                                            <div style={{ display: 'flex', alignItems: 'center', background: 'white', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '0 12px', flex: 1, height: '38px' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: '700', color: '#64748B', marginRight: '4px' }}>
+                                                    {discountType === 'flat' ? '₹' : '%'}
+                                                </span>
+                                                <input 
+                                                    type="number" 
+                                                    placeholder={discountType === 'flat' ? 'Discount' : 'Percentage'} 
+                                                    value={discountValue}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (val === '') {
+                                                            setDiscountValue('');
+                                                        } else {
+                                                            const numVal = Number(val);
+                                                            if (discountType === 'percentage') {
+                                                                setDiscountValue(Math.min(100, numVal));
+                                                            } else {
+                                                                setDiscountValue(Math.min(subtotal, numVal));
+                                                            }
+                                                        }
+                                                    }}
+                                                    style={{ border: 'none', outline: 'none', width: '100%', fontSize: '14px', fontWeight: '700', color: '#0F172A' }}
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -468,7 +643,7 @@ const POSPage = () => {
                                     <div className="pm-grid-v2">
                                         <button className={paymentMethod === 'Cash' ? 'active' : ''} onClick={() => setPaymentMethod('Cash')}><Wallet size={20} /><span>Cash</span></button>
                                         <button className={paymentMethod === 'UPI' ? 'active' : ''} onClick={() => setPaymentMethod('UPI')}><QrCode size={20} /><span>UPI</span></button>
-                                        <button className={paymentMethod === 'Khata' ? 'active' : ''} onClick={() => setPaymentMethod('Khata')}><FileText size={20} /><span>Khata</span></button>
+                                        <button className={paymentMethod === 'Khata' ? 'active' : ''} onClick={() => { setPaymentMethod('Khata'); setPaidAmount(''); }}><FileText size={20} /><span>Khata</span></button>
                                     </div>
                                 </div>
 
@@ -538,10 +713,77 @@ const POSPage = () => {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* KHATA PAYMENT SECTION */}
+                                {paymentMethod === 'Khata' && customerMobile && (
+                                    <div className="khata-payment-section" style={{ marginTop: '20px', padding: '16px', background: '#FFFDF5', border: '1.5px solid #FEF3C7', borderRadius: '18px' }}>
+                                        <label style={{ fontSize: '14px', fontWeight: '800', color: '#854D0E', display: 'block', marginBottom: '12px' }}>Khata Payment Details</label>
+                                        
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Paid Now</span>
+                                                <div style={{ display: 'flex', alignItems: 'center', background: 'white', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '0 12px', width: '150px', height: '40px' }}>
+                                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#64748B', marginRight: '4px' }}>₹</span>
+                                                    <input 
+                                                        type="number"
+                                                        placeholder="0.00"
+                                                        value={paidAmount}
+                                                        onChange={(e) => {
+                                                            const val = e.target.value;
+                                                            if (val === '') {
+                                                                setPaidAmount('');
+                                                            } else {
+                                                                const numVal = Number(val);
+                                                                setPaidAmount(Math.min(finalAmount, numVal));
+                                                            }
+                                                        }}
+                                                        style={{ border: 'none', outline: 'none', width: '100%', fontSize: '15px', fontWeight: '800', color: '#0F172A' }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.25).toFixed(2)))} 
+                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                >
+                                                    25%
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.50).toFixed(2)))} 
+                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                >
+                                                    50%
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.75).toFixed(2)))} 
+                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                >
+                                                    75%
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setPaidAmount(finalAmount)} 
+                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                >
+                                                    Full
+                                                </button>
+                                            </div>
+
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px dashed #FEF3C7' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Remaining Due</span>
+                                                <span style={{ fontSize: '16px', fontWeight: '900', color: '#EF4444' }}>₹{remainingAmount.toLocaleString()}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             <div className="cdv2-footer">
                                 <button className="btn-final-v2" onClick={handleCheckout} disabled={isCheckingOut}>
-                                    {isCheckingOut ? 'Recording Sale...' : `Pay ₹${subtotal.toLocaleString()}`}
+                                    {checkoutBtnText}
                                 </button>
                             </div>
                         </motion.div>
@@ -635,6 +877,12 @@ const POSPage = () => {
             </AnimatePresence>
 
             <style jsx="true">{`
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                .spinner-mini {
+                    animation: spin 0.6s linear infinite;
+                }
                 .premium-pos-v2 { display: flex; height: calc(100vh - 72px); background: #F6F8FC; overflow: hidden; }
                 .pos-catalog-shell { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
                 

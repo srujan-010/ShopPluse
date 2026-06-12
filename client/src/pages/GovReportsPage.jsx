@@ -74,7 +74,10 @@ const GovReportsPage = () => {
             if (!itemLedgerMap[item.productName]) {
                 itemLedgerMap[item.productName] = { name: item.productName, qtyBase: 0, amount: 0, baseUnit: item.soldUnit };
             }
-            itemLedgerMap[item.productName].qtyBase += item.soldQtyBaseUnit || item.soldQtyEntered || 0;
+            const remainingQty = item.remainingQty !== undefined ? item.remainingQty : (item.soldQtyEntered - (item.returnedQty || 0));
+            const multiplier = item.soldQtyEntered > 0 ? (item.soldQtyBaseUnit / item.soldQtyEntered) : 1;
+            const remainingBase = remainingQty * multiplier;
+            itemLedgerMap[item.productName].qtyBase += remainingBase;
             itemLedgerMap[item.productName].amount += item.totalPrice;
         });
     });

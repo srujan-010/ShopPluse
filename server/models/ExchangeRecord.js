@@ -76,6 +76,11 @@ const exchangeRecordSchema = new mongoose.Schema({
         required: true,
         enum: ['Cash', 'UPI', 'Khata']
     },
+    totalProfit: {
+        type: Number,
+        required: true,
+        default: 0
+    },
     date: {
         type: Date,
         default: Date.now

@@ -306,7 +306,7 @@ api.interceptors.response.use(
                             // Handle Khata ledger updating locally
                             if (parsedData.paymentMethod === 'Khata' && parsedData.customerMobile) {
                                 let khataRecord = await offlineDB.getKhataRecordByMobile(parsedData.shop, parsedData.customerMobile.trim());
-                                const amount = Number(parsedData.totalAmount || 0);
+                                const dueAmount = typeof parsedData.remainingAmount !== 'undefined' ? Number(parsedData.remainingAmount) : Number(parsedData.totalAmount || 0);
                                 if (!khataRecord) {
                                     khataRecord = {
                                         _id: 'temp_khata_' + Date.now(),
@@ -318,22 +318,24 @@ api.interceptors.response.use(
                                         updatedAt: new Date().toISOString()
                                     };
                                 }
-                                khataRecord.outstandingDue += amount;
-                                khataRecord.transactions.push({
-                                    type: 'due',
-                                    amount: amount,
-                                    date: parsedData.date || new Date().toISOString(),
-                                    note: `Sale recorded via POS (Bill #${newSale._id.slice(-6).toUpperCase()})`,
-                                    saleId: newSale._id,
-                                    isPOSSale: true,
-                                    paymentMethod: 'Khata',
-                                    items: (parsedData.items || []).map(i => ({
-                                        productName: i.productName,
-                                        quantity: i.soldQtyEntered || i.quantity,
-                                        unit: i.soldUnit || i.unit,
-                                        price: i.price
-                                    }))
-                                });
+                                if (dueAmount > 0) {
+                                    khataRecord.outstandingDue += dueAmount;
+                                    khataRecord.transactions.push({
+                                        type: 'due',
+                                        amount: dueAmount,
+                                        date: parsedData.date || new Date().toISOString(),
+                                        note: `Sale recorded via POS (Bill #${newSale._id.slice(-6).toUpperCase()})`,
+                                        saleId: newSale._id,
+                                        isPOSSale: true,
+                                        paymentMethod: 'Khata',
+                                        items: (parsedData.items || []).map(i => ({
+                                            productName: i.productName,
+                                            quantity: i.soldQtyEntered || i.quantity,
+                                            unit: i.soldUnit || i.unit,
+                                            price: i.price
+                                        }))
+                                    });
+                                }
                                 khataRecord.updatedAt = new Date().toISOString();
                                 await offlineDB.saveKhata(khataRecord);
                             }
@@ -489,6 +491,57 @@ export const authService = {
             console.error('authService.googleLogin failed:', err);
             throw err;
         }
+    },
+    updateProfile: async (data) => {
+        try {
+            return await api.put('/api/auth/profile', data);
+        } catch (err) {
+            console.error('authService.updateProfile failed:', err);
+            throw err;
+        }
+    },
+    changePassword: async (data) => {
+        try {
+            return await api.put('/api/auth/password', data);
+        } catch (err) {
+            console.error('authService.changePassword failed:', err);
+            throw err;
+        }
+    },
+    getSessions: async () => {
+        try {
+            return await api.get('/api/auth/sessions');
+        } catch (err) {
+            console.error('authService.getSessions failed:', err);
+            throw err;
+        }
+    },
+    deleteSession: async (id) => {
+        try {
+            return await api.delete(`/api/auth/sessions/${id}`);
+        } catch (err) {
+            console.error('authService.deleteSession failed:', err);
+            throw err;
+        }
+    },
+    deleteAllSessions: async (keepCurrentId) => {
+        try {
+            return await api.delete(`/api/auth/sessions${keepCurrentId ? `?keepCurrentId=${keepCurrentId}` : ''}`);
+        } catch (err) {
+            console.error('authService.deleteAllSessions failed:', err);
+            throw err;
+        }
+    }
+};
+
+export const supportService = {
+    createTicket: async (data) => {
+        try {
+            return await api.post('/api/admin/support-tickets', data);
+        } catch (err) {
+            console.error('supportService.createTicket failed:', err);
+            throw err;
+        }
     }
 };
 
@@ -523,6 +576,14 @@ export const shopService = {
             return await api.delete(`/api/shops/${id}`);
         } catch (err) {
             console.error('shopService.delete failed:', err);
+            throw err;
+        }
+    },
+    exportData: async (id) => {
+        try {
+            return await api.get(`/api/shops/${id}/export`);
+        } catch (err) {
+            console.error('shopService.exportData failed:', err);
             throw err;
         }
     }

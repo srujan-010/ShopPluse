@@ -1,5 +1,5 @@
 const express = require('express');
-const { getShops, createShop, updateShop, deleteShop } = require('../controllers/shopController');
+const { getShops, createShop, updateShop, deleteShop, exportShopData } = require('../controllers/shopController');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -13,5 +13,7 @@ router.route('/')
 router.route('/:id')
     .put(updateShop)
     .delete(deleteShop);
+
+router.get('/:id/export', exportShopData);
 
 module.exports = router;

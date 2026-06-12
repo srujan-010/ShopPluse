@@ -19,7 +19,9 @@ import {
     Edit3,
     ArrowRight,
     Users,
-    LayoutGrid
+    LayoutGrid,
+    ShieldAlert,
+    AlertTriangle
 } from 'lucide-react';
 import { Link, useLocation, useNavigate, useParams, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -56,6 +58,15 @@ const Layout = () => {
     };
 
     const currentShop = shops.find(s => s._id === shopId);
+    
+    const isYearly = currentShop?.subscription?.planType === 'Yearly';
+    const isExpired = isYearly && currentShop?.subscription?.planEndDate && new Date() > new Date(currentShop?.subscription?.planEndDate);
+    const isSuspended = currentShop?.isSuspended;
+    const isLoginDisabled = currentShop?.isLoginDisabled;
+
+    const remainingDays = isYearly && currentShop?.subscription?.planEndDate
+        ? Math.ceil((new Date(currentShop.subscription.planEndDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+        : null;
 
     const navItems = [
         { name: 'Home', icon: Home, path: shopId ? `/shop/${shopId}/dashboard` : '/dashboard' },
@@ -106,6 +117,29 @@ const Layout = () => {
         const newPath = currentPath.replace(shopId, id);
         navigate(newPath);
     };
+
+    if (shopId && isLoginDisabled) {
+        return (
+            <div style={{ position: 'fixed', inset: 0, background: '#0F172A', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 10000, color: 'white', fontFamily: 'Inter, sans-serif', padding: '24px', textAlign: 'center' }}>
+                <div style={{ background: '#1E293B', padding: '40px', borderRadius: '24px', border: '1.5px dashed #EF4444', maxWidth: '500px', display: 'flex', flexDirection: 'column', gap: '20px', alignItems: 'center', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+                    <ShieldAlert size={64} color="#EF4444" />
+                    <h2 style={{ margin: 0, fontSize: '24px', fontWeight: '800' }}>Access Blocked</h2>
+                    <p style={{ color: '#94A3B8', fontSize: '14px', lineHeight: '1.6', margin: 0 }}>
+                        Access to this shop <strong>"{currentShop?.name}"</strong> has been disabled by the system administrator. Logins and sync operations are temporarily suspended.
+                    </p>
+                    <button 
+                        onClick={() => {
+                            localStorage.removeItem('token');
+                            window.location.href = '/login';
+                        }}
+                        style={{ padding: '12px 24px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer', marginTop: '10px' }}
+                    >
+                        Sign Out & Return to Login
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="premium-layout">
@@ -192,6 +226,33 @@ const Layout = () => {
 
             {/* Main Premium Canvas */}
             <main className="premium-canvas">
+                {shopId && currentShop && (
+                    <>
+                        {isSuspended && (
+                            <div style={{ background: '#FEF2F2', borderBottom: '1px solid #FCA5A5', color: '#991B1B', padding: '12px 20px', fontSize: '13px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', zIndex: 900 }}>
+                                <ShieldAlert size={16} />
+                                <span>Shop Suspended: Operations are currently restricted to read-only. Please contact administrator (A. Srujan).</span>
+                            </div>
+                        )}
+                        {!isSuspended && isExpired && (
+                            <div style={{ background: '#FEF2F2', borderBottom: '1px solid #FCA5A5', color: '#991B1B', padding: '12px 20px', fontSize: '13px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', zIndex: 900 }}>
+                                <AlertTriangle size={16} />
+                                <span>Subscription Expired: Your yearly subscription has expired. POS checkout and inventory edits are disabled. Please renew.</span>
+                            </div>
+                        )}
+                        {!isSuspended && !isExpired && remainingDays !== null && remainingDays <= 30 && (
+                            <div style={{ 
+                                background: remainingDays <= 7 ? '#FEF2F2' : '#FFFBEB', 
+                                borderBottom: remainingDays <= 7 ? '1px solid #FCA5A5' : '1px solid #FCD34D', 
+                                color: remainingDays <= 7 ? '#991B1B' : '#B55309', 
+                                padding: '12px 20px', fontSize: '13px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', zIndex: 900 
+                            }}>
+                                <AlertTriangle size={16} />
+                                <span>Subscription Warning: Your yearly subscription expires in {remainingDays} days. Please renew soon to avoid service disruption.</span>
+                            </div>
+                        )}
+                    </>
+                )}
                 <div className="canvas-content">
                     <Outlet />
                 </div>

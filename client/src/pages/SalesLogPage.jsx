@@ -86,6 +86,59 @@ const SalesLogPage = () => {
         return qtyMap;
     };
 
+    const getDynamicFinancials = (sale) => {
+        if (!sale) return { originalSale: 0, returnedAmount: 0, netSale: 0, netProfit: 0 };
+        const originalSale = sale.totalAmount || 0;
+        let returnedAmount = 0;
+        let netSale = originalSale;
+        let netProfit = sale.totalProfit || 0;
+
+        sales.forEach(tx => {
+            if (tx.originalSale === sale._id) {
+                if (tx.type === 'RETURN') {
+                    returnedAmount += tx.totalRefundAmount;
+                    netSale -= tx.totalRefundAmount;
+                    if (tx.totalProfit !== undefined && tx.totalProfit !== 0) {
+                        netProfit += tx.totalProfit;
+                    } else {
+                        let profitLoss = 0;
+                        (tx.items || []).forEach(item => {
+                            const saleItem = (sale.items || []).find(si => si.product === item.product);
+                            if (saleItem && saleItem.soldQtyBaseUnit > 0) {
+                                const profitPerBase = (saleItem.profit || 0) / saleItem.soldQtyBaseUnit;
+                                profitLoss += item.quantity * profitPerBase;
+                            }
+                        });
+                        netProfit -= profitLoss;
+                    }
+                } else if (tx.type === 'EXCHANGE') {
+                    returnedAmount += tx.totalReturnedValue;
+                    netSale += tx.balanceDifference;
+                    if (tx.totalProfit !== undefined && tx.totalProfit !== 0) {
+                        netProfit += tx.totalProfit;
+                    } else {
+                        let returnedProfit = 0;
+                        (tx.returnedItems || []).forEach(item => {
+                            const saleItem = (sale.items || []).find(si => si.product === item.product);
+                            if (saleItem && saleItem.soldQtyBaseUnit > 0) {
+                                const profitPerBase = (saleItem.profit || 0) / saleItem.soldQtyBaseUnit;
+                                returnedProfit += item.quantity * profitPerBase;
+                            }
+                        });
+                        netProfit -= returnedProfit;
+                    }
+                }
+            }
+        });
+
+        return {
+            originalSale,
+            returnedAmount,
+            netSale: Math.max(0, netSale),
+            netProfit
+        };
+    };
+
     const handleOpenReturnModal = (sale) => {
         const alreadyReturnedMap = getAlreadyReturnedQuantities(sale._id);
         const initialReturnQty = {};
@@ -570,13 +623,27 @@ const SalesLogPage = () => {
                                     </div>
                                 </div>
                                 <div className="sl-card-bot">
-                                    <div className="sl-card-meta">
+                                    <div className="sl-card-meta" style={{ flexWrap: 'wrap', gap: '8px', display: 'flex', alignItems: 'center' }}>
                                         <span>{new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                                         <span className="divider-dot">•</span>
                                         <span>Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                         <span className="divider-dot">•</span>
-                                        <span className={`sl-cp-pay-badge ${sale.paymentMethod.toLowerCase()}`}>{sale.paymentMethod}</span>
+                                        <span className={`sl-cp-pay-badge ${sale.paymentMethod?.toLowerCase() || 'cash'}`}>{sale.paymentMethod}</span>
+                                        {(sale.type === 'SALE' || !sale.type) && (
+                                            <>
+                                                <span className="divider-dot">•</span>
+                                                <span className={`status-badge-new ${(sale.paymentStatus || 'Paid').toLowerCase()}`} style={{ padding: '2px 6px', fontSize: '11px', borderRadius: '6px' }}>
+                                                    {sale.paymentStatus === 'Paid' ? '🟢 Paid' : sale.paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                                </span>
+                                            </>
+                                        )}
                                     </div>
+                                    {(sale.type === 'SALE' || !sale.type) && (
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', padding: '8px 12px', background: '#F8FAFC', borderRadius: '10px', fontSize: '12px', fontWeight: '700', color: '#475569' }}>
+                                            <span>Paid: ₹{(sale.paidAmount || sale.totalAmount || 0).toLocaleString()}</span>
+                                            <span>Due: ₹{(sale.remainingAmount || 0).toLocaleString()}</span>
+                                        </div>
+                                    )}
                                 </div>
                             </motion.div>
                         ))}
@@ -592,6 +659,7 @@ const SalesLogPage = () => {
                             <span className="rdch-stat">Total: <strong>₹{filteredSales.reduce((acc, s) => acc + (s.totalAmount || 0), 0).toLocaleString()}</strong></span>
                         </div>
                     </div>
+                    <div className="table-responsive-wrapper">
                     <table className="radical-desktop-table">
                         <thead>
                             <tr>
@@ -599,11 +667,13 @@ const SalesLogPage = () => {
                                 <th>Bill No</th>
                                 <th>Customer Name</th>
                                 <th>Date</th>
-                                <th style={{ width: '25%' }}>Items Summary</th>
-                                <th>Payment</th>
-                                <th style={{ textAlign: 'center' }}>History</th>
-                                <th style={{ textAlign: 'right' }}>Amount</th>
-                                <th style={{ textAlign: 'right' }}>Actions</th>
+                                <th style={{ width: '20%' }}>Items Summary</th>
+                                <th>Payment Mode</th>
+                                <th style={{ textAlign: 'center' }}>Status</th>
+                                <th style={{ textAlign: 'right' }}>Paid</th>
+                                <th style={{ textAlign: 'right' }}>Due</th>
+                                <th style={{ textAlign: 'right' }}>Final Amount</th>
+                                <th className="actions-col" style={{ textAlign: 'right' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -640,22 +710,34 @@ const SalesLogPage = () => {
                                             </div>
                                         </td>
                                         <td className="sld-method">
-                                            <span className={`method-badge ${sale.paymentMethod.toLowerCase()}`}>
-                                                {sale.paymentMethod.toUpperCase()}
+                                            <span className={`method-badge ${sale.paymentMethod?.toLowerCase() || 'cash'}`}>
+                                                {(sale.paymentMethod || 'CASH').toUpperCase()}
                                             </span>
                                         </td>
-                                        <td className="sld-prev" style={{ textAlign: 'center' }}>
-                                            <span className="history-count">{prevOrders} Orders</span>
+                                        <td className="sld-status" style={{ textAlign: 'center' }}>
+                                            {sale.type === 'SALE' || !sale.type ? (
+                                                <span className={`status-badge-new ${(sale.paymentStatus || 'Paid').toLowerCase()}`}>
+                                                    {sale.paymentStatus === 'Paid' ? '🟢 Paid' : sale.paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: '#94a3b8', fontSize: '13px', fontWeight: '600' }}>-</span>
+                                            )}
+                                        </td>
+                                        <td className="sld-paid" style={{ textAlign: 'right', fontWeight: '600', color: '#059669' }}>
+                                            {sale.type === 'SALE' || !sale.type ? `₹${(sale.paidAmount || sale.totalAmount || 0).toLocaleString()}` : '-'}
+                                        </td>
+                                        <td className="sld-due" style={{ textAlign: 'right', fontWeight: '600', color: (sale.remainingAmount > 0) ? '#D97706' : '#64748B' }}>
+                                            {sale.type === 'SALE' || !sale.type ? `₹${(sale.remainingAmount || 0).toLocaleString()}` : '-'}
                                         </td>
                                         <td className="sld-amt" style={{ textAlign: 'right', fontWeight: 'bold', color: sale.type === 'RETURN' ? '#DC2626' : sale.type === 'EXCHANGE' ? '#EA580C' : '#059669' }}>
                                             <div className="amt-val">
                                                 {sale.type === 'RETURN' ? '-' : ''}₹{Math.abs(sale.totalAmount || 0).toLocaleString()}
                                             </div>
                                         </td>
-                                        <td className="sld-actions" style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
-                                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                        <td className="sld-actions" onClick={(e) => e.stopPropagation()}>
+                                            <div className="sld-actions-container">
                                                 <button className="sl-btn-action view" onClick={() => handleViewBill(sale._id)}>View Bill</button>
-                                                {sale.type === 'SALE' && (
+                                                {(sale.type === 'SALE' || !sale.type) && (
                                                     <>
                                                         <button className="sl-btn-action return" onClick={() => handleOpenReturnModal(sale)}>Return</button>
                                                         <button className="sl-btn-action exchange" onClick={() => handleOpenExchangeModal(sale)}>Exchange</button>
@@ -668,6 +750,7 @@ const SalesLogPage = () => {
                             })}
                         </tbody>
                     </table>
+                    </div>
                 </div>
                 </>
             )}
@@ -852,34 +935,38 @@ const SalesLogPage = () => {
                                 <div className="radical-summary-section">
                                     {selectedSale.type === 'SALE' ? (
                                         (() => {
-                                            const alreadyReturnedMap = getAlreadyReturnedQuantities(selectedSale._id);
-                                            const effectiveSubtotal = (selectedSale.items || []).reduce((sum, item) => {
-                                                const soldQty = item.soldQtyEntered || item.quantity || 0;
-                                                const alreadyRet = alreadyReturnedMap[item.product] || 0;
-                                                const multiplier = item.multiplier || 1;
-                                                const returnedQty = parseFloat((alreadyRet / multiplier).toFixed(3));
-                                                const remainingQty = Math.max(0, parseFloat((soldQty - returnedQty).toFixed(3)));
-                                                const rate = item.pricePerBaseUnit || item.price || 0;
-                                                return sum + (remainingQty * rate);
-                                            }, 0);
-                                            const discount = selectedSale.discount || 0;
-                                            const effectiveGrandTotal = Math.max(0, effectiveSubtotal - discount);
-
+                                            const financials = getDynamicFinancials(selectedSale);
                                             return (
                                                 <>
                                                     <div className="rs-row">
-                                                        <span>Subtotal (Effective)</span>
-                                                        <span>₹{effectiveSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                        <span>Original Sale</span>
+                                                        <span>₹{financials.originalSale.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                                     </div>
-                                                    {discount > 0 && (
-                                                        <div className="rs-row discount">
-                                                            <span>Discount</span>
-                                                            <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                                        </div>
-                                                    )}
+                                                    <div className="rs-row" style={{ color: financials.returnedAmount > 0 ? '#b91c1c' : '#64748b' }}>
+                                                        <span>Returned Amount</span>
+                                                        <span>- ₹{financials.returnedAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                    </div>
                                                     <div className="rs-row grand">
-                                                        <span>Grand Total</span>
-                                                        <strong>₹{effectiveGrandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                                        <span>Net Sale</span>
+                                                        <strong>₹{financials.netSale.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                                    </div>
+                                                    <div className="rs-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
+                                                        <span>Net Profit</span>
+                                                        <strong style={{ color: financials.netProfit >= 0 ? '#10b981' : '#b91c1c' }}>₹{financials.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                                    </div>
+                                                    <div className="rs-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
+                                                        <span>Paid Amount</span>
+                                                        <span style={{ color: '#067647', fontWeight: 600 }}>₹{(selectedSale.paidAmount || selectedSale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    <div className="rs-row">
+                                                        <span>Due Amount</span>
+                                                        <span style={{ color: selectedSale.remainingAmount > 0 ? '#B45309' : '#64748B', fontWeight: 600 }}>₹{(selectedSale.remainingAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                    <div className="rs-row">
+                                                        <span>Payment Status</span>
+                                                        <span className={`status-badge-new ${(selectedSale.paymentStatus || 'Paid').toLowerCase()}`} style={{ padding: '2px 8px', fontSize: '11px', borderRadius: '6px' }}>
+                                                            {selectedSale.paymentStatus === 'Paid' ? '🟢 Paid' : selectedSale.paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                                        </span>
                                                     </div>
                                                 </>
                                             );
@@ -1125,8 +1212,11 @@ const SalesLogPage = () => {
                                             {(() => {
                                                 const effectiveSubtotal = (selectedSaleForInvoice.items || [])
                                                     .reduce((sum, item) => sum + ((item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity || 0) * (item.pricePerBaseUnit || item.price || 0)), 0);
-                                                const discount = selectedSaleForInvoice.discount || 0;
+                                                const discount = selectedSaleForInvoice.discount || selectedSaleForInvoice.discountAmount || 0;
                                                 const grandTotal = Math.max(0, effectiveSubtotal - discount);
+                                                const paidAmount = selectedSaleForInvoice.paidAmount !== undefined ? selectedSaleForInvoice.paidAmount : (selectedSaleForInvoice.paymentStatus === 'Paid' || !selectedSaleForInvoice.paymentStatus ? grandTotal : 0);
+                                                const remainingAmount = selectedSaleForInvoice.remainingAmount !== undefined ? selectedSaleForInvoice.remainingAmount : (selectedSaleForInvoice.paymentStatus === 'Unpaid' ? grandTotal : 0);
+                                                const paymentStatus = selectedSaleForInvoice.paymentStatus || 'Paid';
                                                 return (
                                                     <div className="pis-summary-v2">
                                                         <div className="pis-summary-box">
@@ -1143,6 +1233,20 @@ const SalesLogPage = () => {
                                                             <div className="pis-sum-row grand">
                                                                 <span>GRAND TOTAL:</span>
                                                                 <span>₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                            <div className="pis-sum-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
+                                                                <span>Paid Amount:</span>
+                                                                <span style={{ color: '#067647', fontWeight: 600 }}>₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                            <div className="pis-sum-row">
+                                                                <span>Due Amount:</span>
+                                                                <span style={{ color: remainingAmount > 0 ? '#B45309' : '#64748B', fontWeight: 600 }}>₹{remainingAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                            <div className="pis-sum-row">
+                                                                <span>Payment Status:</span>
+                                                                <span className={`status-badge-new ${paymentStatus.toLowerCase()}`} style={{ padding: '2px 8px', fontSize: '11px', borderRadius: '6px' }}>
+                                                                    {paymentStatus === 'Paid' ? '🟢 Paid' : paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                                                </span>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1443,8 +1547,13 @@ const SalesLogPage = () => {
                                 </div>
                                 <div className="sl-modal-footer-custom">
                                     <button type="button" className="sl-btn-action view" onClick={() => setShowReturnModal(false)} disabled={isReturnSubmitting}>Cancel</button>
-                                    <button type="submit" className="sl-btn-action return" style={{ color: 'white', background: '#EF4444' }} disabled={isReturnSubmitting}>
-                                        {isReturnSubmitting ? 'Processing Return...' : 'Confirm Return'}
+                                    <button type="submit" className="sl-btn-action return" style={{ color: 'white', background: '#EF4444', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }} disabled={isReturnSubmitting}>
+                                        {isReturnSubmitting ? (
+                                            <>
+                                                <div className="spinner-mini" style={{ width: '16px', height: '16px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }}></div>
+                                                <span>Processing Transaction...</span>
+                                            </>
+                                        ) : 'Confirm Return'}
                                     </button>
                                 </div>
                             </form>
@@ -1655,8 +1764,13 @@ const SalesLogPage = () => {
                                 </div>
                                 <div className="sl-modal-footer-custom">
                                     <button type="button" className="sl-btn-action view" onClick={() => setShowExchangeModal(false)} disabled={isExchangeSubmitting}>Cancel</button>
-                                    <button type="submit" className="sl-btn-action exchange" style={{ color: 'white', background: '#EA580C' }} disabled={isExchangeSubmitting}>
-                                        {isExchangeSubmitting ? 'Exchanging...' : 'Confirm Exchange'}
+                                    <button type="submit" className="sl-btn-action exchange" style={{ color: 'white', background: '#EA580C', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }} disabled={isExchangeSubmitting}>
+                                        {isExchangeSubmitting ? (
+                                            <>
+                                                <div className="spinner-mini" style={{ width: '16px', height: '16px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }}></div>
+                                                <span>Processing Transaction...</span>
+                                            </>
+                                        ) : 'Confirm Exchange'}
                                     </button>
                                 </div>
                             </form>
@@ -1708,6 +1822,16 @@ const SalesLogPage = () => {
             </AnimatePresence>
 
             <style jsx="true">{`
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+                .spinner-mini {
+                    animation: spin 0.6s linear infinite;
+                }
+                .status-badge-new { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+                .status-badge-new.paid { background: #ECFDF5; color: #067647; border: 1px solid #ABEFC6; }
+                .status-badge-new.partial { background: #FFFBEB; color: #B45309; border: 1px solid #FCD34D; }
+                .status-badge-new.unpaid { background: #FEF3F2; color: #B42318; border: 1px solid #FECDCA; }
                 .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
                 .radical-desktop-container { background: white; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0,0,0,0.05); overflow: hidden; margin-top: 24px; }
                 .rdc-header { padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
@@ -1719,6 +1843,27 @@ const SalesLogPage = () => {
                 .radical-desktop-table { width: 100%; border-collapse: collapse; }
                 .radical-desktop-table th { text-align: left; padding: 16px 24px; font-size: 12px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; background: #fafafa; }
                 .radical-desktop-table td { padding: 16px 24px; font-size: 14px; color: #1e293b; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
+                
+                .table-responsive-wrapper {
+                    overflow-x: auto;
+                    width: 100%;
+                    -webkit-overflow-scrolling: touch;
+                }
+                .radical-desktop-table th.actions-col,
+                .radical-desktop-table td.sld-actions {
+                    min-width: 250px;
+                    width: 250px;
+                    text-align: right;
+                    padding: 12px 24px;
+                }
+                .sld-actions-container {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 6px;
+                    justify-content: flex-end;
+                    align-items: center;
+                }
+
                 .sl-desktop-row { cursor: pointer; transition: all 0.2s; }
                 .sl-desktop-row:hover { background: #f8fafc; }
                 .bill-badge { background: #f1f5f9; color: #475569; font-weight: 700; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 13px; }
@@ -2281,7 +2426,7 @@ const SalesLogPage = () => {
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
-                    padding: 6px 12px;
+                    padding: 5px 10px;
                     border-radius: 8px;
                     font-size: 11px;
                     font-weight: 800;

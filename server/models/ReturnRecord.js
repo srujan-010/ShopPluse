@@ -48,6 +48,11 @@ const returnRecordSchema = new mongoose.Schema({
         enum: ['Cash', 'UPI', 'Khata']
     },
     reason: String,
+    totalProfit: {
+        type: Number,
+        required: true,
+        default: 0
+    },
     date: {
         type: Date,
         default: Date.now

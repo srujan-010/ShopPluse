@@ -152,20 +152,35 @@ export const invoiceService = {
         // --- Summary & Totals ---
         const summaryX = 130;
         doc.setFontSize(10);
+        
+        const discount = data.discount || data.discountAmount || 0;
+        const grandTotal = data.totalAmount || data.totalPrice || 0;
+        const subtotal = grandTotal + discount;
+        
+        let paidAmount = 0;
+        let dueAmount = 0;
+        let status = data.paymentStatus || 'Paid';
+        
+        if (type === 'PURCHASE') {
+            paidAmount = data.paidAmount !== undefined ? data.paidAmount : (status === 'Paid' ? grandTotal : 0);
+            dueAmount = data.dueAmount !== undefined ? data.dueAmount : 0;
+        } else {
+            paidAmount = data.paidAmount !== undefined ? data.paidAmount : (status === 'Paid' || !data.paymentStatus ? grandTotal : 0);
+            dueAmount = data.remainingAmount !== undefined ? data.remainingAmount : (status === 'Unpaid' ? grandTotal : 0);
+        }
+
         doc.setFont("helvetica", "normal");
         doc.setTextColor(...slateColor);
-        
         doc.text(`Subtotal:`, summaryX, currentY);
         doc.setTextColor(...textColor);
-        const grandTotal = data.totalAmount || data.totalPrice || 0;
-        doc.text(`Rs. ${(grandTotal + (data.discount || 0)).toLocaleString()}`, 190, currentY, { align: 'right' });
+        doc.text(`Rs. ${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 190, currentY, { align: 'right' });
         
-        if (data.discount > 0) {
+        if (discount > 0) {
             currentY += 7;
             doc.setTextColor(...slateColor);
             doc.text(`Discount:`, summaryX, currentY);
             doc.setTextColor(22, 163, 74);
-            doc.text(`- Rs. ${data.discount.toLocaleString()}`, 190, currentY, { align: 'right' });
+            doc.text(`- Rs. ${discount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 190, currentY, { align: 'right' });
         }
         
         currentY += 10;
@@ -175,7 +190,46 @@ export const invoiceService = {
         doc.setFontSize(11);
         doc.setTextColor(255, 255, 255);
         doc.text(`GRAND TOTAL:`, 130, currentY);
-        doc.text(`Rs. ${grandTotal.toLocaleString()}`, 185, currentY, { align: 'right' });
+        doc.text(`Rs. ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 185, currentY, { align: 'right' });
+
+        currentY += 10;
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...slateColor);
+        
+        // Paid Amount
+        doc.text(`Paid Amount:`, summaryX, currentY);
+        doc.setTextColor(6, 118, 71);
+        doc.setFont("helvetica", "bold");
+        doc.text(`Rs. ${paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 190, currentY, { align: 'right' });
+        
+        // Due Amount
+        currentY += 7;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...slateColor);
+        doc.text(`Due Amount:`, summaryX, currentY);
+        doc.setFont("helvetica", "bold");
+        if (dueAmount > 0) {
+            doc.setTextColor(180, 83, 9);
+        } else {
+            doc.setTextColor(...textColor);
+        }
+        doc.text(`Rs. ${dueAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 190, currentY, { align: 'right' });
+        
+        // Payment Status
+        currentY += 7;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...slateColor);
+        doc.text(`Payment Status:`, summaryX, currentY);
+        doc.setFont("helvetica", "bold");
+        if (status === 'Paid') {
+            doc.setTextColor(6, 118, 71);
+        } else if (status === 'Partial' || status === 'Partial Paid') {
+            doc.setTextColor(180, 83, 9);
+        } else {
+            doc.setTextColor(180, 35, 24);
+        }
+        doc.text(status.toUpperCase(), 190, currentY, { align: 'right' });
         
         // --- Footer ---
         currentY = 270; // Position at bottom of A4

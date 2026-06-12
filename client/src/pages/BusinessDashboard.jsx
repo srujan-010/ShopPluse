@@ -21,10 +21,12 @@ import { shopService, saleService } from '../services/api';
 import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Skeleton, EmptyState } from '../components/PremiumUI';
+import { useToast } from '../context/ToastContext';
 
 const BusinessDashboard = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { showToast } = useToast();
     const [shops, setShops] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -161,52 +163,100 @@ const BusinessDashboard = () => {
 
                 <div className="shops-vertical-list">
                     {filteredShops.length > 0 ? (
-                        filteredShops.map((shop, i) => (
-                            <motion.div 
-                                key={shop._id} 
-                                initial={{ opacity: 0, x: -10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: i * 0.05 }}
-                                className="shop-summary-card"
-                                onClick={() => navigate(`/shop/${shop._id}/dashboard`)}
-                            >
-                                <div className="ssc-top">
-                                    <div className="ssc-info">
-                                        <div className="ssc-icon">{shop.name.charAt(0)}</div>
-                                        <div className="ssc-text">
-                                            <h3>{shop.name}</h3>
-                                            <span className="ssc-loc"><MapPin size={12} /> {shop.location}</span>
+                        filteredShops.map((shop, i) => {
+                            const isYearly = shop.subscription?.planType === 'Yearly';
+                            const isExpired = isYearly && shop.subscription?.planEndDate && new Date() > new Date(shop.subscription.planEndDate);
+                            const isSuspended = shop.isSuspended;
+                            const isLoginDisabled = shop.isLoginDisabled;
+
+                            const remainingDays = isYearly && shop.subscription?.planEndDate
+                                ? Math.ceil((new Date(shop.subscription.planEndDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                                : null;
+
+                            let badgeText = 'Active';
+                            let badgeColor = '#00B26B';
+                            let badgeBg = '#F0FDF4';
+
+                            if (isLoginDisabled) {
+                                badgeText = 'Login Disabled';
+                                badgeColor = '#EF4444';
+                                badgeBg = '#FEF2F2';
+                            } else if (isSuspended) {
+                                badgeText = 'Suspended';
+                                badgeColor = '#EA580C';
+                                badgeBg = '#FFFBEB';
+                            } else if (shop.subscription?.planType === 'Lifetime') {
+                                badgeText = 'Lifetime Active ♾️';
+                                badgeColor = '#059669';
+                                badgeBg = '#ECFDF5';
+                            } else if (isExpired) {
+                                badgeText = 'Expired';
+                                badgeColor = '#DC2626';
+                                badgeBg = '#FEF2F2';
+                            } else if (remainingDays !== null && remainingDays <= 30) {
+                                badgeText = `Expiring Soon (${remainingDays}d)`;
+                                badgeColor = '#D97706';
+                                badgeBg = '#FFFBEB';
+                            }
+
+                            return (
+                                <motion.div 
+                                    key={shop._id} 
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className="shop-summary-card"
+                                    onClick={() => {
+                                        if (isLoginDisabled) {
+                                            showToast("Access blocked: Logins have been disabled for this shop by the administrator.", "error");
+                                            return;
+                                        }
+                                        navigate(`/shop/${shop._id}/dashboard`);
+                                    }}
+                                    style={{
+                                        opacity: isLoginDisabled ? 0.6 : 1,
+                                        cursor: isLoginDisabled ? 'not-allowed' : 'pointer',
+                                        borderLeft: isLoginDisabled ? '4px solid #EF4444' : isSuspended ? '4px solid #EA580C' : isExpired ? '4px solid #DC2626' : '4px solid transparent'
+                                    }}
+                                >
+                                    <div className="ssc-top">
+                                        <div className="ssc-info">
+                                            <div className="ssc-icon" style={{ background: isLoginDisabled ? '#E2E8F0' : '#F2F4F7' }}>{shop.name.charAt(0)}</div>
+                                            <div className="ssc-text">
+                                                <h3>{shop.name}</h3>
+                                                <span className="ssc-loc"><MapPin size={12} /> {shop.location}</span>
+                                            </div>
+                                        </div>
+                                        <div className="ssc-badge" style={{ color: badgeColor, backgroundColor: badgeBg }}>
+                                            <div className="badge-dot" style={{ backgroundColor: badgeColor }}></div>
+                                            {badgeText}
                                         </div>
                                     </div>
-                                    <div className="ssc-badge">
-                                        <div className="badge-dot"></div>
-                                        Active
+                                    <div className="ssc-metrics">
+                                        <div className="sscm-item">
+                                            <label>Today Sales</label>
+                                            <strong>₹{shop.stats?.todaySales?.toLocaleString() || 0}</strong>
+                                        </div>
+                                        <div className="sscm-item">
+                                            <label>Low Stock</label>
+                                            <strong style={{ color: shop.stats?.lowStockCount > 0 ? '#FF4D4F' : '#00B26B' }}>
+                                                {shop.stats?.lowStockCount || 0}
+                                            </strong>
+                                        </div>
+                                        <div className="sscm-item">
+                                            <label>Inventory</label>
+                                            <strong>{shop.stats?.productCount || 0} SKU</strong>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="ssc-metrics">
-                                    <div className="sscm-item">
-                                        <label>Today Sales</label>
-                                        <strong>₹{shop.stats?.todaySales?.toLocaleString() || 0}</strong>
+                                    <div className="ssc-footer">
+                                        <span className="last-sync"><Clock size={12} /> {isLoginDisabled ? 'Locked' : 'Just now'}</span>
+                                        <button className="ssc-enter-btn" disabled={isLoginDisabled} style={{ color: isLoginDisabled ? '#94A3B8' : '#1E6BFF', cursor: isLoginDisabled ? 'not-allowed' : 'pointer' }}>
+                                            Enter Shop <ChevronRight size={16} />
+                                        </button>
                                     </div>
-                                    <div className="sscm-item">
-                                        <label>Low Stock</label>
-                                        <strong style={{ color: shop.stats?.lowStockCount > 0 ? '#FF4D4F' : '#00B26B' }}>
-                                            {shop.stats?.lowStockCount || 0}
-                                        </strong>
-                                    </div>
-                                    <div className="sscm-item">
-                                        <label>Inventory</label>
-                                        <strong>{shop.stats?.productCount || 0} SKU</strong>
-                                    </div>
-                                </div>
-                                <div className="ssc-footer">
-                                    <span className="last-sync"><Clock size={12} /> Just now</span>
-                                    <button className="ssc-enter-btn">
-                                        Enter Shop <ChevronRight size={16} />
-                                    </button>
-                                </div>
-                            </motion.div>
-                        ))
+                                </motion.div>
+                            );
+                        })
                     ) : (
                         <EmptyState 
                             icon={Store}

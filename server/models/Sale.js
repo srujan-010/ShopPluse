@@ -39,6 +39,36 @@ const saleSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    discountType: {
+        type: String,
+        enum: ['flat', 'percentage', 'none'],
+        default: 'none'
+    },
+    discountValue: {
+        type: Number,
+        default: 0
+    },
+    discountAmount: {
+        type: Number,
+        default: 0
+    },
+    discount: {
+        type: Number,
+        default: 0
+    },
+    paidAmount: {
+        type: Number,
+        default: 0
+    },
+    remainingAmount: {
+        type: Number,
+        default: 0
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Paid', 'Partial', 'Unpaid'],
+        default: 'Paid'
+    },
     paymentMethod: {
         type: String,
         required: true,

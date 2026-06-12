@@ -19,10 +19,17 @@ exports.register = async (req, res, next) => {
             });
         }
 
+        let role = 'user';
+        const lowerEmail = email ? email.toLowerCase() : '';
+        if (lowerEmail === 'srujan@admin.com' || lowerEmail === 'srujan.shoppulse@gmail.com' || lowerEmail.includes('srujan-admin')) {
+            role = 'admin';
+        }
+
         const user = await User.create({
             name,
             email,
-            password
+            password,
+            role
         });
 
         sendTokenResponse(user, 201, res);
@@ -55,6 +62,13 @@ exports.login = async (req, res, next) => {
 
         if (!isMatch) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+
+        // Auto-promote if email matches Srujan's admin email
+        const lowerEmail = email ? email.toLowerCase() : '';
+        if ((lowerEmail === 'srujan@admin.com' || lowerEmail === 'srujan.shoppulse@gmail.com' || lowerEmail.includes('srujan-admin')) && user.role !== 'admin') {
+            user.role = 'admin';
+            await user.save();
         }
 
         sendTokenResponse(user, 200, res);
@@ -122,6 +136,13 @@ exports.googleLogin = async (req, res, next) => {
             if (uid && !user.googleId) { user.googleId = uid; updated = true; }
             if (photoURL && !user.avatar) { user.avatar = photoURL; updated = true; }
             
+            // Auto-promote if email matches Srujan's admin email
+            const lowerEmail = email ? email.toLowerCase() : '';
+            if ((lowerEmail === 'srujan@admin.com' || lowerEmail === 'srujan.shoppulse@gmail.com' || lowerEmail.includes('srujan-admin')) && user.role !== 'admin') {
+                user.role = 'admin';
+                updated = true;
+            }
+
             if (updated) {
                 console.log('Saving updated user details...');
                 await user.save();
@@ -133,10 +154,17 @@ exports.googleLogin = async (req, res, next) => {
         console.log('User not found, creating new Google user:', email);
         const randomPassword = crypto.randomBytes(20).toString('hex');
         
+        let role = 'user';
+        const lowerEmail = email ? email.toLowerCase() : '';
+        if (lowerEmail === 'srujan@admin.com' || lowerEmail === 'srujan.shoppulse@gmail.com' || lowerEmail.includes('srujan-admin')) {
+            role = 'admin';
+        }
+
         const userData = {
             name: name || 'Google User',
             email,
-            password: randomPassword
+            password: randomPassword,
+            role
         };
         
         if (uid) userData.googleId = uid;
@@ -153,5 +181,197 @@ exports.googleLogin = async (req, res, next) => {
             message: 'Server Error during Google Login',
             error: error.message 
         });
+    }
+};
+
+const fs = require('fs');
+const path = require('path');
+const DeviceLogs = require('../models/DeviceLogs');
+
+// @desc    Update user profile
+// @route   PUT /api/auth/profile
+// @access  Private
+exports.updateProfile = async (req, res, next) => {
+    try {
+        const { name, email, phone, avatar } = req.body;
+        const user = await User.findById(req.user.id);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Check if email is already taken by someone else
+        if (email && email !== user.email) {
+            const emailExists = await User.findOne({ email });
+            if (emailExists) {
+                return res.status(400).json({ success: false, message: 'Email already in use' });
+            }
+            user.email = email;
+        }
+
+        if (name) user.name = name;
+        if (phone !== undefined) user.phone = phone;
+
+        // Handle base64 avatar upload
+        if (avatar && avatar.startsWith('data:image')) {
+            const matches = avatar.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+            if (matches && matches.length === 3) {
+                const extension = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+                const imageBuffer = Buffer.from(matches[2], 'base64');
+                const tempDir = path.join(__dirname, '../public/temp');
+                if (!fs.existsSync(tempDir)) {
+                    fs.mkdirSync(tempDir, { recursive: true });
+                }
+                const filename = `avatar-${user._id}-${Date.now()}.${extension}`;
+                const filePath = path.join(tempDir, filename);
+                fs.writeFileSync(filePath, imageBuffer);
+                
+                const protocol = req.protocol;
+                const host = req.get('host');
+                user.avatar = `${protocol}://${host}/temp/${filename}`;
+            }
+        } else if (avatar) {
+            user.avatar = avatar;
+        }
+
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            data: user
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Change password
+// @route   PUT /api/auth/password
+// @access  Private
+exports.changePassword = async (req, res, next) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ success: false, message: 'Please provide current and new passwords' });
+        }
+
+        const user = await User.findById(req.user.id).select('+password');
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        // Check password
+        const isMatch = await user.matchPassword(currentPassword);
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+        }
+
+        user.password = newPassword;
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Password updated successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Get active device sessions
+// @route   GET /api/auth/sessions
+// @access  Private
+exports.getSessions = async (req, res, next) => {
+    try {
+        let sessions = await DeviceLogs.find({ user: req.user.id });
+
+        // If no sessions, auto-create one for the current device
+        if (sessions.length === 0) {
+            const userAgent = req.headers['user-agent'] || '';
+            let os = 'Unknown OS';
+            let browser = 'Unknown Browser';
+
+            if (userAgent.includes('Windows')) os = 'Windows';
+            else if (userAgent.includes('Macintosh')) os = 'macOS';
+            else if (userAgent.includes('Linux')) os = 'Linux';
+            else if (userAgent.includes('Android')) os = 'Android';
+            else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
+
+            if (userAgent.includes('Firefox')) browser = 'Firefox';
+            else if (userAgent.includes('Chrome')) browser = 'Chrome';
+            else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) browser = 'Safari';
+            else if (userAgent.includes('Edge')) browser = 'Edge';
+
+            const defaultSession = await DeviceLogs.create({
+                user: req.user.id,
+                deviceName: `${browser} on ${os}`,
+                browser,
+                os,
+                ipAddress: req.ip || req.connection.remoteAddress || '127.0.0.1',
+                appVersion: 'v2.4.0',
+                lastLogin: new Date(),
+                lastSync: new Date()
+            });
+            sessions = [defaultSession];
+        }
+
+        res.status(200).json({
+            success: true,
+            data: sessions
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Delete/Revoke device session
+// @route   DELETE /api/auth/sessions/:id
+// @access  Private
+exports.deleteSession = async (req, res, next) => {
+    try {
+        const session = await DeviceLogs.findById(req.params.id);
+
+        if (!session) {
+            return res.status(404).json({ success: false, message: 'Session not found' });
+        }
+
+        // Check ownership
+        if (session.user.toString() !== req.user.id) {
+            return res.status(401).json({ success: false, message: 'Not authorized' });
+        }
+
+        await DeviceLogs.findByIdAndDelete(req.params.id);
+
+        res.status(200).json({
+            success: true,
+            message: 'Session revoked successfully'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Delete/Revoke all other device sessions
+// @route   DELETE /api/auth/sessions
+// @access  Private
+exports.deleteAllSessions = async (req, res, next) => {
+    try {
+        // Option to keep current session if passed keepCurrentId in query
+        const keepId = req.query.keepCurrentId;
+        const query = { user: req.user.id };
+        if (keepId) {
+            query._id = { $ne: keepId };
+        }
+
+        await DeviceLogs.deleteMany(query);
+
+        res.status(200).json({
+            success: true,
+            message: 'All other sessions revoked successfully'
+        });
+    } catch (error) {
+        next(error);
     }
 };

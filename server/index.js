@@ -19,6 +19,10 @@ app.use(express.json());
 const { idempotency } = require('./middleware/idempotency');
 app.use(idempotency);
 
+// Shop Status Override Middleware (suspended/expired check)
+const shopStatus = require('./middleware/shopStatus');
+app.use(shopStatus);
+
 // Enable CORS
 app.use(cors({
     origin: [
@@ -50,6 +54,7 @@ const khata = require('./routes/khataRoutes');
 const purchases = require('./routes/purchaseRoutes');
 const invoices = require('./routes/invoiceRoutes');
 const govSales = require('./routes/govSaleRoutes');
+const admin = require('./routes/adminRoutes');
 const errorHandler = require('./middleware/errorMiddleware');
 
 // Mount routers
@@ -61,6 +66,7 @@ app.use('/api/khata', khata);
 app.use('/api/purchases', purchases);
 app.use('/api/invoices', invoices);
 app.use('/api/gov-sales', govSales);
+app.use('/api/admin', admin);
 
 // 404 handler for API routes
 app.use((req, res) => {

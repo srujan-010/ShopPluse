@@ -241,6 +241,15 @@ const InventoryPage = () => {
     };
 
     const handleOpenModal = async (product = null) => {
+        // Expiry & Suspension check
+        const isYearly = shop?.subscription?.planType === 'Yearly';
+        const isExpired = isYearly && shop?.subscription?.planEndDate && new Date() > new Date(shop?.subscription?.planEndDate);
+        const isSuspended = shop?.isSuspended;
+        if (isExpired || isSuspended) {
+            showToast(isSuspended ? 'Cannot modify inventory: Shop is suspended.' : 'Cannot modify inventory: Subscription expired.', 'error');
+            return;
+        }
+
         setRestockHistory([]);
         if (product) {
             setCurrentProduct(product);
@@ -302,6 +311,15 @@ const InventoryPage = () => {
     };
 
     const handleOpenRestockModal = (product = null) => {
+        // Expiry & Suspension check
+        const isYearly = shop?.subscription?.planType === 'Yearly';
+        const isExpired = isYearly && shop?.subscription?.planEndDate && new Date() > new Date(shop?.subscription?.planEndDate);
+        const isSuspended = shop?.isSuspended;
+        if (isExpired || isSuspended) {
+            showToast(isSuspended ? 'Cannot modify inventory: Shop is suspended.' : 'Cannot modify inventory: Subscription expired.', 'error');
+            return;
+        }
+
         if (product) {
             setCurrentProduct(product);
             setRestockData({
@@ -408,6 +426,15 @@ const InventoryPage = () => {
     };
 
     const handleDelete = async (id) => {
+        // Expiry & Suspension check
+        const isYearly = shop?.subscription?.planType === 'Yearly';
+        const isExpired = isYearly && shop?.subscription?.planEndDate && new Date() > new Date(shop?.subscription?.planEndDate);
+        const isSuspended = shop?.isSuspended;
+        if (isExpired || isSuspended) {
+            showToast(isSuspended ? 'Cannot modify inventory: Shop is suspended.' : 'Cannot modify inventory: Subscription expired.', 'error');
+            return;
+        }
+
         setDeleteConfirm({ open: true, id });
     };
 

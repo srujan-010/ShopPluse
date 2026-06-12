@@ -27,6 +27,19 @@ import GovSalesLogPage from './pages/GovSalesLogPage';
 import GovReportsPage from './pages/GovReportsPage';
 import StockLedgerPage from './pages/StockLedgerPage';
 
+// Admin Pages & Layouts
+import AdminRoute from './components/AdminRoute';
+import AdminLayout from './components/AdminLayout';
+import AdminOverview from './pages/admin/AdminOverview';
+import AdminShops from './pages/admin/AdminShops';
+import AdminActivityLog from './pages/admin/AdminActivityLog';
+import AdminAnalytics from './pages/admin/AdminAnalytics';
+import AdminCustomers from './pages/admin/AdminCustomers';
+import AdminSubscriptions from './pages/admin/AdminSubscriptions';
+import AdminSupport from './pages/admin/AdminSupport';
+import AdminSystemHealth from './pages/admin/AdminSystemHealth';
+import AdminLogin from './pages/admin/AdminLogin';
+
 import { InstallProvider } from './context/InstallContext';
 import { ToastProvider } from './context/ToastContext';
 
@@ -95,6 +108,23 @@ function App() {
                       <Route path="/shop/:shopId/gov-reports" element={<GovReportsPage />} />
                       
                       <Route path="/profile" element={<ProfilePage />} />
+                    </Route>
+                  </Route>
+
+                  {/* Admin Login Route (Public) */}
+                  <Route path="/admin/login" element={<AdminLogin />} />
+
+                  {/* Super Admin SaaS Routes */}
+                  <Route element={<AdminRoute />}>
+                    <Route element={<AdminLayout />}>
+                      <Route path="/admin" element={<AdminOverview />} />
+                      <Route path="/admin/shops" element={<AdminShops />} />
+                      <Route path="/admin/activity" element={<AdminActivityLog />} />
+                      <Route path="/admin/analytics" element={<AdminAnalytics />} />
+                      <Route path="/admin/customers" element={<AdminCustomers />} />
+                      <Route path="/admin/subscriptions" element={<AdminSubscriptions />} />
+                      <Route path="/admin/support" element={<AdminSupport />} />
+                      <Route path="/admin/system-health" element={<AdminSystemHealth />} />
                     </Route>
                   </Route>
     

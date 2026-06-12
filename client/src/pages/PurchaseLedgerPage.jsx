@@ -855,7 +855,14 @@ const PurchaseLedgerPage = () => {
                                         <strong>₹{purchaseForm.items.reduce((sum, i) => sum + i.itemTotal, 0).toLocaleString()}</strong>
                                     </div>
                                     <button type="submit" className="btn-save-purchase" disabled={isSaving}>
-                                        {isSaving ? 'Saving...' : 'Confirm & Add Entry'}
+                                        {isSaving ? (
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                <span className="spinner-mini"></span>
+                                                <span>Processing Transaction...</span>
+                                            </span>
+                                        ) : (
+                                            'Confirm & Add Entry'
+                                        )}
                                     </button>
                                 </div>
                             </form>
@@ -1092,6 +1099,15 @@ const PurchaseLedgerPage = () => {
                 .sl-loader { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; text-align: center; gap: 16px; background: white; border-radius: 24px; border: 1px dashed #CBD5E1; margin-top: 20px; }
                 .spinner { width: 40px; height: 40px; border: 4px solid #E2E8F0; border-top-color: #2563EB; border-radius: 50%; animation: spin 1s linear infinite; }
                 @keyframes spin { to { transform: rotate(360deg); } }
+                .spinner-mini {
+                    width: 14px;
+                    height: 14px;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                    border-radius: 50%;
+                    border-top-color: white;
+                    animation: spin 0.8s linear infinite;
+                    display: inline-block;
+                }
             `}</style>
             <MessageModal 
                 isOpen={alertConfig.open}
