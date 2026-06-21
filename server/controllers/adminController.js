@@ -220,16 +220,32 @@ exports.getShops = async (req, res, next) => {
         const shopDetailsList = [];
 
         const { start: todayStart, end: todayEnd } = getTodayRange();
+        
+        let start = todayStart;
+        let end = todayEnd;
+        
+        if (req.query.startDate) {
+            start = new Date(req.query.startDate);
+            if (req.query.startDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                start.setHours(0, 0, 0, 0);
+            }
+        }
+        if (req.query.endDate) {
+            end = new Date(req.query.endDate);
+            if (req.query.endDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                end.setHours(23, 59, 59, 999);
+            }
+        }
 
         for (const shop of shops) {
             // Find recent sale for active time
             const lastSale = await Sale.findOne({ shop: shop._id }).sort({ date: -1 });
             const lastActiveTime = lastSale ? lastSale.date : shop.createdAt;
 
-            // Today's billing stats
+            // Billing stats for the period
             const todaySales = await Sale.find({
                 shop: shop._id,
-                date: { $gte: todayStart, $lte: todayEnd }
+                date: { $gte: start, $lte: end }
             });
             const todayBillsCount = todaySales.length;
             const todayRevenue = todaySales.reduce((sum, s) => sum + (s.totalAmount || s.totalPrice || 0), 0);

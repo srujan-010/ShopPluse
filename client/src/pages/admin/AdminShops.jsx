@@ -27,6 +27,10 @@ const AdminShops = () => {
     const [planFilter, setPlanFilter] = useState('All');
     const [loading, setLoading] = useState(true);
     
+    const [dateRangeType, setDateRangeType] = useState('today');
+    const [customStartDate, setCustomStartDate] = useState('');
+    const [customEndDate, setCustomEndDate] = useState('');
+    
     // Details Drawer state
     const [selectedShop, setSelectedShop] = useState(null);
     const [shopDetails, setShopDetails] = useState(null);
@@ -53,7 +57,7 @@ const AdminShops = () => {
             showToast("Shop settings updated successfully!", "success");
             
             // Refresh
-            fetchShops();
+            triggerRefresh();
             fetchShopDetails(selectedShop._id);
         } catch (err) {
             showToast(err.response?.data?.message || "Failed to update shop status.", "error");
@@ -72,7 +76,7 @@ const AdminShops = () => {
             setDeleteConfirmPassword('');
             setDeleteConfirmText('');
             handleCloseDetails();
-            fetchShops();
+            triggerRefresh();
         } catch (err) {
             showToast(err.response?.data?.message || "Incorrect admin password or deletion failed.", "error");
         } finally {
@@ -80,16 +84,45 @@ const AdminShops = () => {
         }
     };
 
-    const fetchShops = async () => {
+    const fetchShops = async (startDate, endDate) => {
         try {
             setLoading(true);
-            const res = await api.get('/api/admin/shops');
+            let url = '/api/admin/shops';
+            const params = [];
+            if (startDate) params.push(`startDate=${startDate}`);
+            if (endDate) params.push(`endDate=${endDate}`);
+            if (params.length > 0) {
+                url += `?${params.join('&')}`;
+            }
+            const res = await api.get(url);
             setShops(res.data.data);
         } catch (e) {
             console.error("Failed to fetch shops:", e);
         } finally {
             setLoading(false);
         }
+    };
+
+    const triggerRefresh = () => {
+        let startStr = '';
+        let endStr = '';
+        if (dateRangeType === 'yesterday') {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yyyy = yesterday.getFullYear();
+            const mm = String(yesterday.getMonth() + 1).padStart(2, '0');
+            const dd = String(yesterday.getDate()).padStart(2, '0');
+            startStr = `${yyyy}-${mm}-${dd}`;
+            endStr = `${yyyy}-${mm}-${dd}`;
+        } else if (dateRangeType === 'custom') {
+            if (customStartDate && customEndDate) {
+                startStr = customStartDate;
+                endStr = customEndDate;
+            } else {
+                return;
+            }
+        }
+        fetchShops(startStr, endStr);
     };
 
     const fetchShopDetails = async (shopId) => {
@@ -106,8 +139,8 @@ const AdminShops = () => {
     };
 
     useEffect(() => {
-        fetchShops();
-    }, []);
+        triggerRefresh();
+    }, [dateRangeType, customStartDate, customEndDate]);
 
     const handleOpenDetails = (shop) => {
         setSelectedShop(shop);
@@ -130,13 +163,38 @@ const AdminShops = () => {
             setShowPlanEdit(false);
             
             // Refresh
-            fetchShops();
+            triggerRefresh();
             fetchShopDetails(selectedShop._id);
         } catch (err) {
             showToast("Failed to update subscription.", "error");
         } finally {
             setPlanSaving(false);
         }
+    };
+
+    const formatLastUsed = (lastBillingTime) => {
+        if (!lastBillingTime) return "Never used";
+        const date = new Date(lastBillingTime);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return "Just now";
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays === 1) return "Yesterday";
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    };
+
+    const getLastUsedStyle = (lastBillingTime) => {
+        if (!lastBillingTime) return { color: '#64748B', background: '#F1F5F9' };
+        const diffDays = Math.floor((new Date() - new Date(lastBillingTime)) / 86400000);
+        if (diffDays < 1) return { color: '#0369A1', background: '#E0F2FE' };
+        if (diffDays < 7) return { color: '#B45309', background: '#FEF3C7' };
+        return { color: '#4B5563', background: '#F3F4F6' };
     };
 
     const filteredShops = shops.filter(shop => {
@@ -171,7 +229,7 @@ const AdminShops = () => {
                     />
                 </div>
                 
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                     <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="filter-select">
                         <option value="All">All Statuses</option>
                         <option value="Active">Active</option>
@@ -186,6 +244,30 @@ const AdminShops = () => {
                         <option value="Yearly">Yearly</option>
                         <option value="Lifetime">Lifetime</option>
                     </select>
+
+                    <select value={dateRangeType} onChange={e => setDateRangeType(e.target.value)} className="filter-select">
+                        <option value="today">Today's Activity</option>
+                        <option value="yesterday">Yesterday's Activity</option>
+                        <option value="custom">Custom Date Range</option>
+                    </select>
+                    
+                    {dateRangeType === 'custom' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#F8FAFC', padding: '4px 10px', borderRadius: '10px', border: '1.5px solid #E2E8F0', height: '44px', boxSizing: 'border-box' }}>
+                            <input 
+                                type="date" 
+                                value={customStartDate} 
+                                onChange={e => setCustomStartDate(e.target.value)} 
+                                style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '13px', fontWeight: '700', color: '#475569' }} 
+                            />
+                            <span style={{ fontSize: '12px', color: '#94A3B8', fontWeight: '800' }}>to</span>
+                            <input 
+                                type="date" 
+                                value={customEndDate} 
+                                onChange={e => setCustomEndDate(e.target.value)} 
+                                style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '13px', fontWeight: '700', color: '#475569' }} 
+                            />
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -197,7 +279,9 @@ const AdminShops = () => {
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Shop details</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Owner / Contact</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Plan</th>
-                            <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Today's Activity</th>
+                            <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>
+                                {dateRangeType === 'today' ? "Today's Activity" : dateRangeType === 'yesterday' ? "Yesterday's Activity" : "Selected Period Activity"}
+                            </th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Sync</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Status</th>
                         </tr>
@@ -214,6 +298,19 @@ const AdminShops = () => {
                                     <strong style={{ fontSize: '15px', color: '#0F172A', display: 'block' }}>{shop.name}</strong>
                                     <span style={{ fontSize: '12px', color: '#64748B', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                                         <MapPin size={12} /> {shop.location} • {shop.shopType}
+                                    </span>
+                                    <span style={{ 
+                                        fontSize: '11px', 
+                                        ...getLastUsedStyle(shop.lastBillingTime),
+                                        padding: '2px 8px', 
+                                        borderRadius: '6px', 
+                                        display: 'inline-flex', 
+                                        alignItems: 'center', 
+                                        gap: '4px', 
+                                        marginTop: '6px', 
+                                        fontWeight: '800' 
+                                    }}>
+                                        <Clock size={10} /> Last Used: {formatLastUsed(shop.lastBillingTime)}
                                     </span>
                                 </td>
                                 <td style={{ padding: '18px 24px' }}>
