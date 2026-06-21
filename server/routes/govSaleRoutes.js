@@ -4,13 +4,15 @@ const { protect } = require('../middleware/auth');
 const { 
     getGovSales, 
     getGovStats, 
-    getGovSaleById 
+    getGovSaleById,
+    createGovSale
 } = require('../controllers/govSaleController');
 
 router.use(protect);
 
 router.route('/')
-    .get(getGovSales);
+    .get(getGovSales)
+    .post(createGovSale);
 
 router.route('/stats')
     .get(getGovStats);

@@ -29,7 +29,7 @@ import {
     ChevronRight
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { productService, saleService, shopService, khataService } from '../services/api';
+import { productService, saleService, shopService, khataService, govSaleService } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader, SearchableSelect, MessageModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -53,6 +53,8 @@ const POSPage = () => {
     const [paymentMethod, setPaymentMethod] = useState('Cash');
     const [customerName, setCustomerName] = useState('');
     const [customerMobile, setCustomerMobile] = useState('');
+    const [customerAadhaar, setCustomerAadhaar] = useState('');
+    const [isInspectionCopy, setIsInspectionCopy] = useState(true);
     const [khataCustomers, setKhataCustomers] = useState([]);
     const [orderSuccess, setOrderSuccess] = useState(false);
     const [lastCreatedSale, setLastCreatedSale] = useState(null);
@@ -284,6 +286,27 @@ const POSPage = () => {
             showToast('Discount cannot exceed subtotal.', 'warning');
             return;
         }
+
+        if (shop?.type === 'Fertilizers') {
+            if (customerAadhaar.trim() && !/^\d{12}$/.test(customerAadhaar.trim())) {
+                showToast('Aadhaar Card number must be exactly 12 digits.', 'warning');
+                return;
+            }
+
+            for (const item of cart) {
+                const product = products.find(p => p._id === item.product);
+                if (product) {
+                    const govPrice = product.governmentPrice;
+                    if (govPrice !== undefined && govPrice !== null) {
+                        const rateCharged = item.price / (item.multiplier || 1);
+                        if (rateCharged > govPrice) {
+                            showToast(`Price for ${item.productName} (₹${rateCharged}) exceeds the government price ceiling of ₹${govPrice}.`, 'warning');
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         
         let reqPaidAmount = finalAmount;
         let reqRemainingAmount = 0;
@@ -312,20 +335,44 @@ const POSPage = () => {
 
         setIsCheckingOut(true);
         try {
-            const res = await saleService.create({
-                shop: shopId,
-                items: cart,
-                paymentMethod,
-                customerName,
-                customerMobile,
-                discountType,
-                discountValue: Number(discountValue) || 0,
-                discountAmount,
-                paidAmount: reqPaidAmount,
-                remainingAmount: reqRemainingAmount,
-                paymentStatus: reqPaymentStatus,
-                date: new Date()
-            });
+            const res = shop?.type === 'Fertilizers'
+                ? await govSaleService.create({
+                    shop: shopId,
+                    customerName: customerName || 'Walk-in Customer',
+                    customerMobile: customerMobile || '',
+                    customerAadhaar: customerAadhaar || '',
+                    items: cart.map(item => {
+                        const productObj = products.find(p => p._id === item.product);
+                        const rateCharged = item.price / (item.multiplier || 1);
+                        return {
+                            product: item.product,
+                            productName: item.productName,
+                            soldQtyEntered: item.quantity,
+                            soldUnit: item.unit,
+                            pricePerBaseUnit: rateCharged,
+                            governmentPrice: productObj?.governmentPrice || rateCharged,
+                            totalPrice: item.price * item.quantity
+                        };
+                    }),
+                    totalAmount: finalAmount,
+                    paymentMethod,
+                    isInspectionCopy,
+                    date: new Date()
+                })
+                : await saleService.create({
+                    shop: shopId,
+                    items: cart,
+                    paymentMethod,
+                    customerName,
+                    customerMobile,
+                    discountType,
+                    discountValue: Number(discountValue) || 0,
+                    discountAmount,
+                    paidAmount: reqPaidAmount,
+                    remainingAmount: reqRemainingAmount,
+                    paymentStatus: reqPaymentStatus,
+                    date: new Date()
+                });
             setLastCreatedSale(res.data.data);
             setOrderSuccess(true);
             setCart([]);
@@ -335,6 +382,7 @@ const POSPage = () => {
             setDiscountType('none');
             setDiscountValue('');
             setPaidAmount('');
+            setCustomerAadhaar('');
 
             fetchData();
             showToast('Sale created successfully!', 'success');
@@ -712,6 +760,34 @@ const POSPage = () => {
                                             </div>
                                         </div>
                                     )}
+                                    {shop?.type === 'Fertilizers' && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                                            <div className="cust-input-v2">
+                                                <FileText size={18} color="#98A2B3" />
+                                                <input 
+                                                    type="text"
+                                                    maxLength={12}
+                                                    value={customerAadhaar} 
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (/^\d*$/.test(val)) {
+                                                            setCustomerAadhaar(val);
+                                                        }
+                                                    }} 
+                                                    placeholder="Aadhaar Card Number (12 digits)" 
+                                                />
+                                            </div>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', fontWeight: '700', color: '#334155', cursor: 'pointer', marginTop: '4px' }}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={isInspectionCopy} 
+                                                    onChange={(e) => setIsInspectionCopy(e.target.checked)}
+                                                    style={{ width: '18px', height: '18px', accentColor: '#071B44', cursor: 'pointer' }}
+                                                />
+                                                <span>Inspection Copy</span>
+                                            </label>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* KHATA PAYMENT SECTION */}
@@ -857,20 +933,20 @@ const POSPage = () => {
                                 <button 
                                     className="ips-btn ips-wa" 
                                     style={{ flex: 1, background: '#25D366', color: 'white', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.shareInvoice(lastCreatedSale, shop, 'SALE')}
+                                    onClick={() => lastCreatedSale && invoiceService.shareInvoice(lastCreatedSale, shop, shop?.type === 'Fertilizers' ? 'GOV_SALE' : 'SALE')}
                                 >
                                     Share
                                 </button>
                                 <button 
                                     className="ips-btn ips-pdf" 
                                     style={{ flex: 1, background: '#F2F4F7', color: '#101828', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, 'SALE')}
+                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, shop?.type === 'Fertilizers' ? 'GOV_SALE' : 'SALE')}
                                 >
                                     PDF
                                 </button>
                             </div>
 
-                            <button className="btn-s-done-v2" onClick={() => { setOrderSuccess(false); setLastCreatedSale(null); setIsAddingNewKhata(false); setCustomerName(''); setCustomerMobile(''); }}>New Sale</button>
+                            <button className="btn-s-done-v2" onClick={() => { setOrderSuccess(false); setLastCreatedSale(null); setIsAddingNewKhata(false); setCustomerName(''); setCustomerMobile(''); setCustomerAadhaar(''); }}>New Sale</button>
                         </motion.div>
                     </div>
                 )}

@@ -123,10 +123,10 @@ exports.getDashboardStats = async (req, res, next) => {
         const activeShopsCount = await Sale.distinct('shop', { date: { $gte: thirtyDaysAgo } });
         const activeShops = activeShopsCount.length;
 
-        const totalBills = await Sale.countDocuments({ type: 'SALE' });
+        const totalBills = await Sale.countDocuments();
         
         // Revenue
-        const sales = await Sale.find({ type: 'SALE' });
+        const sales = await Sale.find();
         const totalRevenue = sales.reduce((sum, s) => sum + (s.totalAmount || s.totalPrice || 0), 0);
 
         // Khata Due
@@ -138,7 +138,6 @@ exports.getDashboardStats = async (req, res, next) => {
         // Today's stats
         const { start: todayStart, end: todayEnd } = getTodayRange();
         const todaySales = await Sale.find({ 
-            type: 'SALE',
             date: { $gte: todayStart, $lte: todayEnd }
         });
         const todaySalesValue = todaySales.reduce((sum, s) => sum + (s.totalAmount || s.totalPrice || 0), 0);
@@ -155,11 +154,9 @@ exports.getDashboardStats = async (req, res, next) => {
         const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
 
         const thisMonthSales = await Sale.find({
-            type: 'SALE',
             date: { $gte: startOfThisMonth }
         });
         const lastMonthSales = await Sale.find({
-            type: 'SALE',
             date: { $gte: startOfLastMonth, $lte: endOfLastMonth }
         });
 
@@ -232,7 +229,6 @@ exports.getShops = async (req, res, next) => {
             // Today's billing stats
             const todaySales = await Sale.find({
                 shop: shop._id,
-                type: 'SALE',
                 date: { $gte: todayStart, $lte: todayEnd }
             });
             const todayBillsCount = todaySales.length;
@@ -277,9 +273,9 @@ exports.getShops = async (req, res, next) => {
             }
 
             // Calculate lifetime billing count & revenue generated
-            const billingCount = await Sale.countDocuments({ shop: shop._id, type: 'SALE' });
+            const billingCount = await Sale.countDocuments({ shop: shop._id });
             const revenueAgg = await Sale.aggregate([
-                { $match: { shop: shop._id, type: 'SALE' } },
+                { $match: { shop: shop._id } },
                 { $group: { _id: null, total: { $sum: '$totalAmount' } } }
             ]);
             const revenueGenerated = revenueAgg[0]?.total || 0;
@@ -330,7 +326,7 @@ exports.getShopDetails = async (req, res, next) => {
         }
 
         // Subtotal / revenue
-        const sales = await Sale.find({ shop: shop._id, type: 'SALE' });
+        const sales = await Sale.find({ shop: shop._id });
         const totalSalesValue = sales.reduce((sum, s) => sum + (s.totalAmount || s.totalPrice || 0), 0);
         const khataDue = sales.reduce((sum, s) => sum + (s.remainingAmount || 0), 0);
         
@@ -428,7 +424,7 @@ exports.getShopDetails = async (req, res, next) => {
 // @access  Private/Admin
 exports.getCustomers = async (req, res, next) => {
     try {
-        const sales = await Sale.find({ type: 'SALE' }).populate('shop', 'name');
+        const sales = await Sale.find().populate('shop', 'name');
         
         // Group by customer phone/mobile or name
         const customerMap = {};
@@ -561,9 +557,9 @@ exports.getSubscriptions = async (req, res, next) => {
                 const lastSale = await Sale.findOne({ shop: sub.shop._id }).sort({ date: -1 });
                 if (lastSale) lastActiveTime = lastSale.date;
 
-                billingCount = await Sale.countDocuments({ shop: sub.shop._id, type: 'SALE' });
+                billingCount = await Sale.countDocuments({ shop: sub.shop._id });
                 const revenueAgg = await Sale.aggregate([
-                    { $match: { shop: sub.shop._id, type: 'SALE' } },
+                    { $match: { shop: sub.shop._id } },
                     { $group: { _id: null, total: { $sum: '$totalAmount' } } }
                 ]);
                 revenueGenerated = revenueAgg[0]?.total || 0;

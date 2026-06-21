@@ -344,6 +344,70 @@ api.interceptors.response.use(
                         }
                     }
 
+                    else if (url.includes('/api/gov-sales')) {
+                        if (method === 'post') {
+                            parsedData.invoiceNumber = parsedData.invoiceNumber || `GOV-TEMP-${Math.floor(100000 + Math.random() * 900000)}`;
+                            const newGovSale = {
+                                ...parsedData,
+                                _id: tempId,
+                                date: parsedData.date || new Date().toISOString(),
+                                updatedAt: new Date().toISOString()
+                            };
+
+                            // Process stock deduction for government items
+                            if (parsedData.items && Array.isArray(parsedData.items)) {
+                                for (const item of parsedData.items) {
+                                    const product = await offlineDB.getProduct(item.product);
+                                    if (product) {
+                                        const prevStock = product.quantity || 0;
+                                        
+                                        // Unit conversion
+                                        const getConversionMultiplier = (fromUnit, toUnit) => {
+                                            if (!fromUnit || !toUnit) return 1;
+                                            if (fromUnit.toLowerCase() === toUnit.toLowerCase()) return 1;
+                                            const key = `${fromUnit.toLowerCase()}-${toUnit.toLowerCase()}`;
+                                            const table = {
+                                                'gram-kg': 0.001,
+                                                'kg-gram': 1000,
+                                                'ml-liter': 0.001,
+                                                'liter-ml': 1000,
+                                                'piece-dozen': 1/12,
+                                                'dozen-piece': 12
+                                            };
+                                            return table[key] || 1;
+                                        };
+                                        const multiplier = getConversionMultiplier(item.soldUnit || item.unit, product.unit) || 1;
+                                        const soldQtyBaseUnit = item.soldQtyEntered * multiplier;
+
+                                        product.quantity = Math.max(0, parseFloat((prevStock - soldQtyBaseUnit).toFixed(3)));
+                                        product.updatedAt = new Date().toISOString();
+                                        await offlineDB.saveProduct(product);
+
+                                        // Log inventory history
+                                        await offlineDB.saveInventoryHistory({
+                                            _id: 'temp_hist_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                                            productId: product._id,
+                                            productName: product.name,
+                                            actionType: 'STOCK_SOLD',
+                                            quantity: soldQtyBaseUnit,
+                                            unit: product.unit || 'Piece',
+                                            previousStock: prevStock,
+                                            newStock: product.quantity,
+                                            referenceId: newGovSale.invoiceNumber,
+                                            notes: `Sold via Government POS offline`,
+                                            shop: parsedData.shop,
+                                            createdAt: new Date().toISOString()
+                                        });
+                                    }
+                                }
+                            }
+
+                            // Save gov sale locally
+                            await offlineDB.saveGovSale(newGovSale);
+                            mockResponseData.data = newGovSale;
+                        }
+                    }
+
                     // 4. KHATA MUTATIONS
                     else if (url.includes('/api/khata')) {
                         if (url.includes('/sale')) {
@@ -394,13 +458,14 @@ api.interceptors.response.use(
                         }
                     }
 
-                    // 5. PURCHASES MUTATIONS
                     else if (url.includes('/api/purchases')) {
                         if (method === 'post') {
+                            parsedData.billNo = parsedData.billNo || `BILL-TEMP-${Math.floor(100000 + Math.random() * 900000)}`;
                             const newPurchase = {
                                 ...parsedData,
                                 _id: tempId,
-                                purchaseDate: parsedData.purchaseDate || new Date().toISOString(),
+                                date: parsedData.date || new Date().toISOString(),
+                                purchaseDate: parsedData.purchaseDate || parsedData.date || new Date().toISOString(),
                                 updatedAt: new Date().toISOString()
                             };
 
@@ -832,6 +897,14 @@ export const govSaleService = {
             console.warn('govSaleService.getStats failed, using IndexedDB fallback:', err);
             const cached = await offlineDB.getQueryCache(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`);
             return { data: cached || { success: true, data: {} }, status: 200, fromCache: true };
+        }
+    },
+    create: async (data) => {
+        try {
+            return await api.post('/api/gov-sales', data);
+        } catch (err) {
+            console.error('govSaleService.create failed:', err);
+            throw err;
         }
     }
 };

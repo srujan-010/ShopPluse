@@ -28,6 +28,7 @@ const GovSalesLogPage = () => {
     // View Bill State
     const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
     const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
+    const [isInspectionCopy, setIsInspectionCopy] = useState(true);
     
     // Filters & Pagination
     const [searchParams] = useSearchParams();
@@ -105,17 +106,18 @@ const GovSalesLogPage = () => {
     const handleViewBill = (sale) => {
         if (!sale) return;
         setSelectedSaleForInvoice(sale);
+        setIsInspectionCopy(sale.isInspectionCopy !== undefined ? sale.isInspectionCopy : true);
         setIsInvoiceOpen(true);
     };
 
     const handleDownloadPDF = (sale) => {
         if (!sale) return;
-        invoiceService.downloadInvoice(sale, shop, 'GOV_SALE');
+        invoiceService.downloadInvoice(sale, shop, 'GOV_SALE', { isInspectionCopy });
     };
 
     const handleShareWhatsApp = (sale) => {
         if (!sale) return;
-        invoiceService.shareInvoice(sale, shop, 'GOV_SALE');
+        invoiceService.shareInvoice(sale, shop, 'GOV_SALE', { isInspectionCopy });
     };
 
     const filteredSales = sales.filter(sale => {
@@ -150,9 +152,21 @@ const GovSalesLogPage = () => {
             matchesPeriod = true;
         }
 
+        const isQueryValidAadhaar = searchQuery.toLowerCase() === 'valid';
+        const isQueryInvalidAadhaar = searchQuery.toLowerCase() === 'invalid';
+        
+        let matchesAadhaarStatus = false;
+        if (isQueryValidAadhaar) {
+            matchesAadhaarStatus = sale.customerAadhaar && /^\d{12}$/.test(sale.customerAadhaar.trim());
+        } else if (isQueryInvalidAadhaar) {
+            matchesAadhaarStatus = sale.customerAadhaar && !/^\d{12}$/.test(sale.customerAadhaar.trim());
+        }
+
         const matchesSearch = searchQuery === '' || 
             (sale.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase());
+            (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (sale.customerAadhaar || '').includes(searchQuery) ||
+            matchesAadhaarStatus;
 
         const matchesPayment = paymentFilter === 'All' || 
             (sale.paymentMethod && sale.paymentMethod.toLowerCase() === paymentFilter.toLowerCase());
@@ -488,13 +502,19 @@ const GovSalesLogPage = () => {
                             </div>
                             
                             <div className="gsl-im-body">
+                                {isInspectionCopy && (
+                                    <div className="gov-watermark-overlay">
+                                        OFFICIAL INSPECTION COPY
+                                    </div>
+                                )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
                                     <div>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Customer</div>
                                         <div style={{ fontWeight: 700, fontSize: '16px', color: '#101828' }}>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</div>
                                         {selectedSaleForInvoice.customerMobile && <div style={{ color: '#667085' }}>{selectedSaleForInvoice.customerMobile}</div>}
+                                        {selectedSaleForInvoice.customerAadhaar && <div style={{ color: '#047857', fontWeight: 'bold', fontSize: '13px', marginTop: '4px' }}>Aadhaar: {selectedSaleForInvoice.customerAadhaar}</div>}
                                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                                    <div style={{ textAlign: 'right' }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Date & Time</div>
                                         <div style={{ fontWeight: 600, color: '#101828' }}>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</div>
                                         <div style={{ color: '#667085' }}>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -542,19 +562,34 @@ const GovSalesLogPage = () => {
                                 </div>
                             </div>
                             
-                            <div className="gsl-im-footer">
-                                <button 
-                                    className="gsl-print-btn"
-                                    onClick={() => handleDownloadPDF(selectedSaleForInvoice)}
-                                >
-                                    Print Government Copy
-                                </button>
-                                <button 
-                                    className="gsl-wa-btn"
-                                    onClick={() => handleShareWhatsApp(selectedSaleForInvoice)}
-                                >
-                                    <MessageSquare size={18} /> Download / Share PDF
-                                </button>
+                            <div className="gsl-im-footer" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', borderBottom: '1px solid #E4E7EC', paddingBottom: '12px' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: 700, color: '#344054' }}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={isInspectionCopy} 
+                                            onChange={(e) => setIsInspectionCopy(e.target.checked)}
+                                            style={{ width: '18px', height: '18px', accentColor: '#059669', cursor: 'pointer' }}
+                                        />
+                                        <span>Apply Official Inspection Watermark</span>
+                                    </label>
+                                </div>
+                                <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
+                                    <button 
+                                        className="gsl-print-btn"
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleDownloadPDF(selectedSaleForInvoice)}
+                                    >
+                                        Print Government Copy
+                                    </button>
+                                    <button 
+                                        className="gsl-wa-btn"
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleShareWhatsApp(selectedSaleForInvoice)}
+                                    >
+                                        <MessageSquare size={18} /> Download / Share PDF
+                                    </button>
+                                </div>
                             </div>
                         </motion.div>
                     </motion.div>
@@ -1197,7 +1232,24 @@ const GovSalesLogPage = () => {
                 .gsl-im-header { padding: 20px 24px; border-bottom: 1px solid #E4E7EC; display: flex; justify-content: space-between; align-items: center; background: #ECFDF5; }
                 .gsl-close-btn { background: transparent; border: none; cursor: pointer; color: #047857; width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
                 .gsl-close-btn:hover { background: #D1FAE5; }
-                .gsl-im-body { padding: 24px; overflow-y: auto; flex: 1; }
+                .gsl-im-body { position: relative; padding: 24px; overflow-y: auto; flex: 1; }
+                .gov-watermark-overlay {
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%) rotate(-30deg);
+                    font-size: 32px;
+                    font-weight: 900;
+                    color: rgba(239, 68, 68, 0.12); /* Semi-transparent light red */
+                    border: 4px solid rgba(239, 68, 68, 0.12);
+                    padding: 10px 20px;
+                    text-transform: uppercase;
+                    pointer-events: none;
+                    white-space: nowrap;
+                    z-index: 10;
+                    user-select: none;
+                    letter-spacing: 2px;
+                }
                 .gsl-im-footer { padding: 20px 24px; border-top: 1px solid #E4E7EC; display: flex; gap: 16px; background: #F9FAFB; }
                 
                 .gsl-print-btn { flex: 1; padding: 12px; background: white; border: 1px solid #D0D5DD; border-radius: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; color: #344054; transition: 0.2s; }

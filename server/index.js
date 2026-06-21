@@ -28,6 +28,9 @@ app.use(cors({
     origin: [
         'http://localhost:5173',
         'https://shoppluse.onrender.com',
+        'https://shoppluse.co.in',
+        /^http:\/\/localhost(:\d+)?$/, // Allows any localhost port for Flutter Web debugging
+        /^http:\/\/127\.0\.0\.1(:\d+)?$/, // Allows any 127.0.0.1 port for Flutter Web debugging
         /\.netlify\.app$/, // Matches any netlify sub-domain
         /\.ngrok-free\.dev$/ // Matches ngrok domains
     ],

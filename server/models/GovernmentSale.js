@@ -13,6 +13,7 @@ const governmentSaleSchema = new mongoose.Schema({
     invoiceNumber: String,
     customerName: String,
     customerMobile: String,
+    customerAadhaar: String,
     items: [{
         product: {
             type: mongoose.Schema.ObjectId,

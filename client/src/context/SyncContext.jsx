@@ -123,6 +123,29 @@ export const SyncProvider = ({ children }) => {
                     await db.purchases.put(pur);
                 }
             }
+
+            // Government Sales
+            const governmentSales = await db.governmentSales.toArray();
+            for (const gSale of governmentSales) {
+                let changed = false;
+                if (gSale.items) {
+                    gSale.items = gSale.items.map(item => {
+                        if (item.product === tempId) {
+                            item.product = realId;
+                            changed = true;
+                        }
+                        return item;
+                    });
+                }
+                if (gSale._id === tempId) {
+                    await db.governmentSales.delete(tempId);
+                    gSale._id = realId;
+                    changed = true;
+                }
+                if (changed) {
+                    await db.governmentSales.put(gSale);
+                }
+            }
         } catch (e) {
             console.error('Error remapping offline IDs:', e);
         }
@@ -261,6 +284,14 @@ export const SyncProvider = ({ children }) => {
                         } else if (item.url.includes('/api/sales') && item.method.toLowerCase() === 'post') {
                             const sales = await db.sales.toArray();
                             const found = sales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
+                            if (found) tempId = found._id;
+                        } else if (item.url.includes('/api/gov-sales') && item.method.toLowerCase() === 'post') {
+                            const govSales = await db.governmentSales.toArray();
+                            const found = govSales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
+                            if (found) tempId = found._id;
+                        } else if (item.url.includes('/api/purchases') && item.method.toLowerCase() === 'post') {
+                            const purchases = await db.purchases.toArray();
+                            const found = purchases.find(p => p.billNo === item.data?.billNo && p._id.startsWith('temp_'));
                             if (found) tempId = found._id;
                         }
 
