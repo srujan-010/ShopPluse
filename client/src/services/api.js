@@ -192,25 +192,90 @@ api.interceptors.response.use(
                                 ...parsedData, 
                                 _id: tempId, 
                                 quantity: Number(parsedData.quantity || 0),
+                                buyPrice: Number(parsedData.buyPrice || 0),
+                                sellPrice: Number(parsedData.sellPrice || 0),
+                                governmentPrice: Number(parsedData.governmentPrice || 0),
+                                lowStockLimit: Number(parsedData.lowStockLimit || 0),
+                                gst: Number(parsedData.gst || 0),
+                                sku: parsedData.sku || '',
                                 updatedAt: new Date().toISOString() 
                             };
                             await offlineDB.saveProduct(newProduct);
                             
-                            // Log inventory history for opening stock
+                            // Create a default 'STOCK_ADDED' audit entry in 'inventoryHistory' table
+                            await offlineDB.saveInventoryHistory({
+                                _id: 'temp_hist_' + Date.now(),
+                                productId: tempId,
+                                productName: newProduct.name,
+                                actionType: 'STOCK_ADDED',
+                                quantity: newProduct.quantity,
+                                unit: newProduct.unit || 'Pieces',
+                                previousStock: 0,
+                                newStock: newProduct.quantity,
+                                notes: parsedData.notes || 'Initial stock addition',
+                                shop: newProduct.shop,
+                                createdAt: parsedData.purchaseDate || new Date().toISOString()
+                            });
+
                             if (newProduct.quantity > 0) {
-                                await offlineDB.saveInventoryHistory({
-                                    _id: 'temp_hist_' + Date.now(),
-                                    productId: tempId,
-                                    productName: newProduct.name,
-                                    actionType: 'STOCK_ADDED',
-                                    quantity: newProduct.quantity,
-                                    unit: newProduct.unit || 'Piece',
-                                    previousStock: 0,
-                                    newStock: newProduct.quantity,
-                                    notes: 'Opening stock added offline',
+                                const costPrice = Number(newProduct.buyPrice || 0);
+                                const totalAmount = newProduct.quantity * costPrice;
+                                const amountPaid = Number(parsedData.amountPaid || 0);
+                                const dueAmount = Math.max(0, totalAmount - amountPaid);
+                                const billNo = parsedData.billNo || `BILL-TEMP-${Date.now()}`;
+                                const supplierName = parsedData.supplier || 'Unknown Supplier';
+
+                                let paymentStatus = 'Paid';
+                                if (!parsedData.supplier) {
+                                    paymentStatus = 'Direct Entry';
+                                } else if (amountPaid >= totalAmount) {
+                                    paymentStatus = 'Paid';
+                                } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                                    paymentStatus = 'Partial Paid';
+                                } else {
+                                    paymentStatus = 'Pending';
+                                }
+
+                                const purchaseDoc = {
+                                    _id: 'temp_pur_' + Date.now(),
                                     shop: newProduct.shop,
-                                    createdAt: new Date().toISOString()
-                                });
+                                    billNo,
+                                    supplierName,
+                                    supplierPhone: parsedData.supplierPhone || '',
+                                    items: [{
+                                        product: tempId,
+                                        productName: newProduct.name,
+                                        quantity: newProduct.quantity,
+                                        unit: newProduct.unit || 'Pieces',
+                                        purchaseRate: costPrice,
+                                        itemTotal: totalAmount
+                                    }],
+                                    totalAmount,
+                                    totalItems: 1,
+                                    paymentStatus,
+                                    paymentMethod: parsedData.paymentMethod || 'Cash',
+                                    paidAmount: amountPaid,
+                                    dueAmount,
+                                    notes: parsedData.notes || '',
+                                    linkedProductId: tempId,
+                                    date: parsedData.purchaseDate || new Date().toISOString(),
+                                    purchaseDate: parsedData.purchaseDate || new Date().toISOString(),
+                                    updatedAt: new Date().toISOString()
+                                };
+                                await offlineDB.savePurchase(purchaseDoc);
+
+                                // Cache restock history
+                                const restockUrl = `/api/products/${tempId}/restock-history`;
+                                const newRestockLog = {
+                                    product: tempId,
+                                    productName: newProduct.name,
+                                    quantityAdded: newProduct.quantity,
+                                    supplier: supplierName,
+                                    purchasePrice: costPrice,
+                                    shop: newProduct.shop,
+                                    date: parsedData.purchaseDate || new Date().toISOString()
+                                };
+                                await offlineDB.saveQueryCache(restockUrl, [newRestockLog]);
                             }
 
                             mockResponseData.data = newProduct;
@@ -237,25 +302,92 @@ api.interceptors.response.use(
                         const product = await offlineDB.getProduct(id);
                         if (product) {
                             const quantityAdded = Number(parsedData.quantityAdded || 0);
+                            const costPrice = Number(parsedData.costPrice || 0);
                             const prevQty = product.quantity || 0;
+                            
+                            // Side-effects
                             product.quantity = parseFloat((prevQty + quantityAdded).toFixed(3));
+                            product.buyPrice = costPrice;
+                            if (parsedData.supplier) product.supplier = parsedData.supplier;
                             product.updatedAt = new Date().toISOString();
                             await offlineDB.saveProduct(product);
 
-                            // Log inventory history
+                            const totalAmount = quantityAdded * costPrice;
+                            const amountPaid = Number(parsedData.amountPaid || 0);
+                            const dueAmount = Math.max(0, totalAmount - amountPaid);
+                            const billNo = parsedData.billNo || 'BILL-TEMP-' + Math.floor(100000 + Math.random()*900000);
+                            const supplierName = parsedData.supplier || 'Unknown Supplier';
+
+                            let paymentStatus = 'Paid';
+                            if (!parsedData.supplier) {
+                                paymentStatus = 'Direct Entry';
+                            } else if (amountPaid >= totalAmount) {
+                                paymentStatus = 'Paid';
+                            } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                                paymentStatus = 'Partial Paid';
+                            } else {
+                                paymentStatus = 'Pending';
+                            }
+
+                            // Save local purchase document
+                            const purchaseDoc = {
+                                _id: 'temp_pur_' + Date.now(),
+                                shop: product.shop,
+                                billNo,
+                                supplierName,
+                                supplierPhone: parsedData.supplierPhone || '',
+                                items: [{
+                                    product: id,
+                                    productName: product.name,
+                                    quantity: quantityAdded,
+                                    unit: product.unit || 'Pieces',
+                                    purchaseRate: costPrice,
+                                    itemTotal: totalAmount
+                                }],
+                                totalAmount,
+                                totalItems: 1,
+                                paymentStatus,
+                                paymentMethod: parsedData.paymentMethod || 'Cash',
+                                paidAmount: amountPaid,
+                                dueAmount,
+                                notes: parsedData.notes || '',
+                                linkedProductId: id,
+                                date: parsedData.purchaseDate || new Date().toISOString(),
+                                purchaseDate: parsedData.purchaseDate || new Date().toISOString(),
+                                updatedAt: new Date().toISOString()
+                            };
+                            await offlineDB.savePurchase(purchaseDoc);
+
+                            // Create entry in InventoryHistory table
                             await offlineDB.saveInventoryHistory({
                                 _id: 'temp_hist_' + Date.now(),
                                 productId: id,
                                 productName: product.name,
                                 actionType: 'STOCK_ADDED',
                                 quantity: quantityAdded,
-                                unit: product.unit || 'Piece',
+                                unit: product.unit || 'Pieces',
                                 previousStock: prevQty,
                                 newStock: product.quantity,
                                 notes: parsedData.notes || 'Restocked offline',
                                 shop: product.shop,
-                                createdAt: new Date().toISOString()
+                                createdAt: parsedData.purchaseDate || new Date().toISOString()
                             });
+
+                            // Prepend to restock history queryCache
+                            const restockUrl = `/api/products/${id}/restock-history`;
+                            const cachedRestocks = await offlineDB.getQueryCache(restockUrl) || [];
+                            const newRestockLog = {
+                                product: id,
+                                productName: product.name,
+                                quantityAdded,
+                                supplier: supplierName,
+                                purchasePrice: costPrice,
+                                shop: product.shop,
+                                date: parsedData.purchaseDate || new Date().toISOString()
+                            };
+                            await offlineDB.saveQueryCache(restockUrl, [newRestockLog, ...cachedRestocks]);
+                            
+                            mockResponseData.data = product;
                         }
                     }
 

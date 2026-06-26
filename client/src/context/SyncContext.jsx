@@ -273,30 +273,43 @@ export const SyncProvider = ({ children }) => {
                     await offlineDB.removeMutationFromQueue(item.id);
 
                     // If it was a POST that created a new item, map temporary ID to real MongoDB ID
-                    if (item.method.toLowerCase() === 'post' && res.data && res.data.data) {
-                        const serverRecord = res.data.data;
-                        
-                        let tempId = null;
-                        if (item.url.includes('/api/products') && item.method.toLowerCase() === 'post') {
-                            const products = await db.products.toArray();
-                            const found = products.find(p => p.name === item.data?.name && p._id.startsWith('temp_'));
-                            if (found) tempId = found._id;
-                        } else if (item.url.includes('/api/sales') && item.method.toLowerCase() === 'post') {
-                            const sales = await db.sales.toArray();
-                            const found = sales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
-                            if (found) tempId = found._id;
-                        } else if (item.url.includes('/api/gov-sales') && item.method.toLowerCase() === 'post') {
-                            const govSales = await db.governmentSales.toArray();
-                            const found = govSales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
-                            if (found) tempId = found._id;
-                        } else if (item.url.includes('/api/purchases') && item.method.toLowerCase() === 'post') {
-                            const purchases = await db.purchases.toArray();
-                            const found = purchases.find(p => p.billNo === item.data?.billNo && p._id.startsWith('temp_'));
-                            if (found) tempId = found._id;
+                    if (item.method.toLowerCase() === 'post') {
+                        if (item.url.includes('/api/products/') && item.url.includes('/restock')) {
+                            // Find temp purchase with matching billNo and delete it
+                            const restockBillNo = item.data?.billNo;
+                            if (restockBillNo) {
+                                const purchases = await db.purchases.toArray();
+                                const found = purchases.find(p => p.billNo === restockBillNo && p._id.startsWith('temp_'));
+                                if (found) {
+                                    await db.purchases.delete(found._id);
+                                }
+                            }
                         }
+                        
+                        if (res.data && res.data.data) {
+                            const serverRecord = res.data.data;
+                            let tempId = null;
+                            if (item.url.includes('/api/products') && !item.url.includes('/restock')) {
+                                const products = await db.products.toArray();
+                                const found = products.find(p => p.name === item.data?.name && p._id.startsWith('temp_'));
+                                if (found) tempId = found._id;
+                            } else if (item.url.includes('/api/sales')) {
+                                const sales = await db.sales.toArray();
+                                const found = sales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
+                                if (found) tempId = found._id;
+                            } else if (item.url.includes('/api/gov-sales')) {
+                                const govSales = await db.governmentSales.toArray();
+                                const found = govSales.find(s => s.invoiceNumber === item.data?.invoiceNumber && s._id.startsWith('temp_'));
+                                if (found) tempId = found._id;
+                            } else if (item.url.includes('/api/purchases')) {
+                                const purchases = await db.purchases.toArray();
+                                const found = purchases.find(p => p.billNo === item.data?.billNo && p._id.startsWith('temp_'));
+                                if (found) tempId = found._id;
+                            }
 
-                        if (tempId && serverRecord._id) {
-                            await remapIds(tempId, serverRecord._id);
+                            if (tempId && serverRecord._id) {
+                                await remapIds(tempId, serverRecord._id);
+                            }
                         }
                     }
                 } catch (error) {

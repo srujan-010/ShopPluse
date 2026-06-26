@@ -81,26 +81,29 @@ const InventoryPage = () => {
         name: '',
         category: '',
         brand: '',
+        sku: '',
         barcode: '',
         productType: 'Piece',
         quantity: 0,
-        unit: 'Piece',
+        unit: 'Pieces',
         buyPrice: 0,
         sellPrice: 0,
         governmentPrice: 0,
-        lowStockLimit: 5,
+        lowStockLimit: 0,
+        gst: 0,
         expiryDate: '',
         notes: '',
         shop: shopId || '',
         allowPartialSelling: false,
-        allowedUnits: [],
+        allowedUnits: ['Pieces'],
         supplier: '',
         supplierPhone: '',
         billNo: '',
         purchaseDate: getLocalToday(),
         paymentMethod: 'Cash',
         amountPaid: '',
-        entryType: 'Purchase'
+        entryType: 'Purchase',
+        isFullPaid: false
     });
 
     const [restockData, setRestockData] = useState({
@@ -114,11 +117,12 @@ const InventoryPage = () => {
         paymentMethod: 'Cash',
         amountPaid: '',
         entryType: 'Purchase',
-        notes: ''
+        notes: '',
+        isFullPaid: false
     });
 
     const unitOptions = [
-        'Piece', 'Pack', 'Box', 'Dozen', 'KG', 'Gram', 'Liter', 'ML', 'Meter', 'CM', 'Feet', 'Bag', 'Roll', 'Ton'
+        'Bags', 'Kg', 'Liters', 'Pieces'
     ];
 
     useEffect(() => {
@@ -218,18 +222,8 @@ const InventoryPage = () => {
         let allowPartial = false;
         let allowed = [newUnit];
 
-        if (newUnit === 'KG') {
+        if (newUnit === 'Kg' || newUnit === 'Liters') {
             allowPartial = true;
-            allowed = ['KG', 'Gram'];
-        } else if (newUnit === 'Liter') {
-            allowPartial = true;
-            allowed = ['Liter', 'ML'];
-        } else if (newUnit === 'Dozen') {
-            allowPartial = true;
-            allowed = ['Dozen', 'Piece'];
-        } else if (newUnit === 'Meter') {
-            allowPartial = true;
-            allowed = ['Meter', 'CM'];
         }
 
         setFormData(prev => ({
@@ -259,18 +253,23 @@ const InventoryPage = () => {
                 sellPrice: Number(product.sellPrice || 0),
                 governmentPrice: Number(product.governmentPrice || 0),
                 quantity: Number(product.quantity || 0),
-                lowStockLimit: Number(product.lowStockLimit || 5),
+                lowStockLimit: product.lowStockLimit !== undefined ? Number(product.lowStockLimit) : 0,
+                gst: product.gst !== undefined ? Number(product.gst) : 0,
+                sku: product.sku || '',
+                barcode: product.barcode || '',
+                productType: product.productType || 'Piece',
                 expiryDate: product.expiryDate ? getLocalFromDate(product.expiryDate) : '',
                 shop: shopId,
                 allowPartialSelling: product.allowPartialSelling || false,
-                allowedUnits: product.allowedUnits?.length ? product.allowedUnits : [product.unit || 'Piece'],
+                allowedUnits: product.allowedUnits?.length ? product.allowedUnits : [product.unit || 'Pieces'],
                 supplier: product.supplier || '',
                 supplierPhone: product.supplierPhone || '',
                 billNo: product.billNo || '',
                 purchaseDate: product.purchaseDate ? getLocalFromDate(product.purchaseDate) : getLocalToday(),
                 paymentMethod: product.paymentMethod || 'Cash',
                 amountPaid: product.amountPaid || '',
-                entryType: product.entryType || 'Purchase'
+                entryType: product.entryType || 'Purchase',
+                isFullPaid: product.isFullPaid || false
             });
 
             try {
@@ -285,26 +284,29 @@ const InventoryPage = () => {
                 name: '',
                 category: '',
                 brand: '',
+                sku: '',
                 barcode: '',
                 productType: 'Piece',
                 quantity: 0,
-                unit: 'Piece',
+                unit: 'Pieces',
                 buyPrice: 0,
                 sellPrice: 0,
                 governmentPrice: 0,
-                lowStockLimit: 5,
+                lowStockLimit: 0,
+                gst: 0,
                 expiryDate: '',
                 notes: '',
                 shop: shopId,
                 allowPartialSelling: false,
-                allowedUnits: ['Piece'],
+                allowedUnits: ['Pieces'],
                 supplier: '',
                 supplierPhone: '',
                 billNo: '',
                 purchaseDate: getLocalToday(),
                 paymentMethod: 'Cash',
                 amountPaid: '',
-                entryType: 'Purchase'
+                entryType: 'Purchase',
+                isFullPaid: false
             });
         }
         setShowModal(true);
@@ -333,7 +335,8 @@ const InventoryPage = () => {
                 paymentMethod: 'Cash',
                 amountPaid: '',
                 entryType: 'Purchase',
-                notes: ''
+                notes: '',
+                isFullPaid: false
             });
         } else {
             setCurrentProduct(null);
@@ -348,7 +351,8 @@ const InventoryPage = () => {
                 paymentMethod: 'Cash',
                 amountPaid: '',
                 entryType: 'Purchase',
-                notes: ''
+                notes: '',
+                isFullPaid: false
             });
         }
         setShowRestockModal(true);
@@ -365,7 +369,11 @@ const InventoryPage = () => {
             sellPrice: Number(formData.sellPrice || 0),
             governmentPrice: Number(formData.governmentPrice || 0),
             quantity: Number(formData.quantity || 0),
-            lowStockLimit: Number(formData.lowStockLimit || 5)
+            lowStockLimit: Number(formData.lowStockLimit || 0),
+            gst: Number(formData.gst || 0),
+            sku: formData.sku || '',
+            barcode: formData.barcode || '',
+            productType: formData.productType || 'Piece'
         };
 
         if (payload.sellPrice < 0) {
@@ -412,9 +420,37 @@ const InventoryPage = () => {
             return;
         }
 
+        const qtyAdded = Number(restockData.quantityAdded || 0);
+        const cPrice = Number(restockData.costPrice || 0);
+        const rTotalAmount = parseFloat((qtyAdded * cPrice).toFixed(2));
+        const rAmountPaid = Number(restockData.amountPaid || 0);
+        const rDueAmount = Math.max(0, parseFloat((rTotalAmount - rAmountPaid).toFixed(2)));
+
+        let rPaymentStatus = 'Paid';
+        if (!restockData.supplier) {
+            rPaymentStatus = 'Direct Entry';
+        } else if (rAmountPaid >= rTotalAmount) {
+            rPaymentStatus = 'Paid';
+        } else if (rAmountPaid > 0 && rAmountPaid < rTotalAmount) {
+            rPaymentStatus = 'Partial Paid';
+        } else {
+            rPaymentStatus = 'Pending';
+        }
+
+        const payload = {
+            ...restockData,
+            productId: targetProductId,
+            quantityAdded: qtyAdded,
+            costPrice: cPrice,
+            totalAmount: rTotalAmount,
+            amountPaid: rAmountPaid,
+            dueAmount: rDueAmount,
+            paymentStatus: rPaymentStatus
+        };
+
         setIsSaving(true);
         try {
-            await productService.restock(targetProductId, restockData);
+            await productService.restock(targetProductId, payload);
             fetchData();
             setShowRestockModal(false);
             showToast('Product restocked successfully!', 'success');
@@ -747,18 +783,134 @@ const InventoryPage = () => {
                                         <label>Product Name <span className="req">*</span></label>
                                         <input required value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="e.g. Premium Rice" />
                                     </div>
-                                    <div className="old-field">
-                                        <label>Brand Name</label>
-                                        <input value={formData.brand} onChange={(e) => setFormData({...formData, brand: e.target.value})} placeholder="e.g. Aashirvaad" />
+                                    <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Brand Name</label>
+                                            <input value={formData.brand} onChange={(e) => setFormData({...formData, brand: e.target.value})} placeholder="e.g. Aashirvaad" />
+                                        </div>
+                                        <div className="old-field">
+                                            <label>SKU</label>
+                                            <input value={formData.sku} onChange={(e) => setFormData({...formData, sku: e.target.value})} placeholder="e.g. RICE-PREM-10" />
+                                        </div>
                                     </div>
-                                    <div className="old-field">
-                                        <label>Category</label>
-                                        <SearchableSelect 
-                                            value={formData.category}
-                                            options={categoryList}
-                                            onChange={(val) => setFormData({...formData, category: val})}
-                                            placeholder="Select existing or type new..."
+                                    <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Barcode</label>
+                                            <input value={formData.barcode} onChange={(e) => setFormData({...formData, barcode: e.target.value})} placeholder="e.g. 8901234567890" />
+                                        </div>
+                                        <div className="old-field">
+                                            <label>Product Type</label>
+                                            <select value={formData.productType} onChange={(e) => setFormData({...formData, productType: e.target.value})}>
+                                                <option value="Piece">Piece</option>
+                                                <option value="Measured">Measured</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Category <span className="req">*</span></label>
+                                            <select required value={formData.category} onChange={(e) => setFormData({...formData, category: e.target.value})}>
+                                                <option value="">Select Category</option>
+                                                <option value="Fertilizers">Fertilizers</option>
+                                                <option value="Seeds">Seeds</option>
+                                                <option value="Pesticides">Pesticides</option>
+                                                <option value="Others">Others</option>
+                                            </select>
+                                        </div>
+                                        <div className="old-field">
+                                            <label>Base Unit <span className="req">*</span></label>
+                                            <select required value={formData.unit} onChange={(e) => handleUnitChange(e.target.value)}>
+                                                <option value="">Select Unit</option>
+                                                <option value="Bags">Bags</option>
+                                                <option value="Kg">Kg</option>
+                                                <option value="Liters">Liters</option>
+                                                <option value="Pieces">Pieces</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Initial Quantity <span className="req">*</span></label>
+                                            <input type="number" required min="0" step="0.01" value={formData.quantity} onChange={(e) => setFormData({...formData, quantity: e.target.value})} />
+                                        </div>
+                                        <div className="old-field">
+                                            <label>Low Stock Alert</label>
+                                            <input type="number" min="0" value={formData.lowStockLimit} onChange={(e) => setFormData({...formData, lowStockLimit: e.target.value})} />
+                                        </div>
+                                    </div>
+
+                                    {/* Partial Selling Section */}
+                                    <div className="partial-selling-box">
+                                        <div className="ps-header">
+                                            <div className="ps-info">
+                                                <h4>Allow Partial Selling</h4>
+                                                <p>Can customers buy this in smaller units?</p>
+                                            </div>
+                                            <PremiumToggle 
+                                                label="Allow Partial Selling"
+                                                active={formData.allowPartialSelling}
+                                                onChange={(val) => setFormData({...formData, allowPartialSelling: val})}
+                                            />
+                                        </div>
+                                        {formData.allowPartialSelling && (
+                                            <div className="ps-units">
+                                                <label>Allowed Selling Units</label>
+                                                <div className="ps-chips">
+                                                    {['Bags', 'Kg', 'Liters', 'Pieces'].map(u => (
+                                                        <button 
+                                                            type="button"
+                                                            key={u} 
+                                                            className={formData.allowedUnits.includes(u) ? 'active' : ''}
+                                                            onClick={() => {
+                                                                const units = formData.allowedUnits.includes(u) 
+                                                                    ? formData.allowedUnits.filter(x => x !== u)
+                                                                    : [...formData.allowedUnits, u];
+                                                                setFormData({...formData, allowedUnits: units});
+                                                            }}
+                                                        >
+                                                            {u}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Purchase Price (per unit)</label>
+                                            <input type="number" min="0" max="10000000" step="0.01" value={formData.buyPrice} onChange={(e) => setFormData({...formData, buyPrice: e.target.value})} />
+                                        </div>
+                                        <div className="old-field">
+                                            <label>Selling Price (per unit) <span className="req">*</span></label>
+                                            <input type="number" required min="0" max="10000000" step="0.01" value={formData.sellPrice} onChange={(e) => setFormData({...formData, sellPrice: e.target.value})} />
+                                        </div>
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
+                                        {shop?.type === 'Fertilizers' ? (
+                                            <div className="old-field">
+                                                <label style={{color: '#059669'}}>Government Price (per unit)</label>
+                                                <input type="number" min="0" max="10000000" step="0.01" value={formData.governmentPrice} onChange={(e) => setFormData({...formData, governmentPrice: e.target.value})} />
+                                            </div>
+                                        ) : <div />}
+                                        <div className="old-field">
+                                            <label>GST (%)</label>
+                                            <input type="number" min="0" max="100" step="0.01" value={formData.gst} onChange={(e) => setFormData({...formData, gst: e.target.value})} />
+                                        </div>
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
+                                        <PremiumDatePicker 
+                                            label="Expiry Date"
+                                            value={formData.expiryDate}
+                                            onChange={(val) => setFormData({...formData, expiryDate: val})}
                                         />
+                                        <div className="old-field">
+                                            <label>Purchase Bill No</label>
+                                            <input value={formData.billNo} onChange={(e) => setFormData({...formData, billNo: e.target.value})} placeholder="BILL-101" />
+                                        </div>
                                     </div>
 
                                     <SearchableSelect 
@@ -781,33 +933,29 @@ const InventoryPage = () => {
                                             <label>Supplier Phone</label>
                                             <input value={formData.supplierPhone} onChange={(e) => setFormData({...formData, supplierPhone: e.target.value})} placeholder="99XXXXXXXX" />
                                         </div>
-                                        <div className="old-field">
-                                            <label>Purchase Bill No</label>
-                                            <input value={formData.billNo} onChange={(e) => setFormData({...formData, billNo: e.target.value})} placeholder="BILL-101" />
-                                        </div>
-                                    </div>
-
-                                    <div className="old-field-row-mobile-2">
                                         <PremiumDatePicker 
                                             label="Purchase Date"
                                             value={formData.purchaseDate}
                                             onChange={(val) => setFormData({...formData, purchaseDate: val})}
                                         />
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
                                         <CustomSelect 
                                             label="Entry Type"
                                             value={formData.entryType}
                                             options={['Purchase', 'Opening Stock', 'Adjustment', 'Return Stock']}
                                             onChange={(val) => setFormData({...formData, entryType: val})}
                                         />
-                                    </div>
-
-                                    <div className="old-field-row-mobile-2">
                                         <CustomSelect 
                                             label="Payment Method"
                                             value={formData.paymentMethod}
                                             options={['Cash', 'Online', 'Credit']}
                                             onChange={(val) => setFormData({...formData, paymentMethod: val})}
                                         />
+                                    </div>
+
+                                    <div className="old-field-row-mobile-2">
                                         <div className="old-field">
                                             <label>Amount Paid</label>
                                             <input 
@@ -841,86 +989,9 @@ const InventoryPage = () => {
                                         </div>
                                     </div>
 
-                                    <div className="old-field-row-mobile-2">
-                                        <CustomSelect 
-                                            label="Base Unit"
-                                            value={formData.unit}
-                                            options={unitOptions}
-                                            onChange={(val) => handleUnitChange(val)}
-                                        />
-                                        <div className="old-field">
-                                            <label>Available Stock <span className="req">*</span></label>
-                                            <input type="number" required min="0" step="0.01" value={formData.quantity} onChange={(e) => setFormData({...formData, quantity: e.target.value})} />
-                                        </div>
-                                    </div>
-
-                                    {/* Partial Selling Section */}
-                                    <div className="partial-selling-box">
-                                        <div className="ps-header">
-                                            <div className="ps-info">
-                                                <h4>Allow Partial Selling</h4>
-                                                <p>Can customers buy this in smaller units?</p>
-                                            </div>
-                                            <PremiumToggle 
-                                                label="Allow Partial Selling"
-                                                active={formData.allowPartialSelling}
-                                                onChange={(val) => setFormData({...formData, allowPartialSelling: val})}
-                                            />
-                                        </div>
-                                        {formData.allowPartialSelling && (
-                                            <div className="ps-units">
-                                                <label>Allowed Selling Units</label>
-                                                <div className="ps-chips">
-                                                    {['KG', 'Gram', 'Liter', 'ML', 'Dozen', 'Piece', 'Meter', 'CM', 'Pack', 'Box'].map(u => (
-                                                        <button 
-                                                            type="button"
-                                                            key={u} 
-                                                            className={formData.allowedUnits.includes(u) ? 'active' : ''}
-                                                            onClick={() => {
-                                                                const units = formData.allowedUnits.includes(u) 
-                                                                    ? formData.allowedUnits.filter(x => x !== u)
-                                                                    : [...formData.allowedUnits, u];
-                                                                setFormData({...formData, allowedUnits: units});
-                                                            }}
-                                                        >
-                                                            {u}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="old-field-row-mobile-2">
-                                        <div className="old-field">
-                                            <label>Purchase Price (per unit)</label>
-                                            <input type="number" min="0" max="10000000" step="0.01" value={formData.buyPrice} onChange={(e) => setFormData({...formData, buyPrice: e.target.value})} />
-                                        </div>
-                                        <div className="old-field">
-                                            <label>Selling Price (per unit) <span className="req">*</span></label>
-                                            <input type="number" required min="0" max="10000000" step="0.01" value={formData.sellPrice} onChange={(e) => setFormData({...formData, sellPrice: e.target.value})} />
-                                        </div>
-                                    </div>
-
-                                    {shop?.type === 'Fertilizers' && (
-                                        <div className="old-field-row-mobile-2">
-                                            <div className="old-field">
-                                                <label style={{color: '#059669'}}>Government Price (per unit)</label>
-                                                <input type="number" min="0" max="10000000" step="0.01" value={formData.governmentPrice} onChange={(e) => setFormData({...formData, governmentPrice: e.target.value})} />
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    <div className="old-field-row-mobile-2">
-                                        <div className="old-field">
-                                            <label>Low Stock Alert</label>
-                                            <input type="number" min="0" value={formData.lowStockLimit} onChange={(e) => setFormData({...formData, lowStockLimit: e.target.value})} />
-                                        </div>
-                                        <PremiumDatePicker 
-                                            label="Expiry Date"
-                                            value={formData.expiryDate}
-                                            onChange={(val) => setFormData({...formData, expiryDate: val})}
-                                        />
+                                    <div className="old-field">
+                                        <label>Notes</label>
+                                        <input value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} placeholder="Add notes about this product..." />
                                     </div>
 
                                     {currentProduct && restockHistory.length > 0 && (
@@ -1048,8 +1119,9 @@ const InventoryPage = () => {
                                             <label>Payment Method</label>
                                             <select value={restockData.paymentMethod} onChange={(e) => setRestockData({...restockData, paymentMethod: e.target.value})}>
                                                 <option value="Cash">Cash</option>
-                                                <option value="Online">Online</option>
+                                                <option value="UPI">UPI</option>
                                                 <option value="Credit">Credit</option>
+                                                <option value="Bank">Bank</option>
                                             </select>
                                         </div>
                                         <div className="old-field">
@@ -1082,6 +1154,45 @@ const InventoryPage = () => {
                                                 />
                                                 Mark as full paid
                                             </label>
+                                        </div>
+                                    </div>
+
+                                    {/* Real-time Math Summary Card */}
+                                    <div className="restock-summary-card" style={{
+                                        background: 'linear-gradient(135deg, #F8FAFC 0%, #F1F5F9 100%)',
+                                        borderRadius: '16px',
+                                        padding: '16px',
+                                        border: '1.5px solid #E2E8F0',
+                                        marginTop: '16px',
+                                        marginBottom: '16px',
+                                        display: 'grid',
+                                        gridTemplateColumns: '1fr 1fr 1fr',
+                                        gap: '12px',
+                                        textAlign: 'center'
+                                    }}>
+                                        <div>
+                                            <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Total Amount</span>
+                                            <span style={{ fontSize: '16px', fontWeight: '900', color: '#0F172A' }}>₹{parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Remaining Due</span>
+                                            <span style={{ fontSize: '16px', fontWeight: '900', color: Math.max(0, parseFloat((((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)) - Number(restockData.amountPaid || 0)).toFixed(2))) > 0 ? '#DC2626' : '#059669' }}>
+                                                ₹{Math.max(0, parseFloat((((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)) - Number(restockData.amountPaid || 0)).toFixed(2))).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748B', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Payment Status</span>
+                                            <span style={{ 
+                                                fontSize: '13px', 
+                                                fontWeight: '900', 
+                                                color: !restockData.supplier ? '#059669' : Number(restockData.amountPaid || 0) >= parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2)) ? '#059669' : Number(restockData.amountPaid || 0) > 0 ? '#D97706' : '#DC2626',
+                                                background: !restockData.supplier ? '#ECFDF5' : Number(restockData.amountPaid || 0) >= parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2)) ? '#ECFDF5' : Number(restockData.amountPaid || 0) > 0 ? '#FFFBEB' : '#FEF2F2',
+                                                padding: '4px 8px',
+                                                borderRadius: '8px',
+                                                display: 'inline-block'
+                                            }}>
+                                                {!restockData.supplier ? 'Direct Entry' : Number(restockData.amountPaid || 0) >= parseFloat(((Number(restockData.quantityAdded) || 0) * (Number(restockData.costPrice) || 0)).toFixed(2)) ? 'Paid' : Number(restockData.amountPaid || 0) > 0 ? 'Partial Paid' : 'Pending'}
+                                            </span>
                                         </div>
                                     </div>
 
