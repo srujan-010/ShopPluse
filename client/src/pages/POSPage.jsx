@@ -590,9 +590,11 @@ const POSPage = () => {
                                             <div key={item.cartKey} className="pbc-item-row">
                                                 <div className="pbc-item-info">
                                                     <span className="pbc-item-name">{item.productName}</span>
-                                                    <span className="pbc-item-qty">{item.quantity} {item.unit} × ₹{item.price.toFixed(2)}</span>
+                                                    <span className="pbc-item-qty">
+                                                        {item.quantity} {item.unit && item.unit !== 'Piece' ? item.unit : ''} × ₹{item.price.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                                                    </span>
                                                 </div>
-                                                <span className="pbc-item-total">₹{(item.price * item.quantity).toFixed(2)}</span>
+                                                <span className="pbc-item-total">₹{(item.price * item.quantity).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -611,7 +613,7 @@ const POSPage = () => {
                                             </div>
                                         )}
                                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', color: '#101828', fontWeight: '900', paddingTop: '8px', borderTop: '1px dashed #F2F4F7' }}>
-                                            <span>Final Amount</span>
+                                            <span>Grand Total</span>
                                             <span>₹{finalAmount.toLocaleString()}</span>
                                         </div>
                                     </div>
@@ -641,7 +643,7 @@ const POSPage = () => {
                                                 onClick={() => { setDiscountType('percentage'); setDiscountValue(''); }} 
                                                 style={{ border: 'none', background: discountType === 'percentage' ? 'white' : 'transparent', color: discountType === 'percentage' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
                                             >
-                                                % Pct
+                                                % Percentage
                                             </button>
                                         </div>
 
@@ -844,11 +846,11 @@ const POSPage = () => {
                                         </div>
                                     </div>
                                 )}
-                            </div>
-                            <div className="cdv2-footer">
-                                <button className="btn-final-v2" onClick={handleCheckout} disabled={isCheckingOut}>
-                                    {checkoutBtnText}
-                                </button>
+                                <div style={{ marginTop: '24px', flexShrink: 0 }}>
+                                    <button className="btn-final-v2" onClick={handleCheckout} disabled={isCheckingOut}>
+                                        {checkoutBtnText}
+                                    </button>
+                                </div>
                             </div>
                         </motion.div>
                     </div>
@@ -1041,16 +1043,16 @@ const POSPage = () => {
                 .m-backdrop-v2 { position: absolute; inset: 0; background: rgba(7, 27, 68, 0.4); backdrop-filter: blur(8px); }
 
                 /* Checkout Drawer */
-                .checkout-drawer-v2 { background: white; height: 100vh; width: 100%; max-width: 500px; display: flex; flex-direction: column; position: absolute; right: 0; top: 0; bottom: 0; box-shadow: -10px 0 40px rgba(0,0,0,0.1); }
+                .checkout-drawer-v2 { background: white; height: 100vh; width: 100%; max-width: 500px; display: flex; flex-direction: column; overflow: hidden; position: absolute; right: 0; top: 0; bottom: 0; box-shadow: -10px 0 40px rgba(0,0,0,0.1); }
                 .cdv2-header { padding: 24px; border-bottom: 1px solid #F2F4F7; display: flex; align-items: center; gap: 16px; }
                 .btn-cdv2-back { width: 44px; height: 44px; border-radius: 12px; border: none; background: #F9FAFB; display: flex; align-items: center; justify-content: center; }
-                .cdv2-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
+                .cdv2-body { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
                 /* Premium Checkout Drawer */
                 .premium-bill-card { background: white; border: 1.5px solid #F2F4F7; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
                 .pbc-header { padding: 16px 20px; background: #F9FAFB; border-bottom: 1px solid #F2F4F7; display: flex; justify-content: space-between; align-items: center; }
                 .pbc-title { display: flex; align-items: center; gap: 8px; color: #101828; font-weight: 800; font-size: 14px; }
                 .pbc-count { font-size: 12px; font-weight: 700; color: #667085; background: white; padding: 4px 10px; border-radius: 8px; border: 1px solid #EAECF0; }
-                .pbc-items-list { padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; max-height: 180px; overflow-y: auto; }
+                .pbc-items-list { padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; }
                 .pbc-item-row { display: flex; justify-content: space-between; align-items: center; }
                 .pbc-item-info { display: flex; flex-direction: column; }
                 .pbc-item-name { font-size: 14px; font-weight: 700; color: #101828; }
@@ -1121,7 +1123,6 @@ const POSPage = () => {
                 .cust-input-v2:focus-within { border-color: #1E6BFF; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
                 .cust-input-v2 input { border: none; outline: none; background: transparent; flex: 1; font-weight: 700; font-size: 15px; color: #101828; }
                 
-                .cdv2-footer { padding: 16px; background: white; border-top: 1px solid #F2F4F7; position: sticky; bottom: 0; z-index: 10; }
                 .btn-final-v2 { width: 100%; height: 56px; background: #071B44; color: white; border: none; border-radius: 16px; font-size: 18px; font-weight: 900; cursor: pointer; transition: 0.2s; }
                 .btn-final-v2:active { transform: scale(0.98); background: #0a255a; }
 
@@ -1173,11 +1174,11 @@ const POSPage = () => {
                     }
                     .cdv2-header { padding: 12px 16px; height: 56px; border-bottom: 1px solid #F2F4F7; position: sticky; top: 0; background: white; z-index: 20; border-radius: 32px 32px 0 0; }
                     .btn-cdv2-back { width: 36px; height: 36px; border-radius: 10px; }
-                    .cdv2-body { padding: 16px; gap: 20px; overflow-y: auto; }
+                    .cdv2-body { padding: 16px; gap: 20px; min-height: 0; overflow-y: auto; }
                     
                     .premium-bill-card { border-radius: 20px; }
                     .pbc-header { padding: 12px 16px; }
-                    .pbc-items-list { padding: 10px 16px; max-height: 140px; }
+                    .pbc-items-list { padding: 10px 16px; }
                     .pbc-item-name { font-size: 13px; }
                     .pbc-grand-total { font-size: 20px; }
 
@@ -1188,7 +1189,6 @@ const POSPage = () => {
                     .cust-input-v2 { height: 48px; border-radius: 14px; padding: 0 12px; }
                     .cust-input-v2 input { font-size: 14px; }
 
-                    .cdv2-footer { padding: 16px; background: white; border-top: 1px solid #F2F4F7; position: sticky; bottom: 0; z-index: 20; }
                     .btn-final-v2 { height: 56px; border-radius: 16px; font-size: 18px; }
                     
                     .khata-picker-sheet { 
