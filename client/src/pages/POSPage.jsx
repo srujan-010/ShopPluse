@@ -586,17 +586,25 @@ const POSPage = () => {
                                     </div>
                                     
                                     <div className="pbc-items-list">
-                                        {cart.map(item => (
-                                            <div key={item.cartKey} className="pbc-item-row">
-                                                <div className="pbc-item-info">
-                                                    <span className="pbc-item-name">{item.productName}</span>
-                                                    <span className="pbc-item-qty">
-                                                        {item.quantity} {item.unit && item.unit !== 'Piece' ? item.unit : ''} × ₹{item.price.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                                                    </span>
+                                        {cart.map(item => {
+                                            const itemPrice = Number(item.price ?? 0);
+                                            const itemQty = Number(item.quantity ?? 0);
+                                            const displayPrice = itemPrice.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                            const displayTotal = (itemPrice * itemQty).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                            const displayUnit = item.unit && item.unit !== 'Piece' ? ` ${item.unit}` : '';
+
+                                            return (
+                                                <div key={item.cartKey} className="pbc-item-row">
+                                                    <div className="pbc-item-info">
+                                                        <span className="pbc-item-name">{item.productName}</span>
+                                                        <span className="pbc-item-qty">
+                                                            {itemQty}{displayUnit} × ₹{displayPrice}
+                                                        </span>
+                                                    </div>
+                                                    <span className="pbc-item-total">₹{displayTotal}</span>
                                                 </div>
-                                                <span className="pbc-item-total">₹{(item.price * item.quantity).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
 
                                     <div className="pbc-divider" />
