@@ -30,6 +30,7 @@ const AdminShops = () => {
     const [dateRangeType, setDateRangeType] = useState('today');
     const [customStartDate, setCustomStartDate] = useState('');
     const [customEndDate, setCustomEndDate] = useState('');
+    const [registrationSort, setRegistrationSort] = useState('newest');
     
     // Details Drawer state
     const [selectedShop, setSelectedShop] = useState(null);
@@ -172,6 +173,15 @@ const AdminShops = () => {
         }
     };
 
+    const formatRegistrationDate = (dateStr) => {
+        if (!dateStr) return { date: 'N/A', time: '' };
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return { date: 'N/A', time: '' };
+        const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+        return { date, time };
+    };
+
     const formatLastUsed = (lastBillingTime) => {
         if (!lastBillingTime) return "Never used";
         const date = new Date(lastBillingTime);
@@ -197,13 +207,19 @@ const AdminShops = () => {
         return { color: '#4B5563', background: '#F3F4F6' };
     };
 
-    const filteredShops = shops.filter(shop => {
-        const matchesSearch = shop.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                              shop.ownerName.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesStatus = statusFilter === 'All' || shop.status === statusFilter;
-        const matchesPlan = planFilter === 'All' || shop.planType === planFilter;
-        return matchesSearch && matchesStatus && matchesPlan;
-    });
+    const filteredShops = shops
+        .filter(shop => {
+            const matchesSearch = shop.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                  (shop.ownerName || '').toLowerCase().includes(searchQuery.toLowerCase());
+            const matchesStatus = statusFilter === 'All' || shop.status === statusFilter;
+            const matchesPlan = planFilter === 'All' || shop.planType === planFilter;
+            return matchesSearch && matchesStatus && matchesPlan;
+        })
+        .sort((a, b) => {
+            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return registrationSort === 'newest' ? bTime - aTime : aTime - bTime;
+        });
 
     if (loading) {
         return (
@@ -245,6 +261,11 @@ const AdminShops = () => {
                         <option value="Lifetime">Lifetime</option>
                     </select>
 
+                    <select value={registrationSort} onChange={e => setRegistrationSort(e.target.value)} className="filter-select" title="Sort by Registration Date">
+                        <option value="newest">📅 Newest First</option>
+                        <option value="oldest">📅 Oldest First</option>
+                    </select>
+
                     <select value={dateRangeType} onChange={e => setDateRangeType(e.target.value)} className="filter-select">
                         <option value="today">Today's Activity</option>
                         <option value="yesterday">Yesterday's Activity</option>
@@ -279,6 +300,7 @@ const AdminShops = () => {
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Shop details</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Owner / Contact</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Plan</th>
+                            <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>Registration Date</th>
                             <th style={{ padding: '18px 24px', fontSize: '12px', color: '#64748B', fontWeight: '800', textTransform: 'uppercase' }}>
                                 {dateRangeType === 'today' ? "Today's Activity" : dateRangeType === 'yesterday' ? "Yesterday's Activity" : "Selected Period Activity"}
                             </th>
@@ -299,19 +321,6 @@ const AdminShops = () => {
                                     <span style={{ fontSize: '12px', color: '#64748B', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                                         <MapPin size={12} /> {shop.location} • {shop.shopType}
                                     </span>
-                                    <span style={{ 
-                                        fontSize: '11px', 
-                                        ...getLastUsedStyle(shop.lastBillingTime),
-                                        padding: '2px 8px', 
-                                        borderRadius: '6px', 
-                                        display: 'inline-flex', 
-                                        alignItems: 'center', 
-                                        gap: '4px', 
-                                        marginTop: '6px', 
-                                        fontWeight: '800' 
-                                    }}>
-                                        <Clock size={10} /> Last Used: {formatLastUsed(shop.lastBillingTime)}
-                                    </span>
                                 </td>
                                 <td style={{ padding: '18px 24px' }}>
                                     <span style={{ fontSize: '14px', fontWeight: '700', color: '#334155', display: 'block' }}>{shop.ownerName}</span>
@@ -326,6 +335,19 @@ const AdminShops = () => {
                                     <span style={{ fontSize: '11px', color: '#94A3B8', display: 'block', marginTop: '4px' }}>
                                         {shop.planEndDate ? `Expires ${new Date(shop.planEndDate).toLocaleDateString()}` : 'No expiry'}
                                     </span>
+                                </td>
+                                <td style={{ padding: '18px 24px' }}>
+                                    {(() => {
+                                        const { date, time } = formatRegistrationDate(shop.createdAt);
+                                        return (
+                                            <>
+                                                <span style={{ fontSize: '13px', fontWeight: '700', color: '#334155', display: 'block' }}>{date}</span>
+                                                <span style={{ fontSize: '11px', color: '#64748B', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '3px' }}>
+                                                    <Calendar size={10} />{time}
+                                                </span>
+                                            </>
+                                        );
+                                    })()}
                                 </td>
                                 <td style={{ padding: '18px 24px' }}>
                                     <strong style={{ fontSize: '14px', color: '#0F172A', display: 'block' }}>₹{shop.todayRevenue.toLocaleString()}</strong>

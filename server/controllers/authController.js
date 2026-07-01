@@ -191,28 +191,50 @@ const DeviceLogs = require('../models/DeviceLogs');
 // @desc    Update user profile
 // @route   PUT /api/auth/profile
 // @access  Private
-exports.updateProfile = async (req, res, next) => {
+exports.updateProfile = async (req, res) => {
     try {
-        const { name, email, phone, avatar } = req.body;
-        const user = await User.findById(req.user.id);
+        // ── Auth guard (belt-and-suspenders; protect middleware already validates) ──
+        if (!req.user || !req.user._id) {
+            return res.status(401).json({ success: false, message: 'Not authorized. Please log in.' });
+        }
 
+        // ── Strip immutable / sensitive fields from body ──
+        const IMMUTABLE = ['_id', 'id', 'password', 'passwordHash', 'createdAt', 'role', 'googleId'];
+        const body = { ...req.body };
+        for (const field of IMMUTABLE) {
+            delete body[field];
+        }
+
+        const { name, email, phone, avatar } = body;
+
+        // ── Basic validation ──
+        if (name !== undefined && typeof name === 'string' && name.trim() === '') {
+            return res.status(400).json({ success: false, message: 'Name cannot be empty.' });
+        }
+        if (email !== undefined && typeof email === 'string' && email.trim() === '') {
+            return res.status(400).json({ success: false, message: 'Email cannot be empty.' });
+        }
+
+        // ── Fetch user from DB ──
+        const user = await User.findById(req.user._id);
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+            return res.status(404).json({ success: false, message: 'User not found.' });
         }
 
-        // Check if email is already taken by someone else
-        if (email && email !== user.email) {
-            const emailExists = await User.findOne({ email });
+        // ── Email duplicate check ──
+        if (email && email.trim().toLowerCase() !== user.email.toLowerCase()) {
+            const emailExists = await User.findOne({ email: email.trim().toLowerCase() });
             if (emailExists) {
-                return res.status(400).json({ success: false, message: 'Email already in use' });
+                return res.status(409).json({ success: false, message: 'This email is already in use by another account.' });
             }
-            user.email = email;
+            user.email = email.trim().toLowerCase();
         }
 
-        if (name) user.name = name;
+        // ── Apply allowed updates ──
+        if (name && name.trim()) user.name = name.trim();
         if (phone !== undefined) user.phone = phone;
 
-        // Handle base64 avatar upload
+        // ── Handle avatar (base64 upload or URL) ──
         if (avatar && avatar.startsWith('data:image')) {
             const matches = avatar.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
             if (matches && matches.length === 3) {
@@ -225,25 +247,48 @@ exports.updateProfile = async (req, res, next) => {
                 const filename = `avatar-${user._id}-${Date.now()}.${extension}`;
                 const filePath = path.join(tempDir, filename);
                 fs.writeFileSync(filePath, imageBuffer);
-                
+
                 const protocol = req.protocol;
                 const host = req.get('host');
                 user.avatar = `${protocol}://${host}/temp/${filename}`;
             }
-        } else if (avatar) {
+        } else if (avatar && typeof avatar === 'string') {
             user.avatar = avatar;
         }
 
         await user.save();
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
+            message: 'Profile updated successfully.',
             data: user
         });
-    } catch (error) {
-        next(error);
+    } catch (err) {
+        console.error('Profile Update Error:', err);
+
+        // Handle Mongoose duplicate key error (race condition on email/googleId unique index)
+        if (err.code === 11000) {
+            const field = Object.keys(err.keyPattern || {})[0] || 'field';
+            return res.status(409).json({
+                success: false,
+                message: `A user with this ${field} already exists.`
+            });
+        }
+
+        // Handle Mongoose validation errors
+        if (err.name === 'ValidationError') {
+            const messages = Object.values(err.errors).map(e => e.message).join(', ');
+            return res.status(400).json({ success: false, message: messages });
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: err.message || 'An unexpected server error occurred.',
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
     }
 };
+
 
 // @desc    Change password
 // @route   PUT /api/auth/password

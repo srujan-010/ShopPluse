@@ -69,6 +69,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,ttf,eot}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [
+          /^\/api\//,
           /^\/@vite\/client/,
           /^\/node_modules/,
           /hot-update\.json$/,

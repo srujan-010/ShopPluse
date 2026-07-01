@@ -318,7 +318,8 @@ exports.getShops = async (req, res, next) => {
                 revenueGenerated,
                 billingCount,
                 isSuspended: shop.isSuspended || false,
-                isLoginDisabled: shop.isLoginDisabled || false
+                isLoginDisabled: shop.isLoginDisabled || false,
+                createdAt: shop.createdAt
             });
         }
 
