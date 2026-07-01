@@ -293,19 +293,7 @@ const POSPage = () => {
                 return;
             }
 
-            for (const item of cart) {
-                const product = products.find(p => p._id === item.product);
-                if (product) {
-                    const govPrice = product.governmentPrice;
-                    if (govPrice !== undefined && govPrice !== null) {
-                        const rateCharged = item.price / (item.multiplier || 1);
-                        if (rateCharged > govPrice) {
-                            showToast(`Price for ${item.productName} (₹${rateCharged}) exceeds the government price ceiling of ₹${govPrice}.`, 'warning');
-                            return;
-                        }
-                    }
-                }
-            }
+
         }
         
         let reqPaidAmount = finalAmount;

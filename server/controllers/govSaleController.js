@@ -149,15 +149,9 @@ exports.createGovSale = async (req, res) => {
                 return res.status(404).json({ success: false, message: `Product ${item.productName || item.product} not found.` });
             }
 
-            // Price Ceilings Check
+            // Use governmentPrice as reference; no price ceiling enforcement
             const govPrice = product.governmentPrice || product.sellPrice;
             const rateCharged = item.pricePerBaseUnit || item.governmentPrice || item.price || 0;
-            if (rateCharged > govPrice) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: `Price for ${product.name} (₹${rateCharged}) exceeds the government price ceiling of ₹${govPrice}.` 
-                });
-            }
 
             // Unit Conversion
             const multiplier = getConversionMultiplier(item.soldUnit || item.unit, product.unit) || 1;
