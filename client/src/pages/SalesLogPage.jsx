@@ -6,12 +6,22 @@ import {
     Wallet, 
     CreditCard, 
     QrCode,
-    ChevronRight,
+    ChevronRight, 
     ChevronLeft,
     Receipt,
     MessageSquare,
     History,
-    ArrowDownCircle
+    ArrowDownCircle,
+    Printer,
+    FileText,
+    Info,
+    Undo2,
+    RefreshCw,
+    RotateCcw,
+    TrendingUp,
+    Package,
+    ShoppingBag,
+    Eye
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { saleService, shopService, khataService, productService } from '../services/api';
@@ -21,6 +31,106 @@ import { EmptyState, Skeleton, PageHeader } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
 import { useToast } from '../context/ToastContext';
+import CompactInvoiceSheet from '../components/CompactInvoiceSheet';
+import PrintFormatSelector from '../components/PrintFormatSelector';
+import { getFormatOption, applyPrintPageStyles } from '../utils/printFormatConstants';
+
+// Compact date formatting: e.g. "18 Oct 2026" (always single line)
+const formatDateCompact = (dateVal) => {
+    if (!dateVal) return '-';
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return '-';
+    return d.toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+    });
+};
+
+// Formats currency consistently using Indian number formatting
+const formatINR = (amount, includeDecimals = false) => {
+    if (amount === undefined || amount === null || isNaN(amount)) return '₹0';
+    const num = Number(amount);
+    const sign = num < 0 ? '-' : '';
+    const abs = Math.abs(num);
+    const formatted = abs.toLocaleString('en-IN', {
+        minimumFractionDigits: includeDecimals ? 2 : (abs % 1 !== 0 ? 2 : 0),
+        maximumFractionDigits: 2
+    });
+    return `${sign}₹${formatted}`;
+};
+
+// Formats invoice identifier cleanly on a single line
+const getInvoiceDisplayNumber = (sale) => {
+    if (!sale) return '';
+    const raw = sale.invoiceNumber || sale.invoiceNo || (sale._id ? sale._id.slice(-6).toUpperCase() : '');
+    if (!raw) return '#-';
+    return raw.startsWith('#') ? raw : `#${raw}`;
+};
+
+// Resolve row financial metrics (paid, due, payment status, payment mode)
+const getSaleRowMetrics = (sale) => {
+    const totalAmount = Number(sale.totalAmount || 0);
+    const isReturn = sale.type === 'RETURN';
+    const isExchange = sale.type === 'EXCHANGE';
+
+    let paidAmount = 0;
+    let dueAmount = 0;
+
+    if (isReturn) {
+        paidAmount = sale.totalRefundAmount || Math.abs(totalAmount);
+        dueAmount = 0;
+    } else if (isExchange) {
+        paidAmount = sale.paidAmount !== undefined ? Number(sale.paidAmount) : (sale.balanceDifference > 0 ? (sale.paymentMethod === 'Khata' ? 0 : sale.balanceDifference) : 0);
+        dueAmount = sale.remainingAmount !== undefined ? Number(sale.remainingAmount) : (sale.balanceDifference > 0 && sale.paymentMethod === 'Khata' ? sale.balanceDifference : 0);
+    } else {
+        if (sale.paidAmount !== undefined && sale.paidAmount !== null) {
+            paidAmount = Number(sale.paidAmount);
+        } else {
+            paidAmount = (sale.paymentStatus === 'Paid' || (!sale.paymentStatus && sale.paymentMethod !== 'Khata')) ? totalAmount : 0;
+        }
+
+        if (sale.remainingAmount !== undefined && sale.remainingAmount !== null) {
+            dueAmount = Number(sale.remainingAmount);
+        } else {
+            dueAmount = Math.max(0, totalAmount - paidAmount);
+        }
+    }
+
+    // Payment Status badge
+    let statusBadge = { label: 'Paid', className: 'paid' };
+    if (isReturn) {
+        statusBadge = { label: 'Refunded', className: 'refunded' };
+    } else if (sale.paymentStatus) {
+        const s = sale.paymentStatus.toLowerCase();
+        if (s === 'paid') statusBadge = { label: 'Paid', className: 'paid' };
+        else if (s === 'partial') statusBadge = { label: 'Partial', className: 'partial' };
+        else statusBadge = { label: 'Unpaid', className: 'unpaid' };
+    } else if (dueAmount === 0) {
+        statusBadge = { label: 'Paid', className: 'paid' };
+    } else if (paidAmount > 0) {
+        statusBadge = { label: 'Partial', className: 'partial' };
+    } else {
+        statusBadge = { label: 'Unpaid', className: 'unpaid' };
+    }
+
+    // Payment Mode badge
+    const methodStr = (sale.paymentMethod || sale.paymentMode || 'Cash').toUpperCase();
+    let modeBadge = { label: 'Cash', className: 'cash' };
+    if (methodStr === 'UPI') modeBadge = { label: 'UPI', className: 'upi' };
+    else if (methodStr === 'KHATA') modeBadge = { label: 'Khata', className: 'khata' };
+    else if (methodStr === 'CARD') modeBadge = { label: 'Card', className: 'card' };
+
+    return {
+        totalAmount,
+        paidAmount,
+        dueAmount,
+        statusBadge,
+        modeBadge,
+        isReturn,
+        isExchange
+    };
+};
 
 const SalesLogPage = () => {
     const { shopId } = useParams();
@@ -45,8 +155,13 @@ const SalesLogPage = () => {
     const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
     const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
     const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
+    const [secondSaleForInvoice, setSecondSaleForInvoice] = useState(null);
+    const [selectedBatchBillIds, setSelectedBatchBillIds] = useState([]);
     const [invoiceLoading, setInvoiceLoading] = useState(false);
+    const [printFormatOverride, setPrintFormatOverride] = useState(null);
     const itemsPerPage = 20;
+
+    const activePrintFormat = printFormatOverride || shop?.defaultPrintFormat || 'full_a4';
 
     // Return & Exchange Modal States
     const [showReturnModal, setShowReturnModal] = useState(false);
@@ -352,23 +467,47 @@ const SalesLogPage = () => {
     const fetchInitialData = async () => {
         try {
             // Offline-first load: Instant render from local IndexedDB
-            const localSales = await offlineDB.getSales(shopId);
-            const localShops = await offlineDB.getShops();
+            const [localSales, localGovSales, localShops] = await Promise.all([
+                offlineDB.getSales(shopId),
+                offlineDB.getGovSales(shopId),
+                offlineDB.getShops()
+            ]);
             
-            if (localSales && localSales.length > 0) {
-                setSales(localSales);
-                setLoading(false);
-            }
-            const activeShop = localShops.find(s => s._id === shopId);
+            const activeShop = (localShops || []).find(s => s._id === shopId);
             if (activeShop) setShop(activeShop);
 
-            const [salesRes, shopsRes] = await Promise.all([
+            // Merge local standalone gov sales if not linked
+            const combinedLocal = [...(localSales || [])];
+            const localIds = new Set(combinedLocal.map(s => s._id));
+            (localGovSales || []).forEach(g => {
+                if (!g.linkedSaleId && !localIds.has(g._id)) {
+                    combinedLocal.push({
+                        ...g,
+                        type: 'GOV_SALE',
+                        totalProfit: g.totalProfit || 0,
+                        paidAmount: g.totalAmount,
+                        remainingAmount: 0,
+                        paymentStatus: 'Paid'
+                    });
+                }
+            });
+
+            if (combinedLocal.length > 0) {
+                setSales(combinedLocal);
+                setLoading(false);
+            }
+
+            const [salesRes, shopsRes, productsRes] = await Promise.all([
                 saleService.getAll(shopId),
-                shopService.getAll()
+                shopService.getAll(),
+                productService.getAll(shopId).catch(() => ({ data: { data: [] } }))
             ]);
-            setSales(salesRes.data.data || []);
+            setSales(salesRes.data?.data || []);
             if (shopsRes.data?.data) {
                 setShop(shopsRes.data.data.find(s => s._id === shopId));
+            }
+            if (productsRes?.data?.data) {
+                setShopProducts(productsRes.data.data);
             }
         } catch (err) {
             console.error('Error fetching initial data:', err);
@@ -376,37 +515,108 @@ const SalesLogPage = () => {
             setLoading(false);
         }
     };
-    const handleViewBill = async (saleId) => {
-        if (!saleId) return;
-        
-        // Close modal first
+    const handleViewBill = async (saleOrId, pairedSaleOrId = null) => {
+        if (!saleOrId) return;
+
+        const saleId = (saleOrId && typeof saleOrId === 'object') ? saleOrId._id : saleOrId;
+        const initialSale = (saleOrId && typeof saleOrId === 'object') ? saleOrId : (saleId ? sales.find(s => s._id === saleId) : null);
+
+        const pairedId = (pairedSaleOrId && typeof pairedSaleOrId === 'object') ? pairedSaleOrId._id : pairedSaleOrId;
+        const initialPaired = (pairedSaleOrId && typeof pairedSaleOrId === 'object') ? pairedSaleOrId : (pairedId ? sales.find(s => s._id === pairedId) : null);
+
+        // Close details modal
         setSelectedSale(null);
 
-        // Delay then open invoice
-        setTimeout(async () => {
-            setInvoiceLoading(true);
-            setIsInvoiceOpen(true);
-            try {
-                const res = await saleService.getSale(saleId);
-                setSelectedSaleForInvoice(res.data.data);
-            } catch (err) {
-                console.error('Failed to fetch bill:', err);
-            } finally {
-                setInvoiceLoading(false);
+        // Pre-populate immediately so there is zero flash or race condition
+        if (initialSale) {
+            setSelectedSaleForInvoice(initialSale);
+        }
+        setSecondSaleForInvoice(initialPaired || null);
+        setIsInvoiceOpen(true);
+        setInvoiceLoading(false);
+
+        // Now asynchronously fetch full populated details in background
+        try {
+            let fullSale = initialSale;
+            if (initialSale?.type !== 'GOV_SALE' && saleId) {
+                try {
+                    const res = await saleService.getSale(saleId);
+                    if (res?.data?.data) {
+                        fullSale = res.data.data;
+                        setSelectedSaleForInvoice(fullSale);
+                    }
+                } catch (e) {
+                    console.warn('Backend full sale fetch fallback:', e);
+                }
             }
-        }, 150);
+
+            if (pairedId) {
+                let fullSecond = initialPaired;
+                if (initialPaired?.type !== 'GOV_SALE') {
+                    try {
+                        const res2 = await saleService.getSale(pairedId);
+                        if (res2?.data?.data) {
+                            fullSecond = res2.data.data;
+                            setSecondSaleForInvoice(fullSecond);
+                        }
+                    } catch (e) {
+                        console.warn('Backend full second sale fetch fallback:', e);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Failed to fetch full bill details:', err);
+        }
     };
 
     const handleDownloadPDF = (targetSale) => {
         const saleToPrint = targetSale || selectedSaleForInvoice || selectedSale;
         if (!saleToPrint) return;
-        invoiceService.downloadInvoice(saleToPrint, shop, 'SALE');
+        const invoiceType = saleToPrint.type === 'GOV_SALE' ? 'GOV_SALE' : 'SALE';
+        if (secondSaleForInvoice && activePrintFormat === 'half_a4') {
+            invoiceService.downloadInvoice(saleToPrint, shop, invoiceType, { 
+                secondBill: secondSaleForInvoice, 
+                products: shopProducts,
+                format: activePrintFormat
+            });
+        } else {
+            invoiceService.downloadInvoice(saleToPrint, shop, invoiceType, { 
+                products: shopProducts,
+                format: activePrintFormat 
+            });
+        }
     };
 
     const handleShareWhatsApp = (targetSale) => {
         const saleToShare = targetSale || selectedSaleForInvoice || selectedSale;
         if (!saleToShare) return;
-        invoiceService.shareInvoice(saleToShare, shop, 'SALE');
+        const invoiceType = saleToShare.type === 'GOV_SALE' ? 'GOV_SALE' : 'SALE';
+        invoiceService.shareInvoice(saleToShare, shop, invoiceType, { 
+            products: shopProducts,
+            format: activePrintFormat 
+        });
+    };
+
+    const handleToggleSelectBill = (id, e) => {
+        if (e) e.stopPropagation();
+        setSelectedBatchBillIds(prev => 
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+    };
+
+    const handleBatchPrint = () => {
+        if (selectedBatchBillIds.length === 0) return;
+        if (selectedBatchBillIds.length === 1) {
+            handleViewBill(selectedBatchBillIds[0]);
+        } else {
+            handleViewBill(selectedBatchBillIds[0], selectedBatchBillIds[1]);
+        }
+    };
+
+    const handleBatchDownloadPDF = () => {
+        if (selectedBatchBillIds.length === 0) return;
+        const selectedSales = sales.filter(s => selectedBatchBillIds.includes(s._id));
+        invoiceService.downloadInvoice(selectedSales, shop);
     };
 
     const filteredSales = sales.filter(sale => {
@@ -429,9 +639,8 @@ const SalesLogPage = () => {
             oneWeekAgo.setDate(now.getDate() - 7);
             matchesPeriod = saleDate >= oneWeekAgo;
         } else if (periodFilter === 'month') {
-            const oneMonthAgo = new Date();
-            oneMonthAgo.setMonth(now.getMonth() - 1);
-            matchesPeriod = saleDate >= oneMonthAgo;
+            matchesPeriod = saleDate.getFullYear() === now.getFullYear() &&
+                            saleDate.getMonth() === now.getMonth();
         } else if (periodFilter === 'custom') {
             const target = new Date(customDate);
             matchesPeriod = saleDate.getFullYear() === target.getFullYear() &&
@@ -442,7 +651,7 @@ const SalesLogPage = () => {
         const matchesSearch = searchQuery === '' || 
             (sale.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
             (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            sale.totalAmount.toString().includes(searchQuery);
+            (sale.totalAmount != null ? sale.totalAmount.toString() : '').includes(searchQuery);
 
         const matchesPayment = paymentFilter === 'All' || sale.paymentMethod === paymentFilter;
 
@@ -465,111 +674,113 @@ const SalesLogPage = () => {
                         periodFilter === 'yesterday' ? "Yesterday's transactions" : 
                         periodFilter === 'week' ? "Last 7 days' transactions" : 
                         periodFilter === 'month' ? "This month's transactions" : "Custom transactions"}
-                actions={
-                    <div className="sl-filters hide-mobile">
-                        {['today', 'yesterday', 'week', 'month'].map(id => (
-                            <button 
-                                key={id} 
-                                className={`sl-pill ${periodFilter === id ? 'active' : ''}`}
-                                onClick={() => { setPeriodFilter(id); setPage(1); }}
-                            >
-                                {id.charAt(0).toUpperCase() + id.slice(1)}
-                            </button>
-                        ))}
-                    </div>
-                }
             />
 
-            <div className="sl-controls">
-                <div className="sl-search">
-                    <Search size={20} color="#98A2B3" />
-                    <input 
-                        type="text" 
-                        placeholder="Search by customer name, amount or bill..." 
-                        value={searchQuery}
-                        onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
-                    />
+            {/* Unified Compact Summary Stat Cards */}
+            <div className="sl-summary-grid-unified">
+                <div className="sl-stat-card-v4">
+                    <div className="sl-stat-top">
+                        <span className="sl-stat-label">Total Sales</span>
+                        <div className="sl-stat-icon-wrap sales"><Wallet size={15} /></div>
+                    </div>
+                    <strong className="sl-stat-val">{formatINR(totalAmount)}</strong>
                 </div>
-                <div className="sl-filters">
-                    {[
-                        { id: 'today', label: 'Today' },
-                        { id: 'yesterday', label: 'Yesterday' },
-                        { id: 'week', label: '7D' },
-                        { id: 'month', label: 'Month' },
-                    ].map(p => (
-                        <button 
-                            key={p.id} 
-                            className={`sl-pill ${periodFilter === p.id ? 'active' : ''}`}
-                            onClick={() => { setPeriodFilter(p.id); setPage(1); }}
-                        >
-                            {p.label}
-                        </button>
-                    ))}
-                    <button 
-                        className={`sl-pill sl-pill-cal ${periodFilter === 'custom' ? 'active' : ''}`}
-                        onClick={() => { setPeriodFilter('custom'); setPage(1); }}
-                    >
-                        <Calendar size={16} />
-                    </button>
+                <div className="sl-stat-card-v4">
+                    <div className="sl-stat-top">
+                        <span className="sl-stat-label">Orders</span>
+                        <div className="sl-stat-icon-wrap orders"><Receipt size={15} /></div>
+                    </div>
+                    <strong className="sl-stat-val">{totalOrders.toLocaleString('en-IN')}</strong>
                 </div>
-
-                <div className="sl-filters payment-filters">
-                    {['All', 'Cash', 'UPI', 'Khata'].map(p => (
-                        <button 
-                            key={p} 
-                            className={`sl-pill ${paymentFilter === p ? 'active' : ''}`}
-                            onClick={() => { setPaymentFilter(p); setPage(1); }}
-                        >
-                            {p}
-                        </button>
-                    ))}
+                <div className="sl-stat-card-v4">
+                    <div className="sl-stat-top">
+                        <span className="sl-stat-label">Profit</span>
+                        <div className="sl-stat-icon-wrap profit"><TrendingUp size={15} /></div>
+                    </div>
+                    <strong className="sl-stat-val profit-val">{formatINR(Math.round(totalProfit))}</strong>
+                </div>
+                <div className="sl-stat-card-v4">
+                    <div className="sl-stat-top">
+                        <span className="sl-stat-label">Items</span>
+                        <div className="sl-stat-icon-wrap items"><Package size={15} /></div>
+                    </div>
+                    <strong className="sl-stat-val">{totalItems.toLocaleString('en-IN')}</strong>
                 </div>
             </div>
 
-            <div className="sl-summary-grid">
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Total Sales</span>
-                    <strong className="sl-sum-val">₹{totalAmount.toLocaleString()}</strong>
+            {/* Unified Filters Bar */}
+            <div className="sl-controls-v4">
+                <div className="sl-search-v4">
+                    <Search size={18} color="#94A3B8" />
+                    <input 
+                        type="text" 
+                        placeholder="Search by customer, amount, or bill #..." 
+                        value={searchQuery}
+                        onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                    />
+                    {searchQuery && (
+                        <button 
+                            type="button" 
+                            className="sl-search-clear" 
+                            onClick={() => { setSearchQuery(''); setPage(1); }}
+                            title="Clear search"
+                        >
+                            <X size={15} />
+                        </button>
+                    )}
                 </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Orders</span>
-                    <strong className="sl-sum-val">{totalOrders}</strong>
-                </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Profit</span>
-                    <strong className="sl-sum-val profit">₹{Math.round(totalProfit).toLocaleString()}</strong>
-                </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Items</span>
-                    <strong className="sl-sum-val">{totalItems}</strong>
+
+                <div className="sl-filters-scroll-group">
+                    <div className="sl-pills-row date-pills">
+                        {[
+                            { id: 'today', label: 'Today' },
+                            { id: 'yesterday', label: 'Yesterday' },
+                            { id: 'week', label: '7D' },
+                            { id: 'month', label: 'Month' },
+                        ].map(p => (
+                            <button 
+                                key={p.id} 
+                                className={`sl-pill-v4 ${periodFilter === p.id ? 'active' : ''}`}
+                                onClick={() => { setPeriodFilter(p.id); setPage(1); }}
+                            >
+                                {p.label}
+                            </button>
+                        ))}
+                        <button 
+                            className={`sl-pill-v4 cal-pill ${periodFilter === 'custom' ? 'active' : ''}`}
+                            onClick={() => { setPeriodFilter('custom'); setPage(1); }}
+                            title="Select custom date"
+                        >
+                            <Calendar size={14} />
+                        </button>
+                    </div>
+
+                    <div className="sl-pills-divider" />
+
+                    <div className="sl-pills-row payment-pills">
+                        {['All', 'Cash', 'UPI', 'Khata'].map(p => (
+                            <button 
+                                key={p} 
+                                className={`sl-pill-v4 ${paymentFilter === p ? 'active' : ''}`}
+                                onClick={() => { setPaymentFilter(p); setPage(1); }}
+                            >
+                                {p}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
             {periodFilter === 'custom' && (
-                <div className="sl-custom-date">
-                    <label><Calendar size={16} /> Select Date:</label>
-                    <input type="date" value={customDate} onChange={(e) => { setCustomDate(e.target.value); setPage(1); }} />
+                <div className="sl-custom-date-v4">
+                    <label><Calendar size={14} /> Custom Date:</label>
+                    <input 
+                        type="date" 
+                        value={customDate} 
+                        onChange={(e) => { setCustomDate(e.target.value); setPage(1); }} 
+                    />
                 </div>
             )}
-
-            <div className="compact-2x2-container">
-                <div className="mini-stat-card">
-                    <span className="mini-stat-label">Total Sales</span>
-                    <strong className="mini-stat-val">₹{totalAmount.toLocaleString()}</strong>
-                </div>
-                <div className="mini-stat-card">
-                    <span className="mini-stat-label">Orders</span>
-                    <strong className="mini-stat-val">{totalOrders}</strong>
-                </div>
-                <div className="mini-stat-card">
-                    <span className="mini-stat-label">Profit</span>
-                    <strong className="mini-stat-val profit">₹{Math.round(totalProfit).toLocaleString()}</strong>
-                </div>
-                <div className="mini-stat-card">
-                    <span className="mini-stat-label">Items</span>
-                    <strong className="mini-stat-val">{totalItems}</strong>
-                </div>
-            </div>
 
             {loading ? (
                 <div className="sl-list">
@@ -593,165 +804,252 @@ const SalesLogPage = () => {
                 />
             ) : (
                 <>
+                    {/* Mobile Transaction Cards */}
                     <div className="sl-list sl-mobile-only">
-                        {paginatedSales.map((sale, idx) => (
-                            <motion.div 
-                                whileTap={{ scale: 0.98 }}
-                                key={sale._id} 
-                                className="sl-card-premium"
-                                onClick={() => setSelectedSale(sale)}
-                            >
-                                <div className="sl-card-top">
-                                    <div className="sl-card-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span className={`type-tag-mobile ${(sale.type || 'SALE').toLowerCase()}`}>
-                                            {sale.type || 'SALE'}
-                                        </span>
-                                        {sale.customerName || 'Walk-in Customer'}
-                                    </div>
-                                    <div className="sl-card-amount-wrap">
-                                        <div className="sl-card-amount" style={{ color: sale.type === 'RETURN' ? '#DC2626' : sale.type === 'EXCHANGE' ? '#EA580C' : '#059669', fontWeight: 'bold' }}>
-                                            {sale.type === 'RETURN' ? '-' : ''}₹{Math.abs(sale.totalAmount || 0).toLocaleString()}
-                                        </div>
-                                        <ChevronRight size={16} color="#98A2B3" />
-                                    </div>
-                                </div>
-                                <div className="sl-card-mid">
-                                    <div className="sl-card-qty">
-                                        {(sale.items || []).length === 1 
-                                            ? `${sale.items[0].productName} • ${sale.items[0].soldQtyEntered || sale.items[0].quantity} ${sale.items[0].soldUnit || sale.items[0].unit || 'Piece'}`
-                                            : `${(sale.items || []).length} Items Purchased`}
-                                    </div>
-                                </div>
-                                <div className="sl-card-bot">
-                                    <div className="sl-card-meta" style={{ flexWrap: 'wrap', gap: '8px', display: 'flex', alignItems: 'center' }}>
-                                        <span>{new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                                        <span className="divider-dot">•</span>
-                                        <span>Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
-                                        <span className="divider-dot">•</span>
-                                        <span className={`sl-cp-pay-badge ${sale.paymentMethod?.toLowerCase() || 'cash'}`}>{sale.paymentMethod}</span>
-                                        {(sale.type === 'SALE' || !sale.type) && (
-                                            <>
-                                                <span className="divider-dot">•</span>
-                                                <span className={`status-badge-new ${(sale.paymentStatus || 'Paid').toLowerCase()}`} style={{ padding: '2px 6px', fontSize: '11px', borderRadius: '6px' }}>
-                                                    {sale.paymentStatus === 'Paid' ? '🟢 Paid' : sale.paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
-                                                </span>
-                                            </>
-                                        )}
-                                    </div>
-                                    {(sale.type === 'SALE' || !sale.type) && (
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px', padding: '8px 12px', background: '#F8FAFC', borderRadius: '10px', fontSize: '12px', fontWeight: '700', color: '#475569' }}>
-                                            <span>Paid: ₹{(sale.paidAmount || sale.totalAmount || 0).toLocaleString()}</span>
-                                            <span>Due: ₹{(sale.remainingAmount || 0).toLocaleString()}</span>
-                                        </div>
-                                    )}
-                                </div>
-                            </motion.div>
-                        ))}
-                    </div>
+                        {paginatedSales.map((sale) => {
+                            const displayInvoice = getInvoiceDisplayNumber(sale);
+                            const dateFormatted = formatDateCompact(sale.date);
+                            const { paidAmount, dueAmount, statusBadge, modeBadge } = getSaleRowMetrics(sale);
 
-                    <div className="sl-desktop-only radical-desktop-container">
-                    <div className="rdc-header">
-                        <div className="rdch-left">
-                            <h3>Sales History</h3>
-                            <p>{filteredSales.length} Transactions Found</p>
-                        </div>
-                        <div className="rdch-right">
-                            <span className="rdch-stat">Total: <strong>₹{filteredSales.reduce((acc, s) => acc + (s.totalAmount || 0), 0).toLocaleString()}</strong></span>
-                        </div>
-                    </div>
-                    <div className="table-responsive-wrapper">
-                    <table className="radical-desktop-table">
-                        <thead>
-                            <tr>
-                                <th>Type</th>
-                                <th>Bill No</th>
-                                <th>Customer Name</th>
-                                <th>Date</th>
-                                <th style={{ width: '20%' }}>Items Summary</th>
-                                <th>Payment Mode</th>
-                                <th style={{ textAlign: 'center' }}>Status</th>
-                                <th style={{ textAlign: 'right' }}>Paid</th>
-                                <th style={{ textAlign: 'right' }}>Due</th>
-                                <th style={{ textAlign: 'right' }}>Final Amount</th>
-                                <th className="actions-col" style={{ textAlign: 'right' }}>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {paginatedSales.map((sale) => {
-                                const customerHistory = sales.filter(s => 
-                                    s._id !== sale._id && 
-                                    sale.customerName && 
-                                    sale.customerName !== 'Walk-in Customer' &&
-                                    s.customerName?.toLowerCase().trim() === sale.customerName?.toLowerCase().trim()
-                                );
-                                const prevOrders = customerHistory.length;
-                                
-                                return (
-                                    <tr key={sale._id} className="sl-desktop-row" onClick={() => setSelectedSale(sale)}>
-                                        <td className="sld-type">
-                                            <span className={`type-tag ${(sale.type || 'SALE').toLowerCase()}`}>
-                                                {sale.type || 'SALE'}
+                            return (
+                                <motion.div 
+                                    whileTap={{ scale: 0.99 }}
+                                    key={sale._id} 
+                                    className="sl-card-premium"
+                                    onClick={() => setSelectedSale(sale)}
+                                >
+                                    <div className="sl-card-top">
+                                        <div className="sl-card-top-left">
+                                            <span className="invoice-badge-v4">{displayInvoice}</span>
+                                            <span className={`mode-pill mode-${modeBadge.className}`}>{modeBadge.label}</span>
+                                        </div>
+                                        <div className="sl-card-total-wrap">
+                                            <span className={`sl-card-total ${sale.type === 'RETURN' ? 'negative' : ''}`}>
+                                                {sale.type === 'RETURN' ? '-' : ''}{formatINR(Math.abs(sale.totalAmount || 0))}
                                             </span>
-                                        </td>
-                                        <td className="sld-bill">
-                                            <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
-                                        </td>
-                                        <td className="sld-cust">
-                                            <div className="cust-main">{sale.customerName || 'Walk-in Customer'}</div>
-                                            {sale.customerMobile && <div className="cust-sub">{sale.customerMobile}</div>}
-                                        </td>
-                                        <td className="sld-time">
-                                            {new Date(sale.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                        </td>
-                                        <td className="sld-items">
-                                            <div className="items-preview">
-                                                {(sale.items || []).slice(0, 2).map(item => item.productName).join(', ')}
-                                                {sale.items?.length > 2 && ` +${sale.items.length - 2} more`}
-                                            </div>
-                                        </td>
-                                        <td className="sld-method">
-                                            <span className={`method-badge ${sale.paymentMethod?.toLowerCase() || 'cash'}`}>
-                                                {(sale.paymentMethod || 'CASH').toUpperCase()}
-                                            </span>
-                                        </td>
-                                        <td className="sld-status" style={{ textAlign: 'center' }}>
-                                            {sale.type === 'SALE' || !sale.type ? (
-                                                <span className={`status-badge-new ${(sale.paymentStatus || 'Paid').toLowerCase()}`}>
-                                                    {sale.paymentStatus === 'Paid' ? '🟢 Paid' : sale.paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
+                                            <ChevronRight size={16} color="#98A2B3" />
+                                        </div>
+                                    </div>
+
+                                    <div className="sl-card-mid">
+                                        <div className="sl-card-cust-name" title={sale.customerName || 'Walk-in Customer'}>
+                                            {sale.customerName || 'Walk-in Customer'}
+                                            {sale.customerMobile && <span className="sl-card-cust-phone">({sale.customerMobile})</span>}
+                                        </div>
+                                        <div className="sl-card-date-line">
+                                            <Calendar size={13} color="#64748B" />
+                                            <span>{dateFormatted}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="sl-card-bot">
+                                        <div className="sl-card-fin-row">
+                                            <div className="sl-card-status-col">
+                                                <span className={`status-pill status-${statusBadge.className}`}>
+                                                    <span className="status-dot"></span>
+                                                    {statusBadge.label}
                                                 </span>
-                                            ) : (
-                                                <span style={{ color: '#94a3b8', fontSize: '13px', fontWeight: '600' }}>-</span>
-                                            )}
-                                        </td>
-                                        <td className="sld-paid" style={{ textAlign: 'right', fontWeight: '600', color: '#059669' }}>
-                                            {sale.type === 'SALE' || !sale.type ? `₹${(sale.paidAmount || sale.totalAmount || 0).toLocaleString()}` : '-'}
-                                        </td>
-                                        <td className="sld-due" style={{ textAlign: 'right', fontWeight: '600', color: (sale.remainingAmount > 0) ? '#D97706' : '#64748B' }}>
-                                            {sale.type === 'SALE' || !sale.type ? `₹${(sale.remainingAmount || 0).toLocaleString()}` : '-'}
-                                        </td>
-                                        <td className="sld-amt" style={{ textAlign: 'right', fontWeight: 'bold', color: sale.type === 'RETURN' ? '#DC2626' : sale.type === 'EXCHANGE' ? '#EA580C' : '#059669' }}>
-                                            <div className="amt-val">
-                                                {sale.type === 'RETURN' ? '-' : ''}₹{Math.abs(sale.totalAmount || 0).toLocaleString()}
                                             </div>
-                                        </td>
-                                        <td className="sld-actions" onClick={(e) => e.stopPropagation()}>
-                                            <div className="sld-actions-container">
-                                                <button className="sl-btn-action view" onClick={() => handleViewBill(sale._id)}>View Bill</button>
-                                                {(sale.type === 'SALE' || !sale.type) && (
-                                                    <>
-                                                        <button className="sl-btn-action return" onClick={() => handleOpenReturnModal(sale)}>Return</button>
-                                                        <button className="sl-btn-action exchange" onClick={() => handleOpenExchangeModal(sale)}>Exchange</button>
-                                                    </>
+                                            <div className="sl-card-amt-pills">
+                                                <span className="sl-card-paid">Paid: {formatINR(paidAmount)}</span>
+                                                {dueAmount > 0 ? (
+                                                    <span className="sl-card-due-alert">Due: {formatINR(dueAmount)}</span>
+                                                ) : (
+                                                    <span className="sl-card-due-zero">Due: ₹0</span>
                                                 )}
                                             </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                        </div>
+
+                                        <div className="sl-card-actions" onClick={(e) => e.stopPropagation()}>
+                                            <button 
+                                                type="button"
+                                                className="sl-action-icon-btn view"
+                                                onClick={() => handleViewBill(sale)}
+                                                title="View Bill Details"
+                                                aria-label="View Bill"
+                                            >
+                                                <Receipt size={13} />
+                                                <span>Bill</span>
+                                            </button>
+                                            {(sale.type === 'SALE' || !sale.type) && (
+                                                <>
+                                                    <button 
+                                                        type="button"
+                                                        className="sl-action-icon-btn return"
+                                                        onClick={() => handleOpenReturnModal(sale)}
+                                                        title="Process Return"
+                                                        aria-label="Return Items"
+                                                    >
+                                                        <Undo2 size={13} />
+                                                        <span>Return</span>
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        className="sl-action-icon-btn exchange"
+                                                        onClick={() => handleOpenExchangeModal(sale)}
+                                                        title="Process Exchange"
+                                                        aria-label="Exchange Items"
+                                                    >
+                                                        <RefreshCw size={12} />
+                                                        <span>Exchange</span>
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            );
+                        })}
                     </div>
-                </div>
+
+                    {/* Redesigned Desktop Sales History Table */}
+                    <div className="sl-desktop-only radical-desktop-container">
+                        <div className="rdc-header">
+                            <div className="rdch-left">
+                                <h3>Sales History</h3>
+                                <p>{filteredSales.length} Transactions Found</p>
+                            </div>
+                            <div className="rdch-right">
+                                <span className="rdch-stat">Total: <strong>{formatINR(filteredSales.reduce((acc, s) => acc + (s.totalAmount || 0), 0))}</strong></span>
+                            </div>
+                        </div>
+                        <div className="table-responsive-wrapper">
+                            <table className="radical-desktop-table">
+                                <thead>
+                                    <tr>
+                                        <th className="th-checkbox">
+                                            <input 
+                                                type="checkbox"
+                                                checked={paginatedSales.length > 0 && paginatedSales.every(s => selectedBatchBillIds.includes(s._id))}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setSelectedBatchBillIds(paginatedSales.map(s => s._id));
+                                                    } else {
+                                                        setSelectedBatchBillIds([]);
+                                                    }
+                                                }}
+                                                title="Select all bills for 2-on-1 A4 printing"
+                                                style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                                            />
+                                        </th>
+                                        <th className="th-invoice">Invoice No.</th>
+                                        <th className="th-customer">Customer</th>
+                                        <th className="th-date">Date</th>
+                                        <th className="th-mode">Payment Mode</th>
+                                        <th className="th-status">Payment Status</th>
+                                        <th className="th-total">Total Amount</th>
+                                        <th className="th-paid">Paid</th>
+                                        <th className="th-due">Due</th>
+                                        <th className="th-actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {paginatedSales.map((sale) => {
+                                        const displayInvoice = getInvoiceDisplayNumber(sale);
+                                        const dateFormatted = formatDateCompact(sale.date);
+                                        const { paidAmount, dueAmount, statusBadge, modeBadge } = getSaleRowMetrics(sale);
+
+                                        return (
+                                            <tr key={sale._id} className="sl-desktop-row" onClick={() => setSelectedSale(sale)}>
+                                                <td className="sld-checkbox" onClick={(e) => e.stopPropagation()}>
+                                                    <input 
+                                                        type="checkbox"
+                                                        checked={selectedBatchBillIds.includes(sale._id)}
+                                                        onChange={(e) => handleToggleSelectBill(sale._id, e)}
+                                                        style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                                                    />
+                                                </td>
+                                                <td className="sld-invoice">
+                                                    <span className="invoice-badge-v4" title={displayInvoice}>{displayInvoice}</span>
+                                                </td>
+                                                <td className="sld-customer">
+                                                    <div className="cust-cell-content">
+                                                        <div className="cust-name-text" title={sale.customerName || 'Walk-in Customer'}>
+                                                            {sale.customerName || 'Walk-in Customer'}
+                                                        </div>
+                                                        {sale.customerMobile && (
+                                                            <div className="cust-phone-sub" title={sale.customerMobile}>
+                                                                {sale.customerMobile}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                <td className="sld-date">
+                                                    <span className="date-compact-text">{dateFormatted}</span>
+                                                </td>
+                                                <td className="sld-mode">
+                                                    <span className={`mode-pill mode-${modeBadge.className}`}>
+                                                        {modeBadge.label}
+                                                    </span>
+                                                </td>
+                                                <td className="sld-status">
+                                                    <span className={`status-pill status-${statusBadge.className}`}>
+                                                        <span className="status-dot"></span>
+                                                        {statusBadge.label}
+                                                    </span>
+                                                </td>
+                                                <td className="sld-total">
+                                                    <span className={`total-amount-val ${sale.type === 'RETURN' ? 'negative' : ''}`}>
+                                                        {sale.type === 'RETURN' ? '-' : ''}{formatINR(Math.abs(sale.totalAmount || 0))}
+                                                    </span>
+                                                </td>
+                                                <td className="sld-paid">
+                                                    <span className="paid-amount-val">
+                                                        {formatINR(paidAmount)}
+                                                    </span>
+                                                </td>
+                                                <td className="sld-due">
+                                                    {dueAmount > 0 ? (
+                                                        <span className="due-amount-warning">{formatINR(dueAmount)}</span>
+                                                    ) : (
+                                                        <span className="due-amount-zero">₹0</span>
+                                                    )}
+                                                </td>
+                                                <td className="sld-actions" onClick={(e) => e.stopPropagation()}>
+                                                    <div className="compact-actions-row">
+                                                        <button 
+                                                            type="button"
+                                                            className="sl-action-icon-btn view" 
+                                                            onClick={() => handleViewBill(sale)}
+                                                            title="View Bill Details"
+                                                            aria-label="View Bill"
+                                                        >
+                                                            <Receipt size={13} />
+                                                            <span>Bill</span>
+                                                        </button>
+                                                        {(sale.type === 'SALE' || !sale.type) && (
+                                                            <>
+                                                                <button 
+                                                                    type="button"
+                                                                    className="sl-action-icon-btn return" 
+                                                                    onClick={() => handleOpenReturnModal(sale)}
+                                                                    title="Process Return"
+                                                                    aria-label="Return Items"
+                                                                >
+                                                                    <Undo2 size={13} />
+                                                                    <span>Return</span>
+                                                                </button>
+                                                                <button 
+                                                                    type="button"
+                                                                    className="sl-action-icon-btn exchange" 
+                                                                    onClick={() => handleOpenExchangeModal(sale)}
+                                                                    title="Process Exchange"
+                                                                    aria-label="Exchange Items"
+                                                                >
+                                                                    <RefreshCw size={12} />
+                                                                    <span>Exchange</span>
+                                                                </button>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </>
             )}
 
@@ -760,6 +1058,36 @@ const SalesLogPage = () => {
                     Load More Transactions
                 </button>
             )}
+
+            {/* Floating Batch Bar for Multi-Bill 2-on-1 A4 Printing */}
+            <AnimatePresence>
+                {selectedBatchBillIds.length > 0 && (
+                    <motion.div 
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 30 }}
+                        className="sl-floating-batch-bar no-print"
+                    >
+                        <div className="fbb-info">
+                            <span className="fbb-count">{selectedBatchBillIds.length}</span>
+                            <span>{selectedBatchBillIds.length === 1 ? 'bill selected' : 'bills selected for 2-on-1 A4 printing'}</span>
+                        </div>
+                        <div className="fbb-actions">
+                            <button className="fbb-btn fbb-print" onClick={handleBatchPrint}>
+                                <Printer size={15} />
+                                <span>{selectedBatchBillIds.length >= 2 ? 'Print 2 Bills on 1 Sheet' : 'Print Selected Bill (Half-A4)'}</span>
+                            </button>
+                            <button className="fbb-btn fbb-download" onClick={handleBatchDownloadPDF}>
+                                <FileText size={15} />
+                                <span>Download 2-Up PDF</span>
+                            </button>
+                            <button className="fbb-btn fbb-clear" onClick={() => setSelectedBatchBillIds([])}>
+                                Clear
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <AnimatePresence>
                 {selectedSale && !isInvoiceOpen && (
@@ -1001,7 +1329,7 @@ const SalesLogPage = () => {
                             </div>
 
                             <div className="radical-sticky-footer" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                <button className="r-btn r-btn-primary" onClick={() => handleViewBill(selectedSale._id)}>
+                                <button className="r-btn r-btn-primary" onClick={() => handleViewBill(selectedSale)}>
                                     <Receipt size={18} />
                                     <span>View Bill</span>
                                 </button>
@@ -1048,14 +1376,41 @@ const SalesLogPage = () => {
                         exit={{ opacity: 0, y: 20 }}
                         className="invoice-preview-screen"
                     >
-                        <div className="ips-top-bar">
-                            <button className="ips-back-btn" onClick={() => setIsInvoiceOpen(false)}>
+                        <div className="ips-top-bar no-print">
+                            <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
                                 <ChevronLeft size={20} />
                                 <span>Back</span>
                             </button>
-                            <h2>View Bill</h2>
+                            <div className="ips-title-area">
+                                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
+                                    View Bill
+                                </h2>
+                                <div style={{ marginTop: '4px' }}>
+                                    <PrintFormatSelector 
+                                        value={activePrintFormat}
+                                        onChange={(fmt) => setPrintFormatOverride(fmt)}
+                                        savedDefault={shop?.defaultPrintFormat || 'full_a4'}
+                                        shopId={shopId || shop?._id}
+                                        onShopUpdate={(updated) => {
+                                            setShop(updated);
+                                            setPrintFormatOverride(null);
+                                        }}
+                                        mode="pills"
+                                        showPrinterTip={false}
+                                    />
+                                </div>
+                            </div>
                             <div style={{ width: 60 }} />
                         </div>
+
+                        {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
+                            <div className="ips-printer-tip-bar no-print">
+                                <Info size={14} />
+                                <span>
+                                    <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
+                                </span>
+                            </div>
+                        )}
 
                         <div className="ips-content">
                             {invoiceLoading ? (
@@ -1063,388 +1418,52 @@ const SalesLogPage = () => {
                             ) : !selectedSaleForInvoice ? (
                                 <div className="ips-error">Bill details could not be found.</div>
                             ) : (
-                                <div className="printable-invoice-sheet">
-                                    <div className="pis-header">
-                                        <div className="pis-logo-circle">{(shop?.name || 'S')[0]}</div>
-                                        <h1 className="pis-shop-name">{shop?.name || 'ShopPulse Business'}</h1>
-                                        <p className="pis-shop-address">{shop?.location || 'Ankisa, Maharashtra'}</p>
-                                        <p className="pis-shop-contact">Phone: {shop?.contactNumber || 'XXXXXXXXXX'} | GSTIN: {shop?.gstNumber || 'N/A'}</p>
-                                    </div>
-
-                                    <div className="pis-divider-solid"></div>
-
-                                    <div className="pis-info-grid">
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">INVOICE DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Invoice No:</label>
-                                                <strong>#{selectedSaleForInvoice._id.slice(-6).toUpperCase()}</strong>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Date:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Time:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Payment:</label>
-                                                <strong className="pis-payment-method">{selectedSaleForInvoice.paymentMethod.toUpperCase()}</strong>
-                                            </div>
-                                        </div>
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">CUSTOMER DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Name:</label>
-                                                <strong>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</strong>
-                                            </div>
-                                            {selectedSaleForInvoice.customerMobile && (
-                                                <div className="pis-info-row">
-                                                    <label>Mobile:</label>
-                                                    <span>{selectedSaleForInvoice.customerMobile}</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {selectedSaleForInvoice.type === 'SALE' ? (
-                                        <>
-                                            {/* Original Sale Bill: Dynamic Effective Sale */}
-                                            <span className="pis-info-label" style={{ color: '#2563eb' }}>Current Effective Items (In Possession)</span>
-                                            <table className="pis-items-table-v2">
-                                                <thead>
-                                                    <tr>
-                                                        <th style={{ width: '40px' }}>Sl</th>
-                                                        <th>Product Description</th>
-                                                        <th style={{ textAlign: 'center' }}>Qty</th>
-                                                        <th style={{ textAlign: 'right' }}>Rate</th>
-                                                        <th style={{ textAlign: 'right' }}>Amount</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {(selectedSaleForInvoice.items || [])
-                                                        .filter(item => (item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity) > 0)
-                                                        .map((item, idx) => {
-                                                            const qty = item.remainingQty !== undefined ? item.remainingQty : (item.soldQtyEntered || item.quantity || 0);
-                                                            const rate = item.pricePerBaseUnit || item.price || 0;
-                                                            return (
-                                                                <tr key={idx}>
-                                                                    <td>{idx + 1}</td>
-                                                                    <td>{item.productName}</td>
-                                                                    <td style={{ textAlign: 'center' }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                                    <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
-                                                                    <td style={{ textAlign: 'right' }}>₹{(qty * rate).toFixed(2)}</td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                </tbody>
-                                            </table>
-
-                                            {/* Show returns in a separate table if any exist */}
-                                            {(selectedSaleForInvoice.items || []).some(item => (item.returnedQty || 0) > 0) && (
-                                                <div style={{ marginTop: '24px' }}>
-                                                    <span className="pis-info-label" style={{ color: '#EF4444' }}>Returned / Exchanged Items</span>
-                                                    <table className="pis-items-table-v2" style={{ borderColor: '#FEE2E2', marginTop: '8px' }}>
-                                                        <thead>
-                                                            <tr style={{ background: '#FEF2F2' }}>
-                                                                <th style={{ width: '40px', color: '#991B1B' }}>Sl</th>
-                                                                <th style={{ color: '#991B1B' }}>Product Description</th>
-                                                                <th style={{ textAlign: 'center', color: '#991B1B' }}>Qty Returned</th>
-                                                                <th style={{ textAlign: 'right', color: '#991B1B' }}>Rate</th>
-                                                                <th style={{ textAlign: 'right', color: '#991B1B' }}>Refunded Value</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {(selectedSaleForInvoice.items || [])
-                                                                .filter(item => (item.returnedQty || 0) > 0)
-                                                                .map((item, idx) => {
-                                                                    const rQty = item.returnedQty || 0;
-                                                                    const rate = item.pricePerBaseUnit || item.price || 0;
-                                                                    return (
-                                                                        <tr key={idx} style={{ color: '#991B1B' }}>
-                                                                            <td>{idx + 1}</td>
-                                                                            <td>{item.productName}</td>
-                                                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{rQty} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                                            <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
-                                                                            <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{(rQty * rate).toFixed(2)}</td>
-                                                                        </tr>
-                                                                    );
-                                                                })}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            )}
-
-                                            {/* Mobile Item Cards */}
-                                            <div className="pis-items-mobile-list">
-                                                {(selectedSaleForInvoice.items || [])
-                                                    .filter(item => (item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity) > 0)
-                                                    .map((item, idx) => {
-                                                        const qty = item.remainingQty !== undefined ? item.remainingQty : (item.soldQtyEntered || item.quantity || 0);
-                                                        const rate = item.pricePerBaseUnit || item.price || 0;
-                                                        return (
-                                                            <div key={idx} className="pis-mobile-item-card">
-                                                                <div className="pmic-header">
-                                                                    <span className="pmic-sl">#{idx + 1}</span>
-                                                                    <span className="pmic-name">{item.productName}</span>
-                                                                </div>
-                                                                <div className="pmic-body">
-                                                                    <div className="pmic-col">
-                                                                        <label>Qty</label>
-                                                                        <span>{qty} {item.soldUnit || item.unit || 'Pc'}</span>
-                                                                    </div>
-                                                                    <div className="pmic-col">
-                                                                        <label>Rate</label>
-                                                                        <span>₹{rate.toFixed(2)}</span>
-                                                                    </div>
-                                                                    <div className="pmic-col">
-                                                                        <label>Amount</label>
-                                                                        <strong>₹{(qty * rate).toFixed(2)}</strong>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                            </div>
-
-                                            {/* Subtotal calculation based on effective items */}
-                                            {(() => {
-                                                const effectiveSubtotal = (selectedSaleForInvoice.items || [])
-                                                    .reduce((sum, item) => sum + ((item.remainingQty !== undefined ? item.remainingQty : item.soldQtyEntered || item.quantity || 0) * (item.pricePerBaseUnit || item.price || 0)), 0);
-                                                const discount = selectedSaleForInvoice.discount || selectedSaleForInvoice.discountAmount || 0;
-                                                const grandTotal = Math.max(0, effectiveSubtotal - discount);
-                                                const paidAmount = selectedSaleForInvoice.paidAmount !== undefined ? selectedSaleForInvoice.paidAmount : (selectedSaleForInvoice.paymentStatus === 'Paid' || !selectedSaleForInvoice.paymentStatus ? grandTotal : 0);
-                                                const remainingAmount = selectedSaleForInvoice.remainingAmount !== undefined ? selectedSaleForInvoice.remainingAmount : (selectedSaleForInvoice.paymentStatus === 'Unpaid' ? grandTotal : 0);
-                                                const paymentStatus = selectedSaleForInvoice.paymentStatus || 'Paid';
-                                                return (
-                                                    <div className="pis-summary-v2">
-                                                        <div className="pis-summary-box">
-                                                            <div className="pis-sum-row">
-                                                                <span>Subtotal (Effective):</span>
-                                                                <span>₹{effectiveSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                            </div>
-                                                            {discount > 0 && (
-                                                                <div className="pis-sum-row discount">
-                                                                    <span>Discount:</span>
-                                                                    <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                                </div>
-                                                            )}
-                                                            <div className="pis-sum-row grand">
-                                                                <span>GRAND TOTAL:</span>
-                                                                <span>₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                            </div>
-                                                            <div className="pis-sum-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
-                                                                <span>Paid Amount:</span>
-                                                                <span style={{ color: '#067647', fontWeight: 600 }}>₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                            </div>
-                                                            <div className="pis-sum-row">
-                                                                <span>Due Amount:</span>
-                                                                <span style={{ color: remainingAmount > 0 ? '#B45309' : '#64748B', fontWeight: 600 }}>₹{remainingAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                            </div>
-                                                            <div className="pis-sum-row">
-                                                                <span>Payment Status:</span>
-                                                                <span className={`status-badge-new ${paymentStatus.toLowerCase()}`} style={{ padding: '2px 8px', fontSize: '11px', borderRadius: '6px' }}>
-                                                                    {paymentStatus === 'Paid' ? '🟢 Paid' : paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })()}
-                                        </>
-                                    ) : selectedSaleForInvoice.type === 'RETURN' ? (
-                                        <>
-                                            {/* Return Receipt */}
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', background: '#F8FAFC', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-                                                <span style={{ fontWeight: 700, fontSize: '13px', color: '#64748B' }}>LINKED BILL:</span>
-                                                <span style={{ fontWeight: 800, fontSize: '14px', color: '#0F172A' }}>#{selectedSaleForInvoice.originalSaleInvoice || 'N/A'}</span>
-                                            </div>
-
-                                            <span className="pis-info-label" style={{ color: '#EF4444' }}>Returned Items (Refunded)</span>
-                                            <table className="pis-items-table-v2" style={{ borderColor: '#FEE2E2', marginTop: '6px' }}>
-                                                <thead>
-                                                    <tr style={{ background: '#FEF2F2' }}>
-                                                        <th style={{ width: '40px', color: '#991B1B' }}>Sl</th>
-                                                        <th style={{ color: '#991B1B' }}>Product Description</th>
-                                                        <th style={{ textAlign: 'center', color: '#991B1B' }}>Qty</th>
-                                                        <th style={{ textAlign: 'right', color: '#991B1B' }}>Rate</th>
-                                                        <th style={{ textAlign: 'right', color: '#991B1B' }}>Amount</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {(selectedSaleForInvoice.items || []).map((item, idx) => {
-                                                        const qty = item.soldQtyEntered || item.quantity || 0;
-                                                        const rate = item.pricePerBaseUnit || item.price || 0;
-                                                        return (
-                                                            <tr key={idx} style={{ color: '#991B1B' }}>
-                                                                <td>{idx + 1}</td>
-                                                                <td>{item.productName}</td>
-                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                                <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
-                                                                <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{(qty * rate).toFixed(2)}</td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-
-                                            {/* Remaining active items */}
-                                            {selectedSaleForInvoice.remainingActiveItems && selectedSaleForInvoice.remainingActiveItems.length > 0 && (
-                                                <div style={{ marginTop: '24px' }}>
-                                                    <span className="pis-info-label" style={{ color: '#16A34A' }}>Remaining Items (In Possession After Return)</span>
-                                                    <table className="pis-items-table-v2" style={{ borderColor: '#DCFCE7', marginTop: '8px' }}>
-                                                        <thead>
-                                                            <tr style={{ background: '#F0FDF4' }}>
-                                                                <th style={{ width: '40px', color: '#166534' }}>Sl</th>
-                                                                <th style={{ color: '#166534' }}>Product Description</th>
-                                                                <th style={{ textAlign: 'center', color: '#166534' }}>Qty Remaining</th>
-                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Rate</th>
-                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Total</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {selectedSaleForInvoice.remainingActiveItems.map((item, idx) => (
-                                                                <tr key={idx} style={{ color: '#166534' }}>
-                                                                    <td>{idx + 1}</td>
-                                                                    <td>{item.productName}</td>
-                                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity} {item.unit || 'Pc'}</td>
-                                                                    <td style={{ textAlign: 'right' }}>₹{item.price.toFixed(2)}</td>
-                                                                    <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{item.totalPrice.toFixed(2)}</td>
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            )}
-
-                                            <div className="pis-summary-v2">
-                                                <div className="pis-summary-box">
-                                                    <div className="pis-sum-row grand" style={{ background: '#FEF2F2', borderColor: '#FCA5A5', color: '#B91C1C' }}>
-                                                        <span>TOTAL REFUND:</span>
-                                                        <span>₹{selectedSaleForInvoice.totalRefundAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <>
-                                            {/* Exchange Receipt */}
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', background: '#F8FAFC', padding: '12px 16px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
-                                                <span style={{ fontWeight: 700, fontSize: '13px', color: '#64748B' }}>LINKED BILL:</span>
-                                                <span style={{ fontWeight: 800, fontSize: '14px', color: '#0F172A' }}>#{selectedSaleForInvoice.originalSaleInvoice || 'N/A'}</span>
-                                            </div>
-
-                                            {/* Exchanged Details */}
-                                            <span className="pis-info-label" style={{ color: '#EA580C' }}>Items Returned / Replaced</span>
-                                            <table className="pis-items-table-v2" style={{ marginTop: '6px' }}>
-                                                <thead>
-                                                    <tr>
-                                                        <th style={{ width: '40px' }}>Sl</th>
-                                                        <th>Product Description</th>
-                                                        <th style={{ textAlign: 'center' }}>Type</th>
-                                                        <th style={{ textAlign: 'center' }}>Qty</th>
-                                                        <th style={{ textAlign: 'right' }}>Rate</th>
-                                                        <th style={{ textAlign: 'right' }}>Amount</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {(selectedSaleForInvoice.items || []).map((item, idx) => {
-                                                        const isRet = item.isReturnedInExchange;
-                                                        const qty = item.soldQtyEntered || item.quantity || 0;
-                                                        const rate = item.pricePerBaseUnit || item.price || 0;
-                                                        return (
-                                                            <tr key={idx} style={{ color: isRet ? '#B91C1C' : '#0F172A' }}>
-                                                                <td>{idx + 1}</td>
-                                                                <td>{item.productName}</td>
-                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>
-                                                                    <span style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '11px', background: isRet ? '#FEF2F2' : '#EFF6FF', color: isRet ? '#B91C1C' : '#1E40AF' }}>
-                                                                        {isRet ? 'Returned' : 'Replacement'}
-                                                                    </span>
-                                                                </td>
-                                                                <td style={{ textAlign: 'center', fontWeight: 700 }}>{qty} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                                <td style={{ textAlign: 'right' }}>₹{rate.toFixed(2)}</td>
-                                                                <td style={{ textAlign: 'right' }}>₹{(qty * rate).toFixed(2)}</td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-
-                                            {/* Remaining active items */}
-                                            {selectedSaleForInvoice.remainingActiveItems && selectedSaleForInvoice.remainingActiveItems.length > 0 && (
-                                                <div style={{ marginTop: '24px' }}>
-                                                    <span className="pis-info-label" style={{ color: '#16A34A' }}>Remaining Items (In Possession After Exchange)</span>
-                                                    <table className="pis-items-table-v2" style={{ borderColor: '#DCFCE7', marginTop: '8px' }}>
-                                                        <thead>
-                                                            <tr style={{ background: '#F0FDF4' }}>
-                                                                <th style={{ width: '40px', color: '#166534' }}>Sl</th>
-                                                                <th style={{ color: '#166534' }}>Product Description</th>
-                                                                <th style={{ textAlign: 'center', color: '#166534' }}>Qty Remaining</th>
-                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Rate</th>
-                                                                <th style={{ textAlign: 'right', color: '#166534' }}>Total</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {selectedSaleForInvoice.remainingActiveItems.map((item, idx) => (
-                                                                <tr key={idx} style={{ color: '#166534' }}>
-                                                                    <td>{idx + 1}</td>
-                                                                    <td>{item.productName}</td>
-                                                                    <td style={{ textAlign: 'center', fontWeight: 700 }}>{item.quantity} {item.unit || 'Pc'}</td>
-                                                                    <td style={{ textAlign: 'right' }}>₹{item.price.toFixed(2)}</td>
-                                                                    <td style={{ textAlign: 'right', fontWeight: 700 }}>₹{item.totalPrice.toFixed(2)}</td>
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            )}
-
-                                            <div className="pis-summary-v2">
-                                                <div className="pis-summary-box">
-                                                    <div className="pis-sum-row">
-                                                        <span>Total Returned:</span>
-                                                        <span style={{ color: '#B91C1C', fontWeight: 700 }}>₹{selectedSaleForInvoice.totalReturnedValue?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
-                                                    </div>
-                                                    <div className="pis-sum-row">
-                                                        <span>Total Replacement:</span>
-                                                        <span style={{ color: '#1E40AF', fontWeight: 700 }}>₹{selectedSaleForInvoice.totalReplacementValue?.toLocaleString(undefined, { minimumFractionDigits: 2 }) || '0.00'}</span>
-                                                    </div>
-                                                    <div className="pis-sum-row grand" style={{ 
-                                                        background: selectedSaleForInvoice.balanceDifference >= 0 ? '#EFF6FF' : '#FEF2F2',
-                                                        borderColor: selectedSaleForInvoice.balanceDifference >= 0 ? '#BFDBFE' : '#FCA5A5',
-                                                        color: selectedSaleForInvoice.balanceDifference >= 0 ? '#1E40AF' : '#B91C1C' 
-                                                    }}>
-                                                        <span>{selectedSaleForInvoice.balanceDifference >= 0 ? 'BALANCE DUE:' : 'REFUND DUE:'}</span>
-                                                        <span>₹{Math.abs(selectedSaleForInvoice.balanceDifference || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
-
-                                    <div className="pis-footer-v2">
-                                        <div className="pis-footer-divider"></div>
-                                        <h3>Thank you for your business!</h3>
-                                        <p>Returns accepted within 7 days with original bill.</p>
-                                        <p>This is a computer generated invoice.</p>
-                                        <div className="pis-brand-footer">Generated by ShopPulse POS</div>
-                                    </div>
-                                </div>
+                                <CompactInvoiceSheet 
+                                    bill1={selectedSaleForInvoice}
+                                    bill2={secondSaleForInvoice}
+                                    shop={shop}
+                                    products={shopProducts}
+                                    format={activePrintFormat}
+                                    availableBills={sales}
+                                    onSelectSecondBill={async (second) => {
+                                        if (!second) {
+                                            setSecondSaleForInvoice(null);
+                                            return;
+                                        }
+                                        setSecondSaleForInvoice(second);
+                                        if (second._id && second.type !== 'GOV_SALE') {
+                                            try {
+                                                const res = await saleService.getSale(second._id);
+                                                if (res?.data?.data) {
+                                                    setSecondSaleForInvoice(res.data.data);
+                                                }
+                                            } catch (err) {
+                                                console.warn('Could not fetch full second sale:', err);
+                                            }
+                                        }
+                                    }}
+                                    onRemoveSecondBill={() => setSecondSaleForInvoice(null)}
+                                />
                             )}
                         </div>
 
-                        <div className="ips-actions-bar">
+                        <div className="ips-actions-bar no-print">
                             <button className="ips-btn ips-wa" onClick={() => handleShareWhatsApp()}>
                                 WhatsApp
                             </button>
                             <button className="ips-btn ips-pdf" onClick={() => handleDownloadPDF()}>
-                                Download PDF
+                                Download PDF {secondSaleForInvoice && activePrintFormat === 'half_a4' ? '(2-on-1)' : ''}
                             </button>
-                            <button className="ips-btn ips-print" onClick={() => window.print()}>
-                                Print
+                            <button 
+                                className="ips-btn ips-print" 
+                                onClick={() => {
+                                    applyPrintPageStyles(activePrintFormat);
+                                    window.print();
+                                }}
+                            >
+                                Print ({getFormatOption(activePrintFormat).name})
                             </button>
-                            <button className="ips-btn ips-close" onClick={() => setIsInvoiceOpen(false)}>
+                            <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
                                 Close
                             </button>
                         </div>
@@ -1476,8 +1495,12 @@ const SalesLogPage = () => {
                                         </div>
                                         {saleToReturn.items.map(item => {
                                             const alreadyRet = getAlreadyReturnedQuantities(saleToReturn._id)[item.product] || 0;
-                                            const multiplier = item.multiplier || 1;
-                                            const maxReturnable = (item.soldQtyBaseUnit - alreadyRet) / multiplier;
+                                            const multiplier = Number(item.multiplier) || 1;
+                                            const baseQty = (item.soldQtyBaseUnit !== undefined && item.soldQtyBaseUnit !== null)
+                                                ? Number(item.soldQtyBaseUnit)
+                                                : (Number(item.soldQtyEntered || item.quantity || 0) * multiplier);
+                                            const rawMax = (baseQty - alreadyRet) / multiplier;
+                                            const maxReturnable = isNaN(rawMax) ? Math.max(0, Number(item.soldQtyEntered || item.quantity || 0)) : Math.max(0, rawMax);
 
                                             return (
                                                 <div key={item.product} className="item-row-custom">
@@ -1590,8 +1613,12 @@ const SalesLogPage = () => {
                                             </div>
                                             {saleToExchange.items.map(item => {
                                                 const alreadyRet = getAlreadyReturnedQuantities(saleToExchange._id)[item.product] || 0;
-                                                const multiplier = item.multiplier || 1;
-                                                const maxReturnable = (item.soldQtyBaseUnit - alreadyRet) / multiplier;
+                                                const multiplier = Number(item.multiplier) || 1;
+                                                const baseQty = (item.soldQtyBaseUnit !== undefined && item.soldQtyBaseUnit !== null)
+                                                    ? Number(item.soldQtyBaseUnit)
+                                                    : (Number(item.soldQtyEntered || item.quantity || 0) * multiplier);
+                                                const rawMax = (baseQty - alreadyRet) / multiplier;
+                                                const maxReturnable = isNaN(rawMax) ? Math.max(0, Number(item.soldQtyEntered || item.quantity || 0)) : Math.max(0, rawMax);
 
                                                 return (
                                                     <div key={item.product} className="item-row-custom">
@@ -1832,144 +1859,561 @@ const SalesLogPage = () => {
                 .status-badge-new.paid { background: #ECFDF5; color: #067647; border: 1px solid #ABEFC6; }
                 .status-badge-new.partial { background: #FFFBEB; color: #B45309; border: 1px solid #FCD34D; }
                 .status-badge-new.unpaid { background: #FEF3F2; color: #B42318; border: 1px solid #FECDCA; }
-                .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
-                .radical-desktop-container { background: white; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 4px 20px rgba(0,0,0,0.05); overflow: hidden; margin-top: 24px; }
-                .rdc-header { padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; background: #fafafa; }
-                .rdch-left h3 { font-size: 18px; font-weight: 800; color: #0f172a; margin: 0; }
-                .rdch-left p { font-size: 13px; color: #64748b; font-weight: 600; margin-top: 4px; }
-                .rdch-stat { font-size: 14px; color: #475569; font-weight: 600; background: #f1f5f9; padding: 8px 16px; border-radius: 10px; }
-                .rdch-stat strong { color: #2563eb; font-weight: 800; }
+                .sales-log-v3 { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+                @media (min-width: 1024px) {
+                    .sales-log-v3 { padding: 24px 36px; gap: 20px; }
+                }
 
-                .radical-desktop-table { width: 100%; border-collapse: collapse; }
-                .radical-desktop-table th { text-align: left; padding: 16px 24px; font-size: 12px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; background: #fafafa; }
-                .radical-desktop-table td { padding: 16px 24px; font-size: 14px; color: #1e293b; border-bottom: 1px solid #f8fafc; vertical-align: middle; }
-                
+                /* Unified Summary Grid */
+                .sl-summary-grid-unified {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 12px;
+                    width: 100%;
+                }
+                @media (min-width: 1024px) {
+                    .sl-summary-grid-unified {
+                        grid-template-columns: repeat(4, 1fr);
+                        gap: 14px;
+                    }
+                }
+                .sl-stat-card-v4 {
+                    background: white;
+                    border: 1.5px solid #e2e8f0;
+                    border-radius: 14px;
+                    padding: 14px 16px;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-between;
+                    min-height: 80px;
+                    box-sizing: border-box;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+                    transition: transform 0.15s ease, box-shadow 0.15s ease;
+                }
+                .sl-stat-card-v4:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+                }
+                .sl-stat-top {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .sl-stat-label {
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                }
+                .sl-stat-icon-wrap {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 7px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .sl-stat-icon-wrap.sales { background: #eff6ff; color: #2563eb; }
+                .sl-stat-icon-wrap.orders { background: #f8fafc; color: #475569; }
+                .sl-stat-icon-wrap.profit { background: #ecfdf5; color: #16a34a; }
+                .sl-stat-icon-wrap.items { background: #fff7ed; color: #ea580c; }
+                .sl-stat-val {
+                    font-size: 21px;
+                    font-weight: 900;
+                    color: #0f172a;
+                    letter-spacing: -0.02em;
+                    margin-top: 6px;
+                }
+                .sl-stat-val.profit-val {
+                    color: #16a34a;
+                }
+
+                /* Controls & Filters Bar */
+                .sl-controls-v4 {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                    width: 100%;
+                }
+                @media (min-width: 1024px) {
+                    .sl-controls-v4 {
+                        flex-direction: row;
+                        align-items: center;
+                        gap: 16px;
+                    }
+                }
+                .sl-search-v4 {
+                    height: 40px;
+                    background: white;
+                    border: 1.5px solid #e2e8f0;
+                    border-radius: 10px;
+                    display: flex;
+                    align-items: center;
+                    padding: 0 12px;
+                    gap: 8px;
+                    box-sizing: border-box;
+                    flex: 1;
+                    min-width: 240px;
+                }
+                @media (min-width: 1024px) {
+                    .sl-search-v4 {
+                        max-width: 360px;
+                    }
+                }
+                .sl-search-v4 input {
+                    border: none;
+                    outline: none;
+                    flex: 1;
+                    font-size: 13.5px;
+                    font-weight: 600;
+                    background: transparent;
+                    color: #1e293b;
+                }
+                .sl-search-v4 input::placeholder {
+                    color: #94a3b8;
+                    font-weight: 500;
+                }
+                .sl-search-clear {
+                    background: transparent;
+                    border: none;
+                    color: #94a3b8;
+                    cursor: pointer;
+                    padding: 2px;
+                    display: flex;
+                    align-items: center;
+                }
+                .sl-search-clear:hover { color: #475569; }
+
+                .sl-filters-scroll-group {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    overflow-x: auto;
+                    padding-bottom: 2px;
+                    -webkit-overflow-scrolling: touch;
+                    flex-shrink: 0;
+                }
+                .sl-filters-scroll-group::-webkit-scrollbar { display: none; }
+                .sl-pills-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    flex-shrink: 0;
+                }
+                .sl-pills-divider {
+                    width: 1px;
+                    height: 22px;
+                    background: #e2e8f0;
+                    flex-shrink: 0;
+                    margin: 0 4px;
+                }
+                .sl-pill-v4 {
+                    flex: 0 0 auto;
+                    height: 34px;
+                    padding: 0 12px;
+                    border: 1.5px solid #e2e8f0;
+                    background: white;
+                    border-radius: 8px;
+                    font-size: 12.5px;
+                    font-weight: 700;
+                    color: #64748b;
+                    cursor: pointer;
+                    white-space: nowrap;
+                    transition: all 0.15s ease;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .sl-pill-v4:hover {
+                    border-color: #cbd5e1;
+                    color: #1e293b;
+                }
+                .sl-pill-v4.active {
+                    background: #2563eb;
+                    color: white;
+                    border-color: #2563eb;
+                    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+                }
+                .sl-pill-v4.cal-pill {
+                    padding: 0 10px;
+                }
+
+                .sl-custom-date-v4 {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    background: white;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    border: 1.5px solid #e2e8f0;
+                    width: fit-content;
+                    box-sizing: border-box;
+                }
+                .sl-custom-date-v4 label {
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #475569;
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+                .sl-custom-date-v4 input {
+                    border: none;
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #1e293b;
+                    outline: none;
+                    background: transparent;
+                    cursor: pointer;
+                }
+
+                /* Redesigned Sales History Container & Table */
+                .radical-desktop-container {
+                    background: white;
+                    border-radius: 16px;
+                    border: 1.5px solid #e2e8f0;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.03);
+                    overflow: hidden;
+                    width: 100%;
+                    margin-top: 4px;
+                }
+                .rdc-header {
+                    padding: 16px 20px;
+                    border-bottom: 1.5px solid #f1f5f9;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    background: #fafafa;
+                }
+                .rdch-left h3 {
+                    font-size: 17px;
+                    font-weight: 800;
+                    color: #0f172a;
+                    margin: 0;
+                }
+                .rdch-left p {
+                    font-size: 12.5px;
+                    color: #64748b;
+                    font-weight: 600;
+                    margin-top: 2px;
+                }
+                .rdch-stat {
+                    font-size: 13px;
+                    color: #475569;
+                    font-weight: 600;
+                    background: #f1f5f9;
+                    padding: 6px 14px;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                }
+                .rdch-stat strong {
+                    color: #2563eb;
+                    font-weight: 800;
+                }
+
                 .table-responsive-wrapper {
                     overflow-x: auto;
                     width: 100%;
                     -webkit-overflow-scrolling: touch;
                 }
-                .radical-desktop-table th.actions-col,
-                .radical-desktop-table td.sld-actions {
-                    min-width: 250px;
-                    width: 250px;
-                    text-align: right;
-                    padding: 12px 24px;
+                .radical-desktop-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    table-layout: auto;
                 }
-                .sld-actions-container {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 6px;
-                    justify-content: flex-end;
+                .radical-desktop-table th {
+                    padding: 12px 10px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    background: #f8fafc;
+                    border-bottom: 1.5px solid #e2e8f0;
+                    white-space: nowrap;
+                }
+                .radical-desktop-table td {
+                    padding: 11px 10px;
+                    font-size: 13px;
+                    color: #1e293b;
+                    border-bottom: 1px solid #f1f5f9;
+                    vertical-align: middle;
+                    height: 52px;
+                    box-sizing: border-box;
+                }
+                .sl-desktop-row {
+                    cursor: pointer;
+                    transition: background 0.12s ease;
+                }
+                .sl-desktop-row:hover {
+                    background: #f8fafc;
+                }
+
+                /* Column specific widths & alignments */
+                .radical-desktop-table th.th-checkbox, .radical-desktop-table td.sld-checkbox { width: 36px; text-align: center; padding-left: 12px; }
+                .radical-desktop-table th.th-invoice, .radical-desktop-table td.sld-invoice { width: 115px; text-align: left; white-space: nowrap; }
+                .radical-desktop-table th.th-customer, .radical-desktop-table td.sld-customer { min-width: 125px; max-width: 170px; text-align: left; }
+                .radical-desktop-table th.th-date, .radical-desktop-table td.sld-date { width: 95px; text-align: left; white-space: nowrap; }
+                .radical-desktop-table th.th-mode, .radical-desktop-table td.sld-mode { width: 85px; text-align: center; }
+                .radical-desktop-table th.th-status, .radical-desktop-table td.sld-status { width: 90px; text-align: center; }
+                .radical-desktop-table th.th-total, .radical-desktop-table td.sld-total { width: 100px; text-align: right; white-space: nowrap; }
+                .radical-desktop-table th.th-paid, .radical-desktop-table td.sld-paid { width: 90px; text-align: right; white-space: nowrap; }
+                .radical-desktop-table th.th-due, .radical-desktop-table td.sld-due { width: 85px; text-align: right; white-space: nowrap; }
+                .radical-desktop-table th.th-actions, .radical-desktop-table td.sld-actions { width: 180px; min-width: 175px; text-align: right; padding-right: 14px; }
+
+                /* Invoice badge */
+                .invoice-badge-v4 {
+                    display: inline-block;
+                    background: #f1f5f9;
+                    color: #1e293b;
+                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 3px 8px;
+                    border-radius: 6px;
+                    border: 1px solid #e2e8f0;
+                    white-space: nowrap;
+                }
+
+                /* Customer cell */
+                .cust-cell-content { display: flex; flex-direction: column; gap: 2px; }
+                .cust-name-text {
+                    font-weight: 700;
+                    color: #0f172a;
+                    font-size: 13.5px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 190px;
+                }
+                .cust-phone-sub {
+                    font-size: 11px;
+                    color: #64748b;
+                    font-weight: 500;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 190px;
+                }
+
+                /* Date cell */
+                .date-compact-text {
+                    font-weight: 600;
+                    color: #475569;
+                    font-size: 13px;
+                    white-space: nowrap;
+                }
+
+                /* Payment Mode badges */
+                .mode-pill {
+                    display: inline-flex;
                     align-items: center;
+                    justify-content: center;
+                    font-size: 11px;
+                    font-weight: 800;
+                    padding: 3px 10px;
+                    border-radius: 999px;
+                    text-transform: uppercase;
+                    letter-spacing: 0.03em;
+                    white-space: nowrap;
                 }
+                .mode-pill.mode-cash { background: #ecfdf5; color: #067647; border: 1px solid #abefc6; }
+                .mode-pill.mode-upi { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+                .mode-pill.mode-khata { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+                .mode-pill.mode-card { background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe; }
 
-                .sl-desktop-row { cursor: pointer; transition: all 0.2s; }
-                .sl-desktop-row:hover { background: #f8fafc; }
-                .bill-badge { background: #f1f5f9; color: #475569; font-weight: 700; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 13px; }
-                .cust-main { font-weight: 700; color: #0f172a; }
-                .cust-sub { font-size: 11px; color: #94a3b8; font-weight: 600; }
-                .items-preview { font-size: 13px; color: #64748b; font-weight: 500; max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-                .history-count { background: #eef2ff; color: #4f46e5; font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 6px; }
-                .amt-val { font-size: 16px; font-weight: 800; color: #0f172a; }
+                /* Payment Status badges */
+                .status-pill {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 5px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    padding: 3px 9px;
+                    border-radius: 999px;
+                    white-space: nowrap;
+                }
+                .status-pill .status-dot {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                    display: inline-block;
+                    flex-shrink: 0;
+                }
+                .status-pill.status-paid { background: #ecfdf5; color: #067647; border: 1px solid #abefc6; }
+                .status-pill.status-paid .status-dot { background: #10b981; }
+                .status-pill.status-partial { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; }
+                .status-pill.status-partial .status-dot { background: #f59e0b; }
+                .status-pill.status-unpaid { background: #fef2f2; color: #b91c1c; border: 1px solid #fecdca; }
+                .status-pill.status-unpaid .status-dot { background: #ef4444; }
+                .status-pill.status-refunded { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+                .status-pill.status-refunded .status-dot { background: #64748b; }
 
+                /* Financial values */
+                .total-amount-val { font-size: 13.5px; font-weight: 800; color: #0f172a; white-space: nowrap; }
+                .total-amount-val.negative { color: #dc2626; }
+                .paid-amount-val { font-size: 13px; font-weight: 700; color: #059669; white-space: nowrap; }
+                .due-amount-warning { font-size: 13px; font-weight: 700; color: #d97706; white-space: nowrap; }
+                .due-amount-zero { font-size: 12.5px; font-weight: 600; color: #94a3b8; white-space: nowrap; }
+
+                /* Compact action buttons */
+                .compact-actions-row {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    gap: 5px;
+                }
+                .sl-action-icon-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                    height: 28px;
+                    padding: 0 8px;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    border: 1px solid transparent;
+                    transition: all 0.15s ease;
+                    white-space: nowrap;
+                }
+                .sl-action-icon-btn.view { background: #f1f5f9; color: #334155; border-color: #e2e8f0; }
+                .sl-action-icon-btn.view:hover { background: #e2e8f0; color: #0f172a; }
+                .sl-action-icon-btn.return { background: #fef2f2; color: #dc2626; border-color: #fee2e2; }
+                .sl-action-icon-btn.return:hover { background: #fee2e2; color: #b91c1c; }
+                .sl-action-icon-btn.exchange { background: #fff7ed; color: #ea580c; border-color: #ffedd5; }
+                .sl-action-icon-btn.exchange:hover { background: #ffedd5; color: #c2410c; }
+
+                /* Mobile Card Styles */
                 .sl-mobile-only { display: flex; flex-direction: column; gap: 12px; }
                 .sl-desktop-only { display: none; }
                 @media (min-width: 1024px) {
                     .sl-desktop-only { display: block !important; }
                     .sl-mobile-only { display: none !important; }
-                    .sales-log-v3 { padding: 24px 40px; }
                 }
 
-                .sl-header h1 { font-size: 32px; font-weight: 900; color: #0f172a; margin: 0; letter-spacing: -0.03em; }
-                .sl-header p { font-size: 15px; font-weight: 600; color: #64748b; margin: 4px 0 0 0; }
-                .sl-controls { display: flex; flex-direction: column; gap: 14px; width: 100%; }
-                
-                @media (min-width: 1024px) {
-                    .sl-controls { flex-direction: row; align-items: center; justify-content: flex-start; gap: 20px; }
-                    .sl-search { flex: 0 0 350px; }
-                    .sl-filters { width: auto; flex: 0 0 auto; }
-                    .payment-filters { margin-left: auto; }
+                .sl-card-premium {
+                    background: white;
+                    border: 1.5px solid #e2e8f0;
+                    border-radius: 14px;
+                    padding: 14px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    cursor: pointer;
+                    width: 100%;
+                    box-sizing: border-box;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+                }
+                .sl-card-top {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .sl-card-top-left {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: nowrap;
+                }
+                .sl-card-total-wrap {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .sl-card-total {
+                    font-size: 16px;
+                    font-weight: 800;
+                    color: #0f172a;
+                }
+                .sl-card-total.negative {
+                    color: #dc2626;
+                }
+                .sl-card-mid {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: baseline;
+                    gap: 8px;
+                }
+                .sl-card-cust-name {
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #0f172a;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    max-width: 65%;
+                }
+                .sl-card-cust-phone {
+                    font-size: 11px;
+                    color: #64748b;
+                    font-weight: 500;
+                    margin-left: 4px;
+                }
+                .sl-card-date-line {
+                    display: flex;
+                    align-items: center;
+                    gap: 5px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #64748b;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                }
+                .sl-card-bot {
+                    border-top: 1px dashed #e2e8f0;
+                    padding-top: 10px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .sl-card-fin-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .sl-card-amt-pills {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+                .sl-card-paid {
+                    color: #059669;
+                }
+                .sl-card-due-alert {
+                    color: #d97706;
+                }
+                .sl-card-due-zero {
+                    color: #94a3b8;
+                }
+                .sl-card-actions {
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    gap: 6px;
+                    padding-top: 2px;
                 }
 
-                .sl-search { height: 42px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 99px; display: flex; align-items: center; padding: 0 16px; gap: 10px; box-sizing: border-box; }
-                .sl-search input { border: none; outline: none; flex: 1; font-size: 14px; font-weight: 600; background: transparent; color: #1e293b; }
-                .sl-filters { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; flex-shrink: 0; }
-                .sl-filters::-webkit-scrollbar { display: none; }
-                .payment-filters { border-left: 0; padding-left: 0; }
-                @media (min-width: 1024px) {
-                    .payment-filters { border-left: 1.5px solid #e2e8f0; padding-left: 20px; }
+                .sl-load-more {
+                    width: 100%;
+                    padding: 12px;
+                    border-radius: 10px;
+                    border: 1.5px solid #e2e8f0;
+                    background: white;
+                    font-weight: 700;
+                    font-size: 14px;
+                    color: #475569;
+                    cursor: pointer;
+                    margin-top: 8px;
+                    transition: all 0.15s ease;
                 }
-                .sl-pill { flex: 0 0 auto; height: 36px; padding: 0 16px; border: 1.5px solid #e2e8f0; background: white; border-radius: 99px; font-size: 13px; font-weight: 700; color: #64748b; cursor: pointer; white-space: nowrap; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
-                .sl-pill.active { background: #2563eb; color: white; border-color: #2563eb; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2); }
-                .compact-2x2-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; background: white; border-radius: 18px; padding: 16px; border: 1.5px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
-                @media (min-width: 1024px) { .compact-2x2-container { display: none !important; } }
-                .mini-stat-card { display: flex; flex-direction: column; gap: 4px; }
-                .mini-stat-label { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-                .mini-stat-val { font-size: 18px; font-weight: 800; color: #0f172a; }
-                .mini-stat-val.profit { color: #16a34a; }
-                .sl-summary-grid { display: none; }
-                @media (min-width: 1024px) { .sl-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; width: 100%; } }
-                .sl-sum-card { background: white; border: 1.5px solid #e2e8f0; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; justify-content: center; min-height: 90px; box-sizing: border-box; }
-                .sl-sum-label { font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
-                .sl-sum-val { font-size: 24px; font-weight: 900; color: #0f172a; margin-top: 4px; letter-spacing: -0.02em; }
-                .sl-sum-val.profit { color: #16a34a; }
-                .sl-custom-date { display: flex; align-items: center; gap: 10px; background: #f8fafc; padding: 12px 16px; border-radius: 12px; border: 1.5px solid #e2e8f0; width: 100%; box-sizing: border-box; }
-                .sl-custom-date label { font-size: 14px; font-weight: 700; color: #475569; display: flex; align-items: center; gap: 6px; }
-                .sl-custom-date input { border: none; font-size: 14px; font-weight: 700; color: #1e293b; outline: none; background: transparent; }
-                .sl-card-premium { background: white; border: 1.5px solid #e2e8f0; border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; width: 100%; box-sizing: border-box; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
-                .sl-card-top { display: flex; justify-content: space-between; align-items: flex-start; }
-                .sl-card-amount-wrap { display: flex; align-items: center; gap: 8px; }
-                .sl-card-name { font-size: 16px; font-weight: 800; color: #0f172a; max-width: 70%; line-height: 1.2; }
-                .sl-card-amount { font-size: 18px; font-weight: 800; color: #0f172a; }
-                .sl-card-mid { font-size: 14px; font-weight: 600; color: #64748b; }
-                .sl-card-bot { border-top: 1.5px dashed #f1f5f9; padding-top: 10px; }
-                .sl-card-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: #64748b; }
-                .divider-dot { color: #cbd5e1; }
-                .sl-cp-pay-badge { font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 6px; text-transform: uppercase; background: #f1f5f9; color: #475569; }
-                .sl-cp-pay-badge.cash { background: #f0fdf4; color: #16a34a; }
-                .sl-cp-pay-badge.khata { background: #fff7ed; color: #ea580c; }
-                .sl-cp-pay-badge.upi { background: #eff6ff; color: #2563eb; }
-                .sl-load-more { width: 100%; padding: 14px; border-radius: 12px; border: 1.5px solid #e2e8f0; background: white; font-weight: 700; font-size: 15px; color: #475569; cursor: pointer; margin-top: 10px; }
-                
-                /* Desktop Table Styles */
-                .sl-table-desktop-wrapper { 
-                    background: white; 
-                    border: 1.5px solid #e2e8f0; 
-                    border-radius: 20px; 
-                    overflow: hidden; 
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.03); 
-                    margin-top: 24px;
+                .sl-load-more:hover {
+                    background: #f8fafc;
+                    border-color: #cbd5e1;
                 }
-                .sl-desktop-table { 
-                    width: 100%; 
-                    border-collapse: collapse; 
-                    text-align: left; 
-                }
-                .sl-desktop-table th { 
-                    background: #f8fafc; 
-                    padding: 16px 20px; 
-                    font-size: 12px; 
-                    font-weight: 800; 
-                    color: #64748b; 
-                    text-transform: uppercase; 
-                    border-bottom: 1.5px solid #e2e8f0; 
-                }
-                .sl-desktop-table td { 
-                    padding: 18px 20px; 
-                    font-size: 14px; 
-                    color: #334155; 
-                    border-bottom: 1.5px solid #e2e8f0; 
-                }
-                .sl-desktop-row { cursor: pointer; transition: background 0.2s; }
-                .sl-desktop-row:hover { background: #f8fafc; }
-
-                .sld-bill { font-weight: 800; color: #2563eb; width: 100px; }
-                .sld-cust { font-weight: 700; color: #0f172a; width: 150px; }
-                .sld-time { color: #64748b; width: 100px; }
-                .sld-items { color: #475569; max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-                .sld-pay { width: 100px; }
-                .sld-amt { font-weight: 800; color: #0f172a; font-size: 16px; text-align: right; width: 120px; }
 
                 /* Transaction Details Modal & Sheet */
                 .sl-modal-overlay { 
@@ -2665,6 +3109,84 @@ const SalesLogPage = () => {
                     font-size: 13px;
                 }
                 .search-result-item:hover { background: #F1F5F9; }
+
+                /* Floating Batch Bar Styles */
+                .sl-floating-batch-bar {
+                    position: fixed;
+                    bottom: 24px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: #071b44;
+                    color: white;
+                    padding: 10px 18px;
+                    border-radius: 50px;
+                    box-shadow: 0 10px 30px rgba(7, 27, 68, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.1);
+                    display: flex;
+                    align-items: center;
+                    gap: 16px;
+                    z-index: 1000;
+                    backdrop-filter: blur(8px);
+                }
+                .fbb-info {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                .fbb-count {
+                    background: #1e6bff;
+                    color: white;
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 50%;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 12px;
+                    font-weight: 800;
+                }
+                .fbb-actions {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .fbb-btn {
+                    height: 34px;
+                    padding: 0 14px;
+                    border-radius: 20px;
+                    border: none;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    transition: all 0.15s;
+                }
+                .fbb-print {
+                    background: #1e6bff;
+                    color: white;
+                }
+                .fbb-print:hover {
+                    background: #1557d4;
+                }
+                .fbb-download {
+                    background: rgba(255, 255, 255, 0.15);
+                    color: white;
+                }
+                .fbb-download:hover {
+                    background: rgba(255, 255, 255, 0.25);
+                }
+                .fbb-clear {
+                    background: transparent;
+                    color: #94a3b8;
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                }
+                .fbb-clear:hover {
+                    color: white;
+                    border-color: white;
+                }
             `}</style>
         </div>
     );

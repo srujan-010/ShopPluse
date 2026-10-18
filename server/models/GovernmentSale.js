@@ -37,8 +37,71 @@ const governmentSaleSchema = new mongoose.Schema({
             default: function() {
                 return this.soldQtyEntered;
             }
+        },
+        // Tax snapshot fields
+        isGstApplicable: {
+            type: Boolean,
+            default: false
+        },
+        gstRate: {
+            type: Number,
+            default: 0
+        },
+        gstPricingMode: {
+            type: String,
+            enum: ['inclusive', 'exclusive'],
+            default: 'inclusive'
+        },
+        taxableValue: {
+            type: Number,
+            default: 0
+        },
+        gstAmount: {
+            type: Number,
+            default: 0
+        },
+        cgst: {
+            type: Number,
+            default: 0
+        },
+        sgst: {
+            type: Number,
+            default: 0
+        },
+        igst: {
+            type: Number,
+            default: 0
+        },
+        lineTotal: {
+            type: Number,
+            default: 0
         }
     }],
+    subtotal: Number,
+    taxableAmount: {
+        type: Number,
+        default: 0
+    },
+    totalGst: {
+        type: Number,
+        default: 0
+    },
+    cgstTotal: {
+        type: Number,
+        default: 0
+    },
+    sgstTotal: {
+        type: Number,
+        default: 0
+    },
+    igstTotal: {
+        type: Number,
+        default: 0
+    },
+    isGstInvoice: {
+        type: Boolean,
+        default: false
+    },
     totalAmount: {
         type: Number,
         required: true
@@ -47,6 +110,19 @@ const governmentSaleSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: ['Cash', 'UPI', 'Khata']
+    },
+    paidAmount: {
+        type: Number,
+        default: 0
+    },
+    remainingAmount: {
+        type: Number,
+        default: 0
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Paid', 'Partial', 'Unpaid'],
+        default: 'Paid'
     },
     date: {
         type: Date,
@@ -61,6 +137,6 @@ const governmentSaleSchema = new mongoose.Schema({
         type: Boolean,
         default: true
     }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model('GovernmentSale', governmentSaleSchema);

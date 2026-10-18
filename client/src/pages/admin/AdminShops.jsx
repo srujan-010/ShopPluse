@@ -411,7 +411,7 @@ const AdminShops = () => {
                                         <strong style={{ fontSize: '18px', display: 'block', marginTop: '4px', color: '#5B21B6' }}>{shopDetails.analytics.totalBills} bills</strong>
                                     </div>
                                     <div style={{ background: '#ECFEFF', padding: '16px', borderRadius: '14px', border: '1px solid #CFFAFE' }}>
-                                        <span style={{ fontSize: '11px', color: '#0891B2', fontWeight: '700', textTransform: 'uppercase' }}>Gov Records</span>
+                                        <span style={{ fontSize: '11px', color: '#0891B2', fontWeight: '700', textTransform: 'uppercase' }}>GST Records</span>
                                         <strong style={{ fontSize: '18px', display: 'block', marginTop: '4px', color: '#0E7490' }}>{shopDetails.analytics.govRecords} entries</strong>
                                     </div>
                                 </div>

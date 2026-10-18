@@ -58,6 +58,11 @@ const shopSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    defaultPrintFormat: {
+        type: String,
+        enum: ['full_a4', 'half_a4', 'thermal_58', 'thermal_80'],
+        default: 'full_a4'
+    },
     createdAt: {
         type: Date,
         default: Date.now

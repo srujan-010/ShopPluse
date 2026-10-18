@@ -50,7 +50,7 @@ const purchaseSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Cash', 'Online', 'Credit', 'None', 'Bank', 'UPI'],
+        enum: ['Cash', 'Online', 'Credit', 'None', 'Bank', 'UPI', 'Bank Transfer'],
         default: 'Cash'
     },
     paidAmount: {
@@ -65,7 +65,8 @@ const purchaseSchema = new mongoose.Schema({
     paymentHistory: [{
         amount: { type: Number, default: 0 },
         mode: { type: String, default: 'Cash' },
-        note: { type: String },
+        note: { type: String, trim: true },
+        remark: { type: String, trim: true },
         paidAt: { type: Date, default: Date.now }
     }],
     entryType: {

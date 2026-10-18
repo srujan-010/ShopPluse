@@ -12,19 +12,8 @@ connectDB();
 
 const app = express();
 
-// Body parser
-app.use(express.json());
-
-// Idempotency Middleware
-const { idempotency } = require('./middleware/idempotency');
-app.use(idempotency);
-
-// Shop Status Override Middleware (suspended/expired check)
-const shopStatus = require('./middleware/shopStatus');
-app.use(shopStatus);
-
-// Enable CORS
-app.use(cors({
+// Enable CORS first so preflight OPTIONS requests are handled immediately
+const corsOptions = {
     origin: [
         'http://localhost:5173',
         'https://shoppluse.onrender.com',
@@ -35,9 +24,34 @@ app.use(cors({
         /\.ngrok-free\.dev$/ // Matches ngrok domains
     ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Idempotency-Key', 'X-Request-ID']
-}));
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Idempotency-Key',
+        'X-Request-ID',
+        'Cache-Control',
+        'Pragma',
+        'Expires',
+        'X-Requested-With',
+        'Accept',
+        'Origin'
+    ],
+    exposedHeaders: ['ETag', 'Cache-Control']
+};
+
+app.use(cors(corsOptions));
+
+// Body parser
+app.use(express.json());
+
+// Idempotency Middleware
+const { idempotency } = require('./middleware/idempotency');
+app.use(idempotency);
+
+// Shop Status Override Middleware (suspended/expired check)
+const shopStatus = require('./middleware/shopStatus');
+app.use(shopStatus);
 
 
 // Serve static files from public directory

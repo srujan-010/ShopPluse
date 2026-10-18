@@ -61,6 +61,7 @@ const InventoryPage = () => {
     
     const [supplierDetailsList, setSupplierDetailsList] = useState([]);
     const [showOnlyLowStock, setShowOnlyLowStock] = useState(false);
+    const [expiryFilter, setExpiryFilter] = useState('all'); // 'all' | 'expiring-soon' | 'expired'
     const [deleteConfirm, setDeleteConfirm] = useState({ open: false, id: null });
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
 
@@ -91,6 +92,9 @@ const InventoryPage = () => {
         governmentPrice: 0,
         lowStockLimit: 0,
         gst: 0,
+        isGstApplicable: false,
+        gstRate: 0,
+        gstPricingMode: 'inclusive',
         expiryDate: '',
         notes: '',
         shop: shopId || '',
@@ -140,6 +144,14 @@ const InventoryPage = () => {
         
         if (params.get('filter') === 'low-stock') {
             setShowOnlyLowStock(true);
+        } else if (params.get('filter') === 'expiring-soon') {
+            setExpiryFilter('expiring-soon');
+        } else if (params.get('filter') === 'expired') {
+            setExpiryFilter('expired');
+        }
+
+        if (params.get('search')) {
+            setSearchQuery(params.get('search'));
         }
     }, [products]);
 
@@ -254,7 +266,10 @@ const InventoryPage = () => {
                 governmentPrice: Number(product.governmentPrice || 0),
                 quantity: Number(product.quantity || 0),
                 lowStockLimit: product.lowStockLimit !== undefined ? Number(product.lowStockLimit) : 0,
-                gst: product.gst !== undefined ? Number(product.gst) : 0,
+                gst: product.gstRate !== undefined ? Number(product.gstRate) : Number(product.gst || 0),
+                isGstApplicable: product.isGstApplicable !== undefined ? Boolean(product.isGstApplicable) : (Number(product.gst) > 0),
+                gstRate: product.gstRate !== undefined ? Number(product.gstRate) : Number(product.gst || 0),
+                gstPricingMode: product.gstPricingMode || 'inclusive',
                 sku: product.sku || '',
                 barcode: product.barcode || '',
                 productType: product.productType || 'Piece',
@@ -294,6 +309,9 @@ const InventoryPage = () => {
                 governmentPrice: 0,
                 lowStockLimit: 0,
                 gst: 0,
+                isGstApplicable: false,
+                gstRate: 0,
+                gstPricingMode: 'inclusive',
                 expiryDate: '',
                 notes: '',
                 shop: shopId,
@@ -363,6 +381,10 @@ const InventoryPage = () => {
         e.preventDefault();
         if (isSaving) return;
         
+        const isGstApp = Boolean(formData.isGstApplicable);
+        const gRate = isGstApp ? Math.max(0, Math.min(100, Number(formData.gstRate || formData.gst || 0))) : 0;
+        const gMode = formData.gstPricingMode === 'exclusive' ? 'exclusive' : 'inclusive';
+
         const payload = {
             ...formData,
             buyPrice: Number(formData.buyPrice || 0),
@@ -370,7 +392,10 @@ const InventoryPage = () => {
             governmentPrice: Number(formData.governmentPrice || 0),
             quantity: Number(formData.quantity || 0),
             lowStockLimit: Number(formData.lowStockLimit || 0),
-            gst: Number(formData.gst || 0),
+            isGstApplicable: isGstApp,
+            gstRate: gRate,
+            gstPricingMode: gMode,
+            gst: gRate,
             sku: formData.sku || '',
             barcode: formData.barcode || '',
             productType: formData.productType || 'Piece'
@@ -489,6 +514,54 @@ const InventoryPage = () => {
         }
     };
 
+    const isProductExpiringSoon = (p, maxDays = 45) => {
+        const now = new Date();
+        const baseMidnight = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+        const msPerDay = 86400000;
+
+        if (Array.isArray(p.batches) && p.batches.length > 0) {
+            return p.batches.some(b => {
+                if (Number(b.quantity || 0) <= 0 || !b.expiryDate) return false;
+                const target = new Date(b.expiryDate);
+                if (isNaN(target.getTime())) return false;
+                const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+                const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+                return diffDays >= 0 && diffDays <= maxDays;
+            });
+        }
+
+        if (Number(p.quantity || 0) <= 0 || !p.expiryDate) return false;
+        const target = new Date(p.expiryDate);
+        if (isNaN(target.getTime())) return false;
+        const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+        const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+        return diffDays >= 0 && diffDays <= maxDays;
+    };
+
+    const isProductExpired = (p) => {
+        const now = new Date();
+        const baseMidnight = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+        const msPerDay = 86400000;
+
+        if (Array.isArray(p.batches) && p.batches.length > 0) {
+            return p.batches.some(b => {
+                if (Number(b.quantity || 0) <= 0 || !b.expiryDate) return false;
+                const target = new Date(b.expiryDate);
+                if (isNaN(target.getTime())) return false;
+                const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+                const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+                return diffDays < 0;
+            });
+        }
+
+        if (Number(p.quantity || 0) <= 0 || !p.expiryDate) return false;
+        const target = new Date(p.expiryDate);
+        if (isNaN(target.getTime())) return false;
+        const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+        const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+        return diffDays < 0;
+    };
+
     const categories = ['All', ...new Set(products.map(p => p.category).filter(Boolean))];
 
     const filteredProducts = products.filter(p => {
@@ -497,11 +570,18 @@ const InventoryPage = () => {
                             (p.barcode || '').includes(searchQuery);
         const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
         const matchesLowStock = !showOnlyLowStock || p.quantity <= (p.lowStockLimit || 5);
-        return matchesSearch && matchesCategory && matchesLowStock;
+        const matchesExpiry = expiryFilter === 'all' 
+            ? true 
+            : expiryFilter === 'expiring-soon' 
+                ? isProductExpiringSoon(p) 
+                : isProductExpired(p);
+        return matchesSearch && matchesCategory && matchesLowStock && matchesExpiry;
     });
 
     const lowStockItems = products.filter(p => p.quantity <= (p.lowStockLimit || 5));
     const healthyStockItems = products.filter(p => p.quantity > (p.lowStockLimit || 5));
+    const expiringSoonItems = products.filter(p => isProductExpiringSoon(p));
+    const expiredItems = products.filter(p => isProductExpired(p));
 
     if (!products || !Array.isArray(products)) {
         return <div style={{padding: '40px', textAlign: 'center'}}>Loading inventory...</div>;
@@ -554,12 +634,39 @@ const InventoryPage = () => {
                         </div>
                     </div>
                 </div>
-                <div className="old-metric-card full">
-                    <div className="omc-icon" style={{ backgroundColor: '#00B26B15', color: '#00B26B' }}><ShieldCheck size={22} /></div>
-                    <div className="omc-data">
-                        <span className="omc-label">HEALTHY STOCK</span>
-                        <div className="omc-value">{healthyStockItems.length}</div>
+                <div className="old-metric-row">
+                    <div 
+                        className={`old-metric-card ${expiryFilter === 'expiring-soon' ? 'active-filter' : ''}`}
+                        onClick={() => setExpiryFilter(expiryFilter === 'expiring-soon' ? 'all' : 'expiring-soon')}
+                        style={{ cursor: 'pointer', border: expiryFilter === 'expiring-soon' ? '2px solid #F79009' : '1px solid transparent' }}
+                    >
+                        <div className="omc-icon" style={{ backgroundColor: '#FFFAEB', color: '#B54708' }}><Clock size={22} /></div>
+                        <div className="omc-data">
+                            <span className="omc-label">EXPIRING (45D)</span>
+                            <div className="omc-value">{expiringSoonItems.length}</div>
+                        </div>
                     </div>
+                    {expiredItems.length > 0 ? (
+                        <div 
+                            className={`old-metric-card ${expiryFilter === 'expired' ? 'active-filter' : ''}`}
+                            onClick={() => setExpiryFilter(expiryFilter === 'expired' ? 'all' : 'expired')}
+                            style={{ cursor: 'pointer', border: expiryFilter === 'expired' ? '2px solid #D92D20' : '1px solid transparent' }}
+                        >
+                            <div className="omc-icon" style={{ backgroundColor: '#FEF2F2', color: '#D92D20' }}><AlertTriangle size={22} /></div>
+                            <div className="omc-data">
+                                <span className="omc-label">EXPIRED STOCK</span>
+                                <div className="omc-value" style={{ color: '#D92D20' }}>{expiredItems.length}</div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="old-metric-card full">
+                            <div className="omc-icon" style={{ backgroundColor: '#00B26B15', color: '#00B26B' }}><ShieldCheck size={22} /></div>
+                            <div className="omc-data">
+                                <span className="omc-label">HEALTHY STOCK</span>
+                                <div className="omc-value">{healthyStockItems.length}</div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </section>
 
@@ -589,6 +696,16 @@ const InventoryPage = () => {
                 {showOnlyLowStock && (
                     <div className="active-filter-badge" onClick={() => setShowOnlyLowStock(false)}>
                         Showing only low stock items <X size={14} />
+                    </div>
+                )}
+                {expiryFilter === 'expiring-soon' && (
+                    <div className="active-filter-badge" style={{ background: '#FFFAEB', color: '#B54708', borderColor: '#FEDF89' }} onClick={() => setExpiryFilter('all')}>
+                        Showing expiring soon items (≤45d) <X size={14} />
+                    </div>
+                )}
+                {expiryFilter === 'expired' && (
+                    <div className="active-filter-badge" style={{ background: '#FEF2F2', color: '#D92D20', borderColor: '#FDA29B' }} onClick={() => setExpiryFilter('all')}>
+                        Showing expired stock <X size={14} />
                     </div>
                 )}
             </div>
@@ -700,7 +817,7 @@ const InventoryPage = () => {
                                         title="No Results Found"
                                         description="Adjust your filters or search to see products."
                                         actionLabel="Clear All Filters"
-                                        onAction={() => { setSearchQuery(''); setSelectedCategory('All'); setShowOnlyLowStock(false); }}
+                                        onAction={() => { setSearchQuery(''); setSelectedCategory('All'); setShowOnlyLowStock(false); setExpiryFilter('all'); }}
                                     />
                                 )}
                             </div>
@@ -709,11 +826,10 @@ const InventoryPage = () => {
                                 <table className="radical-desktop-table">
                                     <thead>
                                         <tr>
-                                            <th>Product Details</th>
-                                            <th>Category</th>
-                                            <th style={{ width: '25%' }}>Available Stock</th>
-                                            <th>Sell Price</th>
-                                            <th style={{ textAlign: 'right' }}>Actions</th>
+                                            <th style={{ width: '38%' }}>Product Details</th>
+                                            <th style={{ width: '18%' }}>Category</th>
+                                            <th style={{ width: '24%' }}>Available Stock</th>
+                                            <th style={{ width: '20%', textAlign: 'right' }}>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -743,9 +859,6 @@ const InventoryPage = () => {
                                                             </span>
                                                         )}
                                                     </div>
-                                                </td>
-                                                <td className="sld-amt" style={{ textAlign: 'left' }}>
-                                                    <div className="amt-val" style={{ color: '#64748B', fontWeight: '600' }}>₹{product.sellPrice?.toLocaleString() || 0}</div>
                                                 </td>
                                                 <td className="sld-actions" style={{ textAlign: 'right' }}>
                                                     <div className="table-action-group">
@@ -779,33 +892,17 @@ const InventoryPage = () => {
                             </div>
                             <form onSubmit={handleSubmit} className="old-stock-form">
                                 <div className="old-m-scroll">
-                                    <div className="old-field">
-                                        <label>Product Name <span className="req">*</span></label>
-                                        <input required value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="e.g. Premium Rice" />
-                                    </div>
                                     <div className="old-field-row-mobile-2">
+                                        <div className="old-field">
+                                            <label>Product Name <span className="req">*</span></label>
+                                            <input required value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="e.g. Premium Rice" />
+                                        </div>
                                         <div className="old-field">
                                             <label>Brand Name</label>
                                             <input value={formData.brand} onChange={(e) => setFormData({...formData, brand: e.target.value})} placeholder="e.g. Aashirvaad" />
                                         </div>
-                                        <div className="old-field">
-                                            <label>SKU</label>
-                                            <input value={formData.sku} onChange={(e) => setFormData({...formData, sku: e.target.value})} placeholder="e.g. RICE-PREM-10" />
-                                        </div>
                                     </div>
-                                    <div className="old-field-row-mobile-2">
-                                        <div className="old-field">
-                                            <label>Barcode</label>
-                                            <input value={formData.barcode} onChange={(e) => setFormData({...formData, barcode: e.target.value})} placeholder="e.g. 8901234567890" />
-                                        </div>
-                                        <div className="old-field">
-                                            <label>Product Type</label>
-                                            <select value={formData.productType} onChange={(e) => setFormData({...formData, productType: e.target.value})}>
-                                                <option value="Piece">Piece</option>
-                                                <option value="Measured">Measured</option>
-                                            </select>
-                                        </div>
-                                    </div>
+
                                     <div className="old-field-row-mobile-2">
                                         <div className="old-field">
                                             <label>Category <span className="req">*</span></label>
@@ -891,14 +988,206 @@ const InventoryPage = () => {
                                     <div className="old-field-row-mobile-2">
                                         {shop?.type === 'Fertilizers' ? (
                                             <div className="old-field">
-                                                <label style={{color: '#059669'}}>Government Price (per unit)</label>
+                                                <label style={{color: '#059669'}}>GST Ledger Price (per unit)</label>
                                                 <input type="number" min="0" max="10000000" step="0.01" value={formData.governmentPrice} onChange={(e) => setFormData({...formData, governmentPrice: e.target.value})} />
                                             </div>
-                                        ) : <div />}
-                                        <div className="old-field">
-                                            <label>GST (%)</label>
-                                            <input type="number" min="0" max="100" step="0.01" value={formData.gst} onChange={(e) => setFormData({...formData, gst: e.target.value})} />
+                                        ) : null}
+                                    </div>
+
+                                    {/* GST & Tax Configuration Card */}
+                                    <div className="gst-config-card" style={{
+                                        background: '#F8FAFC',
+                                        border: '1.5px solid #E2E8F0',
+                                        borderRadius: '14px',
+                                        padding: '16px',
+                                        margin: '12px 0 16px 0'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                                            <div>
+                                                <label style={{ fontSize: '13px', fontWeight: '800', color: '#0F172A', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span>GST Tax Configuration</span>
+                                                    {formData.isGstApplicable && (
+                                                        <span style={{ background: '#EFF6FF', color: '#1E6BFF', border: '1px solid #BFDBFE', fontSize: '11px', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                                            {formData.gstRate || 0}% {formData.gstPricingMode === 'exclusive' ? 'GST Exclusive' : 'GST Inclusive'}
+                                                        </span>
+                                                    )}
+                                                </label>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748B' }}>
+                                                    Set whether GST applies and if price is inclusive or exclusive
+                                                </p>
+                                            </div>
+
+                                            {/* GST Applicable Toggle */}
+                                            <div style={{ display: 'inline-flex', background: '#E2E8F0', borderRadius: '10px', padding: '3px' }}>
+                                                <button
+                                                    type="button"
+                                                    style={{
+                                                        padding: '6px 14px',
+                                                        borderRadius: '8px',
+                                                        border: 'none',
+                                                        fontSize: '12px',
+                                                        fontWeight: '800',
+                                                        cursor: 'pointer',
+                                                        background: !formData.isGstApplicable ? '#FFFFFF' : 'transparent',
+                                                        color: !formData.isGstApplicable ? '#0F172A' : '#64748B',
+                                                        boxShadow: !formData.isGstApplicable ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                    onClick={() => setFormData({ ...formData, isGstApplicable: false, gstRate: 0, gst: 0 })}
+                                                >
+                                                    No GST
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    style={{
+                                                        padding: '6px 14px',
+                                                        borderRadius: '8px',
+                                                        border: 'none',
+                                                        fontSize: '12px',
+                                                        fontWeight: '800',
+                                                        cursor: 'pointer',
+                                                        background: formData.isGstApplicable ? '#1E6BFF' : 'transparent',
+                                                        color: formData.isGstApplicable ? '#FFFFFF' : '#64748B',
+                                                        boxShadow: formData.isGstApplicable ? '0 1px 4px rgba(30,107,255,0.3)' : 'none',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                    onClick={() => setFormData({ 
+                                                        ...formData, 
+                                                        isGstApplicable: true, 
+                                                        gstRate: formData.gstRate > 0 ? formData.gstRate : 18, 
+                                                        gst: formData.gstRate > 0 ? formData.gstRate : 18 
+                                                    })}
+                                                >
+                                                    GST Applicable
+                                                </button>
+                                            </div>
                                         </div>
+
+                                        {formData.isGstApplicable ? (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #E2E8F0' }}>
+                                                <div className="old-field-row-mobile-2">
+                                                    <div className="old-field">
+                                                        <label style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                            <span>GST Rate (%)</span>
+                                                        </label>
+                                                        <input 
+                                                            type="number" 
+                                                            min="0" 
+                                                            max="100" 
+                                                            step="0.01" 
+                                                            value={formData.gstRate} 
+                                                            onChange={(e) => {
+                                                                const val = e.target.value;
+                                                                setFormData({ ...formData, gstRate: val, gst: val });
+                                                            }} 
+                                                            placeholder="e.g. 18"
+                                                            required={formData.isGstApplicable}
+                                                        />
+                                                        {/* Quick rate pills */}
+                                                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                                            {[0, 5, 12, 18, 28].map(rate => (
+                                                                <button
+                                                                    key={rate}
+                                                                    type="button"
+                                                                    style={{
+                                                                        border: Number(formData.gstRate) === rate ? '1.5px solid #1E6BFF' : '1px solid #CBD5E1',
+                                                                        background: Number(formData.gstRate) === rate ? '#EFF6FF' : '#FFFFFF',
+                                                                        color: Number(formData.gstRate) === rate ? '#1E6BFF' : '#475467',
+                                                                        borderRadius: '6px',
+                                                                        padding: '2px 8px',
+                                                                        fontSize: '11px',
+                                                                        fontWeight: '700',
+                                                                        cursor: 'pointer'
+                                                                    }}
+                                                                    onClick={() => setFormData({ ...formData, gstRate: rate, gst: rate })}
+                                                                >
+                                                                    {rate}%
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="old-field">
+                                                        <label>GST Pricing Mode</label>
+                                                        <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                                                            <button
+                                                                type="button"
+                                                                style={{
+                                                                    flex: 1,
+                                                                    padding: '10px 8px',
+                                                                    borderRadius: '10px',
+                                                                    border: formData.gstPricingMode === 'inclusive' ? '2px solid #1E6BFF' : '1px solid #CBD5E1',
+                                                                    background: formData.gstPricingMode === 'inclusive' ? '#EFF6FF' : '#FFFFFF',
+                                                                    color: formData.gstPricingMode === 'inclusive' ? '#1E6BFF' : '#475467',
+                                                                    fontSize: '12px',
+                                                                    fontWeight: '700',
+                                                                    cursor: 'pointer',
+                                                                    textAlign: 'center',
+                                                                    transition: 'all 0.15s ease'
+                                                                }}
+                                                                onClick={() => setFormData({ ...formData, gstPricingMode: 'inclusive' })}
+                                                            >
+                                                                <div style={{ fontWeight: '800' }}>GST Inclusive</div>
+                                                                <div style={{ fontSize: '10px', opacity: 0.8, marginTop: '2px' }}>Selling price includes GST</div>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                style={{
+                                                                    flex: 1,
+                                                                    padding: '10px 8px',
+                                                                    borderRadius: '10px',
+                                                                    border: formData.gstPricingMode === 'exclusive' ? '2px solid #1E6BFF' : '1px solid #CBD5E1',
+                                                                    background: formData.gstPricingMode === 'exclusive' ? '#EFF6FF' : '#FFFFFF',
+                                                                    color: formData.gstPricingMode === 'exclusive' ? '#1E6BFF' : '#475467',
+                                                                    fontSize: '12px',
+                                                                    fontWeight: '700',
+                                                                    cursor: 'pointer',
+                                                                    textAlign: 'center',
+                                                                    transition: 'all 0.15s ease'
+                                                                }}
+                                                                onClick={() => setFormData({ ...formData, gstPricingMode: 'exclusive' })}
+                                                            >
+                                                                <div style={{ fontWeight: '800' }}>GST Exclusive</div>
+                                                                <div style={{ fontSize: '10px', opacity: 0.8, marginTop: '2px' }}>GST added to selling price</div>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Live Calculation Preview Note */}
+                                                {Number(formData.sellPrice) > 0 && (
+                                                    <div style={{
+                                                        background: '#F1F5F9',
+                                                        border: '1px solid #E2E8F0',
+                                                        borderRadius: '8px',
+                                                        padding: '9px 12px',
+                                                        fontSize: '12px',
+                                                        color: '#334155',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        fontWeight: '600'
+                                                    }}>
+                                                        <span>
+                                                            💡 <strong>Price Breakdown for 1 unit:</strong>{' '}
+                                                            {formData.gstPricingMode === 'exclusive' ? (
+                                                                <>
+                                                                    Selling price ₹{Number(formData.sellPrice).toFixed(2)} + ₹{(Number(formData.sellPrice) * (Number(formData.gstRate || 0) / 100)).toFixed(2)} GST = <strong style={{ color: '#1E6BFF' }}>₹{(Number(formData.sellPrice) * (1 + (Number(formData.gstRate || 0) / 100))).toFixed(2)} Total</strong>
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    Total: <strong style={{ color: '#16A34A' }}>₹{Number(formData.sellPrice).toFixed(2)}</strong> (Taxable: ₹{(Number(formData.sellPrice) / (1 + (Number(formData.gstRate || 0) / 100))).toFixed(2)} + GST: ₹{(Number(formData.sellPrice) - (Number(formData.sellPrice) / (1 + (Number(formData.gstRate || 0) / 100)))).toFixed(2)})
+                                                                </>
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div style={{ fontSize: '11px', color: '#64748B', fontStyle: 'italic', marginTop: '4px' }}>
+                                                • GST disabled: No tax will be added or deducted for this product.
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="old-field-row-mobile-2">

@@ -40,16 +40,16 @@ const AdminActivityLog = () => {
     });
 
     const activityTypes = [
-        'Sale',
-        'Return',
-        'Exchange',
-        'Purchase',
-        'Khata Payment',
-        'Government Record',
-        'Login',
-        'Sync Completed',
-        'Offline Sync Pending',
-        'Subscription Change'
+        { value: 'Sale', label: 'Sale' },
+        { value: 'Return', label: 'Return' },
+        { value: 'Exchange', label: 'Exchange' },
+        { value: 'Purchase', label: 'Purchase' },
+        { value: 'Khata Payment', label: 'Khata Payment' },
+        { value: 'Government Record', label: 'GST Record' },
+        { value: 'Login', label: 'Login' },
+        { value: 'Sync Completed', label: 'Sync Completed' },
+        { value: 'Offline Sync Pending', label: 'Offline Sync Pending' },
+        { value: 'Subscription Change', label: 'Subscription Change' }
     ];
 
     if (loading) {
@@ -79,7 +79,7 @@ const AdminActivityLog = () => {
                 <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="filter-select">
                     <option value="All">All Event Types</option>
                     {activityTypes.map(t => (
-                        <option key={t} value={t}>{t}</option>
+                        <option key={t.value} value={t.value}>{t.label}</option>
                     ))}
                 </select>
 
@@ -105,7 +105,7 @@ const AdminActivityLog = () => {
                                 
                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                                     <span className={`activity-badge ${act.activityType.toLowerCase().replace(' ', '-')}`} style={{ padding: '4px 10px', fontSize: '11px', fontWeight: '800', borderRadius: '8px', textTransform: 'uppercase', flexShrink: 0, marginTop: '2px' }}>
-                                        {act.activityType}
+                                        {act.activityType === 'Government Record' ? 'GST Record' : act.activityType}
                                     </span>
                                     <div>
                                         <p style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#1E293B' }}>{act.description}</p>

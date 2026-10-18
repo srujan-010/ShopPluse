@@ -106,7 +106,7 @@ const GovReportsPage = () => {
         const wsItems = XLSX.utils.json_to_sheet(itemLedger.map(i => ({
             'Fertilizer Name': i.name,
             'Total Quantity Sold': `${i.qtyBase.toFixed(2)} ${i.baseUnit}`,
-            'Total Revenue (Gov Rate)': i.amount.toFixed(2)
+            'Total Revenue (GST Rate)': i.amount.toFixed(2)
         })));
         XLSX.utils.book_append_sheet(wb, wsItems, "Fertilizer Ledger");
 
@@ -114,7 +114,7 @@ const GovReportsPage = () => {
         const wsDates = XLSX.utils.json_to_sheet(dateLedger.map(d => ({
             'Date': d.date,
             'No. of Invoices': d.invoices,
-            'Total Revenue (Gov Rate)': d.amount.toFixed(2)
+            'Total Revenue (GST Rate)': d.amount.toFixed(2)
         })));
         XLSX.utils.book_append_sheet(wb, wsDates, "Date-wise Report");
 
@@ -128,7 +128,7 @@ const GovReportsPage = () => {
         })));
         XLSX.utils.book_append_sheet(wb, wsRaw, "All Records");
 
-        XLSX.writeFile(wb, `Gov_Reports_${shop?.name || 'Shop'}_${new Date().toLocaleDateString('en-IN').replace(/\//g, '-')}.xlsx`);
+        XLSX.writeFile(wb, `GST_Reports_${shop?.name || 'Shop'}_${new Date().toLocaleDateString('en-IN').replace(/\//g, '-')}.xlsx`);
     };
 
     if (loading) {
@@ -146,7 +146,7 @@ const GovReportsPage = () => {
     return (
         <div className="gov-reports-page">
             <PageHeader 
-                title="Official Government Reports"
+                title="GST Reports"
                 subtitle={`Isolated analytics for ${shop?.name || 'your shop'}`}
                 backAction={() => navigate(-1)}
             />
@@ -173,7 +173,7 @@ const GovReportsPage = () => {
                             <TrendingUp size={24} />
                         </div>
                         <div className="grp-stat-info">
-                            <span>Total Official Revenue</span>
+                            <span>Total GST Revenue</span>
                             <strong>₹{totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                         </div>
                     </div>
@@ -182,7 +182,7 @@ const GovReportsPage = () => {
                             <FileSpreadsheet size={24} />
                         </div>
                         <div className="grp-stat-info">
-                            <span>Total Gov Invoices</span>
+                            <span>Total GST Invoices</span>
                             <strong>{totalInvoices}</strong>
                         </div>
                     </div>
@@ -192,7 +192,7 @@ const GovReportsPage = () => {
                     {/* Item Ledger */}
                     <div className="grp-table-card">
                         <div className="grp-tc-header">
-                            <h3><PieChart size={18} /> Fertilizer Government Ledger</h3>
+                            <h3><PieChart size={18} /> Fertilizer GST Ledger</h3>
                         </div>
                         <div className="grp-tc-body">
                             {itemLedger.length > 0 ? (
@@ -227,7 +227,7 @@ const GovReportsPage = () => {
                     {/* Date-wise Report */}
                     <div className="grp-table-card">
                         <div className="grp-tc-header">
-                            <h3><Calendar size={18} /> Date-wise Government Report</h3>
+                            <h3><Calendar size={18} /> Date-wise GST Report</h3>
                         </div>
                         <div className="grp-tc-body">
                             {dateLedger.length > 0 ? (

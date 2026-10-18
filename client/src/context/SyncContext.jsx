@@ -186,9 +186,18 @@ export const SyncProvider = ({ children }) => {
                     
                     for (const serverItem of serverArray) {
                         const localItem = await localTable.get(serverItem._id);
+                        // Normalize shop id if populated as object
+                        const normalizedItem = { ...serverItem };
+                        if (normalizedItem.shop && typeof normalizedItem.shop === 'object' && normalizedItem.shop._id) {
+                            normalizedItem.shopDetails = normalizedItem.shop;
+                            normalizedItem.shop = normalizedItem.shop._id.toString();
+                        }
+                        const serverTime = new Date(normalizedItem.updatedAt || normalizedItem.date || normalizedItem.createdAt || Date.now());
+                        const localTime = localItem && localItem.updatedAt ? new Date(localItem.updatedAt) : null;
+
                         // Timestamp-based conflict handling
-                        if (!localItem || !localItem.updatedAt || new Date(serverItem.updatedAt) > new Date(localItem.updatedAt)) {
-                            await localTable.put(serverItem);
+                        if (!localItem || !localTime || isNaN(localTime.getTime()) || isNaN(serverTime.getTime()) || serverTime >= localTime) {
+                            await localTable.put(normalizedItem);
                         }
                     }
                 } catch (err) {

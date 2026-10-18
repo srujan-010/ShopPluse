@@ -54,7 +54,7 @@ const AdminOverview = () => {
         { title: 'Bills Generated', value: stats?.totalBills || 0, subText: 'Lifetime sales logs', icon: FileText, color: '#8B5CF6', bg: '#F5F3FF' },
         { title: 'Revenue Processed', value: `₹${(stats?.totalRevenue || 0).toLocaleString()}`, subText: 'Lifetime sales volume', icon: IndianRupee, color: '#059669', bg: '#ECFDF5' },
         { title: 'Total Khata Due', value: `₹${(stats?.totalKhataDue || 0).toLocaleString()}`, subText: 'Outstanding credit', icon: AlertCircle, color: '#D97706', bg: '#FFFBEB' },
-        { title: 'Gov Records', value: stats?.totalGovRecords || 0, subText: 'Fertilizer registries', icon: FileText, color: '#06B6D4', bg: '#ECFEFF' },
+        { title: 'GST Records', value: stats?.totalGovRecords || 0, subText: 'Fertilizer registries', icon: FileText, color: '#06B6D4', bg: '#ECFEFF' },
         { title: "Today's Sales", value: `₹${(stats?.todaySales || 0).toLocaleString()}`, subText: `${stats?.todayTransactions || 0} purchases today`, icon: IndianRupee, color: '#10B981', bg: '#ECFDF5' },
         { title: 'Returns Logged', value: stats?.totalReturns || 0, subText: 'Refund items', icon: RefreshCw, color: '#EF4444', bg: '#FEF3F2' },
         { title: 'Exchanges Logged', value: stats?.totalExchanges || 0, subText: 'Swap items', icon: RefreshCw, color: '#3B82F6', bg: '#EFF6FF' }

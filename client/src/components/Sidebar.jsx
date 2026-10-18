@@ -1,11 +1,11 @@
 import React from 'react';
 import { NavLink, useParams, useNavigate } from 'react-router-dom';
-import { 
-    LayoutDashboard, 
-    Store, 
-    Package, 
-    ShoppingCart, 
-    BarChart3, 
+import {
+    LayoutDashboard,
+    Store,
+    Package,
+    ShoppingCart,
+    BarChart3,
     LogOut,
     X,
     ChevronLeft,
@@ -26,7 +26,7 @@ const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
     const { isInstallable, installApp } = useInstall();
     const { shopId } = useParams();
     const navigate = useNavigate();
-    
+
     // Lock body scroll when sidebar is open
     React.useEffect(() => {
         if (isOpen && window.innerWidth < 1024) {
@@ -47,16 +47,16 @@ const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
     const shopItems = [
         { name: 'Shop Home', path: `/shop/${shopId}/dashboard`, icon: <LayoutDashboard size={20} /> },
         { name: 'New Sale', path: `/shop/${shopId}/pos`, icon: <ShoppingCart size={20} /> },
-        { name: 'Inventory', path: `/shop/${shopId}/inventory`, icon: <Package size={20} /> },
+        { name: 'Stock Book', path: `/shop/${shopId}/inventory`, icon: <Package size={20} /> },
         { name: 'Sales Log', path: `/shop/${shopId}/sales-log`, icon: <ClipboardList size={20} /> },
         { name: 'Khata Book', path: `/shop/${shopId}/khata`, icon: <Book size={20} /> },
-        { name: 'Purchase Ledger', path: `/shop/${shopId}/purchase-ledger`, icon: <Truck size={20} /> },
+        { name: 'Dealer Ledger', path: `/shop/${shopId}/purchase-ledger`, icon: <Truck size={20} /> },
         { name: 'Analytics', path: `/shop/${shopId}/reports`, icon: <BarChart3 size={20} /> },
     ];
 
     const govItems = currentShop && currentShop.type === 'Fertilizers' ? [
-        { name: 'Government Ledger', path: `/shop/${shopId}/gov-sales-log`, icon: <ClipboardList size={20} /> },
-        { name: 'Gov Reports', path: `/shop/${shopId}/gov-reports`, icon: <BarChart3 size={20} /> },
+        { name: 'GST Ledger', path: `/shop/${shopId}/gov-sales-log`, icon: <ClipboardList size={20} /> },
+        { name: 'GST Reports', path: `/shop/${shopId}/gov-reports`, icon: <BarChart3 size={20} /> },
     ] : [];
 
     const currentItems = shopId ? shopItems : mainItems;
@@ -64,10 +64,10 @@ const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
     return (
         <>
             {isOpen && (
-                <motion.div 
+                <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="mobile-overlay" 
+                    className="mobile-overlay"
                     onClick={toggleSidebar}
                 />
             )}
@@ -85,9 +85,9 @@ const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
                     <nav className="nav-group">
                         <div className="nav-label-top">Main Menu</div>
                         {currentItems.map((item) => (
-                            <NavLink 
-                                key={item.path} 
-                                to={item.path} 
+                            <NavLink
+                                key={item.path}
+                                to={item.path}
                                 className={({ isActive }) => `nav-link-premium ${isActive ? 'active' : ''}`}
                                 onClick={() => window.innerWidth < 1024 && toggleSidebar()}
                             >
@@ -100,11 +100,11 @@ const Sidebar = ({ isOpen, toggleSidebar, currentShop }) => {
 
                     {govItems.length > 0 && (
                         <nav className="nav-group secondary">
-                            <div className="nav-label-top" style={{color: '#059669'}}>Government Records</div>
+                            <div className="nav-label-top" style={{ color: '#059669' }}>GST Records</div>
                             {govItems.map((item) => (
-                                <NavLink 
-                                    key={item.path} 
-                                    to={item.path} 
+                                <NavLink
+                                    key={item.path}
+                                    to={item.path}
                                     className={({ isActive }) => `nav-link-premium gov-link ${isActive ? 'active' : ''}`}
                                     onClick={() => window.innerWidth < 1024 && toggleSidebar()}
                                     style={{ '--hover-bg': '#ECFDF5', '--active-bg': '#D1FAE5', '--active-color': '#059669' }}

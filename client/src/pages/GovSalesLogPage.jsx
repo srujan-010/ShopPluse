@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Search, 
     Calendar, 
@@ -7,41 +7,64 @@ import {
     MessageSquare,
     ChevronLeft,
     ShieldCheck,
-    ChevronRight
+    ChevronRight,
+    Info,
+    Download,
+    Printer,
+    FileText,
+    IndianRupee,
+    CheckCircle2
 } from 'lucide-react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { govSaleService, shopService } from '../services/api';
+import { govSaleService, shopService, productService } from '../services/api';
 import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
+import CompactInvoiceSheet from '../components/CompactInvoiceSheet';
+import PrintFormatSelector from '../components/PrintFormatSelector';
+import { getFormatOption, applyPrintPageStyles } from '../utils/printFormatConstants';
+import { resolveBillTaxDetails } from '../utils/gstService';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const GovSalesLogPage = () => {
     const { shopId } = useParams();
     const navigate = useNavigate();
     const [sales, setSales] = useState([]);
     const [shop, setShop] = useState(null);
+    const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     
     // View Bill State
     const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
+    const [secondSaleForInvoice, setSecondSaleForInvoice] = useState(null);
     const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
-    const [isInspectionCopy, setIsInspectionCopy] = useState(true);
+    const [printFormatOverride, setPrintFormatOverride] = useState(null);
+
+    const activePrintFormat = printFormatOverride || shop?.defaultPrintFormat || 'full_a4';
+
+    // Discrepancy & Historical Audit State
+    const [discrepancies, setDiscrepancies] = useState([]);
+    const [isReconcileModalOpen, setIsReconcileModalOpen] = useState(false);
+    const [reconcileReason, setReconcileReason] = useState('Reconciled retail rates with configured GST ledger prices');
+    const [isReconciling, setIsReconciling] = useState(false);
     
     // Filters & Pagination
     const [searchParams] = useSearchParams();
     const initialDate = searchParams.get('date');
     const initialProduct = searchParams.get('product');
     const [productFilter, setProductFilter] = useState(initialProduct || '');
-    const [periodFilter, setPeriodFilter] = useState(initialDate ? 'custom' : 'month'); 
-    const [paymentFilter, setPaymentFilter] = useState('All'); 
+    const [periodFilter, setPeriodFilter] = useState(initialDate ? 'custom' : 'this_month'); 
     const getLocalToday = () => {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     };
-    const [customDate, setCustomDate] = useState(initialDate || getLocalToday());
+    const [customStartDate, setCustomStartDate] = useState(initialDate || getLocalToday());
+    const [customEndDate, setCustomEndDate] = useState(initialDate || getLocalToday());
+    const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
     const [page, setPage] = useState(1);
     const itemsPerPage = 20;
 
@@ -68,7 +91,8 @@ const GovSalesLogPage = () => {
                 const sDate = new Date(sale.date);
                 const yyyymmdd = `${sDate.getFullYear()}-${String(sDate.getMonth()+1).padStart(2,'0')}-${String(sDate.getDate()).padStart(2,'0')}`;
                 setPeriodFilter('custom');
-                setCustomDate(yyyymmdd);
+                setCustomStartDate(yyyymmdd);
+                setCustomEndDate(yyyymmdd);
                 setSearchQuery(searchInvoice);
                 handleViewBill(sale);
             }
@@ -88,13 +112,21 @@ const GovSalesLogPage = () => {
             const activeShop = localShops.find(s => s._id === shopId);
             if (activeShop) setShop(activeShop);
 
-            const [salesRes, shopsRes] = await Promise.all([
+            const [salesRes, shopsRes, productsRes, discRes] = await Promise.all([
                 govSaleService.getAll(shopId),
-                shopService.getAll()
+                shopService.getAll(),
+                productService.getAll(shopId).catch(() => ({ data: { data: [] } })),
+                govSaleService.getDiscrepancies(shopId).catch(() => ({ data: { data: [] } }))
             ]);
             setSales(salesRes.data.data || []);
             if (shopsRes.data?.data) {
                 setShop(shopsRes.data.data.find(s => s._id === shopId));
+            }
+            if (productsRes?.data?.data) {
+                setProducts(productsRes.data.data);
+            }
+            if (discRes.data?.data) {
+                setDiscrepancies(discRes.data.data);
             }
         } catch (err) {
             console.error('Error fetching government sales data:', err);
@@ -103,104 +135,371 @@ const GovSalesLogPage = () => {
         }
     };
 
+    const handleReconcileHistorical = async () => {
+        setIsReconciling(true);
+        try {
+            await govSaleService.correctHistorical({
+                authorize: true,
+                reason: reconcileReason
+            }, shopId);
+            setIsReconcileModalOpen(false);
+            await fetchInitialData();
+        } catch (err) {
+            console.error('Reconciliation error:', err);
+            alert('Reconciliation failed: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setIsReconciling(false);
+        }
+    };
+
     const handleViewBill = (sale) => {
         if (!sale) return;
         setSelectedSaleForInvoice(sale);
-        setIsInspectionCopy(sale.isInspectionCopy !== undefined ? sale.isInspectionCopy : true);
+        setSecondSaleForInvoice(null);
         setIsInvoiceOpen(true);
     };
 
-    const handleDownloadPDF = (sale) => {
-        if (!sale) return;
-        invoiceService.downloadInvoice(sale, shop, 'GOV_SALE', { isInspectionCopy });
+    const handleDownloadPDF = (targetSale) => {
+        const saleToPrint = targetSale || selectedSaleForInvoice;
+        if (!saleToPrint) return;
+        if (secondSaleForInvoice && activePrintFormat === 'half_a4') {
+            invoiceService.downloadInvoice(saleToPrint, shop, 'GOV_SALE', { 
+                secondBill: secondSaleForInvoice, 
+                products, 
+                format: activePrintFormat 
+            });
+        } else {
+            invoiceService.downloadInvoice(saleToPrint, shop, 'GOV_SALE', { 
+                products, 
+                format: activePrintFormat 
+            });
+        }
     };
 
-    const handleShareWhatsApp = (sale) => {
-        if (!sale) return;
-        invoiceService.shareInvoice(sale, shop, 'GOV_SALE', { isInspectionCopy });
+    const handleShareWhatsApp = (targetSale) => {
+        const saleToShare = targetSale || selectedSaleForInvoice;
+        if (!saleToShare) return;
+        invoiceService.shareInvoice(saleToShare, shop, 'GOV_SALE', { 
+            products, 
+            format: activePrintFormat 
+        });
     };
 
-    const filteredSales = sales.filter(sale => {
-        const saleDate = new Date(sale.date);
-        const now = new Date();
-        let matchesPeriod = false;
+    // Resolve tax breakdown accurately for each government sale
+    const salesWithTax = useMemo(() => {
+        return sales.map(sale => {
+            const td = resolveBillTaxDetails(sale, 'GOV_SALE', shop, products);
+            return {
+                ...sale,
+                taxDetails: td
+            };
+        });
+    }, [sales, shop, products]);
 
+    const getPeriodDisplayLabel = () => {
         if (periodFilter === 'today') {
-            matchesPeriod = saleDate.getFullYear() === now.getFullYear() &&
-                            saleDate.getMonth() === now.getMonth() &&
-                            saleDate.getDate() === now.getDate();
-        } else if (periodFilter === 'yesterday') {
-            const yesterday = new Date();
-            yesterday.setDate(now.getDate() - 1);
-            matchesPeriod = saleDate.getFullYear() === yesterday.getFullYear() &&
-                            saleDate.getMonth() === yesterday.getMonth() &&
-                            saleDate.getDate() === yesterday.getDate();
-        } else if (periodFilter === 'week') {
-            const oneWeekAgo = new Date();
-            oneWeekAgo.setDate(now.getDate() - 7);
-            matchesPeriod = saleDate >= oneWeekAgo;
-        } else if (periodFilter === 'month') {
-            const oneMonthAgo = new Date();
-            oneMonthAgo.setMonth(now.getMonth() - 1);
-            matchesPeriod = saleDate >= oneMonthAgo;
-        } else if (periodFilter === 'custom') {
-            const target = new Date(customDate);
-            matchesPeriod = saleDate.getFullYear() === target.getFullYear() &&
-                            saleDate.getMonth() === target.getMonth() &&
-                            saleDate.getDate() === target.getDate();
-        } else if (periodFilter === 'all') {
-            matchesPeriod = true;
+            return `Today (${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})`;
         }
-
-        const isQueryValidAadhaar = searchQuery.toLowerCase() === 'valid';
-        const isQueryInvalidAadhaar = searchQuery.toLowerCase() === 'invalid';
-        
-        let matchesAadhaarStatus = false;
-        if (isQueryValidAadhaar) {
-            matchesAadhaarStatus = sale.customerAadhaar && /^\d{12}$/.test(sale.customerAadhaar.trim());
-        } else if (isQueryInvalidAadhaar) {
-            matchesAadhaarStatus = sale.customerAadhaar && !/^\d{12}$/.test(sale.customerAadhaar.trim());
+        if (periodFilter === 'last_7_days') {
+            const past = new Date();
+            past.setDate(past.getDate() - 6);
+            return `${past.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} to ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`;
         }
+        if (periodFilter === 'this_month') {
+            return new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+        }
+        if (periodFilter === 'custom') {
+            const s = customStartDate ? new Date(customStartDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Start';
+            const e = customEndDate ? new Date(customEndDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'End';
+            return `${s} to ${e}`;
+        }
+        return 'All Time';
+    };
 
-        const matchesSearch = searchQuery === '' || 
-            (sale.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (sale.customerAadhaar || '').includes(searchQuery) ||
-            matchesAadhaarStatus;
+    const filteredSales = useMemo(() => {
+        return salesWithTax.filter(sale => {
+            const saleDate = new Date(sale.date);
+            const now = new Date();
+            let matchesPeriod = false;
 
-        const matchesPayment = paymentFilter === 'All' || 
-            (sale.paymentMethod && sale.paymentMethod.toLowerCase() === paymentFilter.toLowerCase());
+            if (periodFilter === 'today') {
+                matchesPeriod = saleDate.getFullYear() === now.getFullYear() &&
+                                saleDate.getMonth() === now.getMonth() &&
+                                saleDate.getDate() === now.getDate();
+            } else if (periodFilter === 'last_7_days') {
+                const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0);
+                const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                matchesPeriod = saleDate >= start && saleDate <= end;
+            } else if (periodFilter === 'this_month') {
+                matchesPeriod = saleDate.getFullYear() === now.getFullYear() &&
+                                saleDate.getMonth() === now.getMonth();
+            } else if (periodFilter === 'custom') {
+                let start = new Date(0);
+                if (customStartDate) {
+                    const [sy, sm, sd] = customStartDate.split('-').map(Number);
+                    start = new Date(sy, sm - 1, sd, 0, 0, 0, 0);
+                }
+                let end = new Date();
+                if (customEndDate) {
+                    const [ey, em, ed] = customEndDate.split('-').map(Number);
+                    end = new Date(ey, em - 1, ed, 23, 59, 59, 999);
+                } else {
+                    end.setHours(23, 59, 59, 999);
+                }
+                matchesPeriod = saleDate >= start && saleDate <= end;
+            } else if (periodFilter === 'all') {
+                matchesPeriod = true;
+            }
 
-        const matchesProduct = !productFilter || (sale.items || []).some(item => 
-            (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
-        );
+            const matchesSearch = searchQuery === '' || 
+                (sale.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                (sale.invoiceNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                (sale.customerAadhaar || '').includes(searchQuery);
 
-        return matchesPeriod && matchesSearch && matchesPayment && matchesProduct;
-    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+            const matchesProduct = !productFilter || (sale.items || []).some(item => 
+                (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
+            );
+
+            return matchesPeriod && matchesSearch && matchesProduct;
+        }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }, [salesWithTax, periodFilter, customStartDate, customEndDate, searchQuery, productFilter]);
 
     const paginatedSales = filteredSales.slice(0, page * itemsPerPage);
 
-    const totalAmount = filteredSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
-    const totalOrders = filteredSales.length;
-    const totalItems = filteredSales.reduce((sum, s) => sum + (s.items || []).reduce((iSum, item) => iSum + (item.soldQtyEntered || item.quantity || 0), 0), 0);
+    const summaryTotals = useMemo(() => {
+        let totalTaxable = 0;
+        let totalGst = 0;
+        let totalAmount = 0;
+
+        filteredSales.forEach(s => {
+            const td = s.taxDetails || {};
+            totalTaxable += Number(td.taxableAmount || 0);
+            totalGst += Number(td.totalGst || 0);
+            totalAmount += Number(td.grandTotal || s.totalAmount || 0);
+        });
+
+        return {
+            totalOrders: filteredSales.length,
+            totalTaxable: parseFloat(totalTaxable.toFixed(2)),
+            totalGst: parseFloat(totalGst.toFixed(2)),
+            totalAmount: parseFloat(totalAmount.toFixed(2))
+        };
+    }, [filteredSales]);
+
+    // Download A4 Multi-page Government Sales GST Register PDF
+    const handleExportGstRegisterPdf = () => {
+        if (!filteredSales || filteredSales.length === 0) {
+            alert('No GST sales records found for the selected date range.');
+            return;
+        }
+
+        try {
+            setIsGeneratingPdf(true);
+            const doc = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: 'a4'
+            });
+
+            const pageWidth = doc.internal.pageSize.getWidth(); // 297mm
+            const pageHeight = doc.internal.pageSize.getHeight(); // 210mm
+            const margin = 12;
+            const contentWidth = pageWidth - (margin * 2); // 273mm
+
+            const primaryNavy = [15, 23, 42];     // #0F172A
+            const brandBlue = [37, 99, 235];       // #2563EB
+            const creditGreen = [5, 150, 105];     // #059669
+            const darkText = [30, 41, 59];         // #1E293B
+            const mutedGray = [100, 116, 139];     // #64748B
+            const borderGray = [226, 232, 240];    // #E2E8F0
+            const lightBg = [248, 250, 252];       // #F8FAFC
+
+            let currentY = margin;
+
+            // Accent Top Ribbon
+            doc.setFillColor(...brandBlue);
+            doc.rect(margin, currentY, contentWidth, 2, 'F');
+            currentY += 6;
+
+            // Shop Name & Details
+            const shopName = shop?.name || 'ShopPulse Business';
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(14);
+            doc.setTextColor(...primaryNavy);
+            doc.text(shopName, margin, currentY + 3);
+
+            // Report Title
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(13);
+            doc.setTextColor(...brandBlue);
+            doc.text('GST Sales Register', pageWidth - margin, currentY + 3, { align: 'right' });
+
+            let shopSubY = currentY + 7.5;
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8);
+            doc.setTextColor(...mutedGray);
+
+            const shopDetails = [];
+            if (shop?.location) shopDetails.push(shop.location);
+            if (shop?.contactNumber) shopDetails.push(`Phone: ${shop.contactNumber}`);
+            if (shop?.gstNumber) shopDetails.push(`GSTIN: ${shop.gstNumber}`);
+            if (shopDetails.length > 0) {
+                doc.text(shopDetails.join('  •  '), margin, shopSubY);
+            }
+
+            const genDateStr = `Generated on: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+            doc.text(`Period: ${getPeriodDisplayLabel()}  •  ${genDateStr}`, pageWidth - margin, shopSubY, { align: 'right' });
+
+            currentY = shopSubY + 6;
+
+            // Divider Line
+            doc.setDrawColor(...borderGray);
+            doc.setLineWidth(0.4);
+            doc.line(margin, currentY, pageWidth - margin, currentY);
+            currentY += 5;
+
+            // 4 KPI Summary Boxes in PDF
+            const cardWidth = (contentWidth - 12) / 4;
+            const cardHeight = 12;
+            const kpis = [
+                { label: 'NUMBER OF BILLS', val: `${summaryTotals.totalOrders} Bills`, color: brandBlue },
+                { label: 'TOTAL TAXABLE VALUE', val: `Rs. ${summaryTotals.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, color: primaryNavy },
+                { label: 'TOTAL GST', val: `Rs. ${summaryTotals.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, color: creditGreen },
+                { label: 'TOTAL BILL AMOUNT', val: `Rs. ${summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, color: [180, 83, 9] }
+            ];
+
+            kpis.forEach((kpi, idx) => {
+                const cardX = margin + (idx * (cardWidth + 4));
+                doc.setFillColor(...lightBg);
+                doc.roundedRect(cardX, currentY, cardWidth, cardHeight, 1.5, 1.5, 'F');
+                doc.setDrawColor(...borderGray);
+                doc.roundedRect(cardX, currentY, cardWidth, cardHeight, 1.5, 1.5, 'S');
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(6.5);
+                doc.setTextColor(...mutedGray);
+                doc.text(kpi.label, cardX + 3, currentY + 3.8);
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(8.5);
+                doc.setTextColor(...kpi.color);
+                doc.text(kpi.val, cardX + 3, currentY + 8.5);
+            });
+
+            currentY += cardHeight + 5;
+
+            // Build AutoTable with ALL matching bills across all pages
+            const tableRows = filteredSales.map((sale) => {
+                const td = sale.taxDetails || {};
+                const d = new Date(sale.date);
+                const dateStr = d.toLocaleDateString('en-IN') + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                return [
+                    `#${sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}`,
+                    sale.customerName || 'Walk-in Customer',
+                    dateStr,
+                    `Rs. ${Number(td.taxableAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                    `Rs. ${Number(td.totalGst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                    `Rs. ${Number(td.grandTotal || sale.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                ];
+            });
+
+            const totalsRow = [
+                'TOTALS',
+                `${summaryTotals.totalOrders} Bills`,
+                '—',
+                `Rs. ${summaryTotals.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                `Rs. ${summaryTotals.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`,
+                `Rs. ${summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+            ];
+
+            autoTable(doc, {
+                startY: currentY,
+                margin: { left: margin, right: margin, top: margin + 5, bottom: margin + 8 },
+                head: [[
+                    'Bill Number', 'Customer Name', 'Date',
+                    'Taxable Value', 'GST', 'Final Bill Amount'
+                ]],
+                body: [...tableRows, totalsRow],
+                theme: 'grid',
+                headStyles: {
+                    fillColor: primaryNavy,
+                    textColor: [255, 255, 255],
+                    fontSize: 8,
+                    fontStyle: 'bold',
+                    cellPadding: 2.5,
+                    halign: 'left'
+                },
+                styles: {
+                    fontSize: 7.5,
+                    textColor: darkText,
+                    cellPadding: 2.5,
+                    valign: 'middle',
+                    overflow: 'linebreak',
+                    lineColor: borderGray,
+                    lineWidth: 0.2
+                },
+                columnStyles: {
+                    0: { cellWidth: 35, fontStyle: 'bold' },
+                    1: { cellWidth: 68 },
+                    2: { cellWidth: 40 },
+                    3: { cellWidth: 42, halign: 'right' },
+                    4: { cellWidth: 42, halign: 'right', fontStyle: 'bold', textColor: creditGreen },
+                    5: { cellWidth: 46, halign: 'right', fontStyle: 'bold', textColor: brandBlue }
+                },
+                didParseCell: (data) => {
+                    if (data.section === 'body' && data.row.index === tableRows.length) {
+                        data.cell.styles.fillColor = [241, 245, 249];
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fontSize = 8;
+                    }
+                },
+                didDrawPage: (data) => {
+                    const totalPages = doc.internal.getNumberOfPages();
+                    const pageNum = data.pageNumber;
+                    doc.setFontSize(7);
+                    doc.setFont('helvetica', 'normal');
+                    doc.setTextColor(...mutedGray);
+                    doc.text(
+                        `ShopPulse GST Sales Register  •  Page ${pageNum} of ${totalPages}`,
+                        pageWidth / 2,
+                        pageHeight - 5,
+                        { align: 'center' }
+                    );
+                    doc.text(
+                        `Report generated for ${shopName}`,
+                        margin,
+                        pageHeight - 5
+                    );
+                }
+            });
+
+            const safeShopName = (shopName || 'Shop').replace(/[^a-zA-Z0-9]/g, '_');
+            doc.save(`GST_Sales_Register_${safeShopName}_${new Date().toISOString().slice(0, 10)}.pdf`);
+        } catch (pdfErr) {
+            console.error('Error exporting GST register PDF:', pdfErr);
+            alert('Failed to generate PDF: ' + (pdfErr.message || 'Unknown error'));
+        } finally {
+            setIsGeneratingPdf(false);
+        }
+    };
 
     return (
         <div className="sales-log-v3">
             <PageHeader 
-                title="Government Sales Ledger"
-                subtitle="Official inspection-ready transactions"
+                title="GST Sales Ledger"
+                subtitle="Official GST sales register and inspection-ready records"
                 backAction={() => navigate(-1)}
                 actions={
-                    <div className="sl-filters hide-mobile">
-                        {['today', 'yesterday', 'week', 'month'].map(id => (
-                            <button 
-                                key={id} 
-                                className={`sl-pill ${periodFilter === id ? 'active' : ''}`}
-                                onClick={() => { setPeriodFilter(id); setPage(1); }}
-                            >
-                                {id === 'week' ? '7D' : id.charAt(0).toUpperCase() + id.slice(1)}
-                            </button>
-                        ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <button 
+                            className="btn-download-pdf-prominent"
+                            onClick={handleExportGstRegisterPdf}
+                            disabled={isGeneratingPdf}
+                            title="Download GST Sales Register PDF"
+                        >
+                            <Download size={16} />
+                            <span>{isGeneratingPdf ? 'Generating...' : 'Download PDF'}</span>
+                        </button>
                     </div>
                 }
             />
@@ -219,9 +518,10 @@ const GovSalesLogPage = () => {
                 <div className="sl-filters">
                     {[
                         { id: 'today', label: 'Today' },
-                        { id: 'yesterday', label: 'Yesterday' },
-                        { id: 'week', label: '7D' },
-                        { id: 'month', label: 'Month' },
+                        { id: 'last_7_days', label: 'Last 7 Days' },
+                        { id: 'this_month', label: 'This Month' },
+                        { id: 'custom', label: 'Custom Range' },
+                        { id: 'all', label: 'All Time' }
                     ].map(p => (
                         <button 
                             key={p.id} 
@@ -229,24 +529,6 @@ const GovSalesLogPage = () => {
                             onClick={() => { setPeriodFilter(p.id); setPage(1); }}
                         >
                             {p.label}
-                        </button>
-                    ))}
-                    <button 
-                        className={`sl-pill sl-pill-cal ${periodFilter === 'custom' ? 'active' : ''}`}
-                        onClick={() => { setPeriodFilter('custom'); setPage(1); }}
-                    >
-                        <Calendar size={16} />
-                    </button>
-                </div>
-
-                <div className="sl-filters payment-filters">
-                    {['All', 'Cash', 'UPI', 'Khata'].map(p => (
-                        <button 
-                            key={p} 
-                            className={`sl-pill ${paymentFilter === p ? 'active' : ''}`}
-                            onClick={() => { setPaymentFilter(p); setPage(1); }}
-                        >
-                            {p}
                         </button>
                     ))}
                 </div>
@@ -272,48 +554,118 @@ const GovSalesLogPage = () => {
                 </div>
             )}
 
-            <div className="sl-summary-grid">
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Total Official Sales</span>
-                    <strong className="sl-sum-val">₹{totalAmount.toLocaleString()}</strong>
-                </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Total Records</span>
-                    <strong className="sl-sum-val">{totalOrders}</strong>
-                </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Government Revenue</span>
-                    <strong className="sl-sum-val profit">₹{totalAmount.toLocaleString()}</strong>
-                </div>
-                <div className="sl-sum-card">
-                    <span className="sl-sum-label">Fertilizer Items Sold</span>
-                    <strong className="sl-sum-val">{totalItems}</strong>
-                </div>
-            </div>
-
-            {periodFilter === 'custom' && (
-                <div className="sl-custom-date">
-                    <label><Calendar size={16} /> Select Date:</label>
-                    <input type="date" value={customDate} onChange={(e) => { setCustomDate(e.target.value); setPage(1); }} />
+            {discrepancies.length > 0 && (
+                <div style={{
+                    background: '#FEF2F2',
+                    border: '1.5px solid #FCA5A5',
+                    borderRadius: '16px',
+                    padding: '16px 20px',
+                    margin: '8px 0 16px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '12px'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontSize: '24px' }}>⚠️</span>
+                        <div>
+                            <strong style={{ color: '#991B1B', fontSize: '14px', display: 'block' }}>
+                                Historical Rate Discrepancies Detected ({discrepancies.length} records)
+                            </strong>
+                            <span style={{ color: '#7F1D1D', fontSize: '12px' }}>
+                                Legacy records previously stored retail price rates instead of configured GST ledger rates.
+                            </span>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setIsReconcileModalOpen(true)}
+                        style={{
+                            background: '#DC2626',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            padding: '8px 16px',
+                            borderRadius: '10px',
+                            fontWeight: '700',
+                            fontSize: '13px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Review & Authorize Reconcile
+                    </button>
                 </div>
             )}
 
+            {/* 4 Summary Cards (Responsive Grid) */}
+            <div className="sl-summary-grid">
+                <div className="sl-sum-card" style={{ borderTop: '3px solid #2563EB' }}>
+                    <span className="sl-sum-label">Number of Bills</span>
+                    <strong className="sl-sum-val">{summaryTotals.totalOrders}</strong>
+                    <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '600', marginTop: '2px' }}>Total Invoices</span>
+                </div>
+                <div className="sl-sum-card" style={{ borderTop: '3px solid #0F172A' }}>
+                    <span className="sl-sum-label">Total Taxable Value</span>
+                    <strong className="sl-sum-val">₹{summaryTotals.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '600', marginTop: '2px' }}>Excl. GST</span>
+                </div>
+                <div className="sl-sum-card" style={{ borderTop: '3px solid #059669' }}>
+                    <span className="sl-sum-label">Total GST</span>
+                    <strong className="sl-sum-val" style={{ color: '#059669' }}>₹{summaryTotals.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '600', marginTop: '2px' }}>Total Tax</span>
+                </div>
+                <div className="sl-sum-card" style={{ borderTop: '3px solid #EA580C' }}>
+                    <span className="sl-sum-label">Total Bill Amount</span>
+                    <strong className="sl-sum-val profit" style={{ color: '#2563EB' }}>₹{summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '600', marginTop: '2px' }}>Gross Value</span>
+                </div>
+            </div>
+
+            {/* Custom Date Range Pickers (Start & End Date) */}
+            {periodFilter === 'custom' && (
+                <div className="sl-custom-date" style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: '#F8FAFC', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '12px 18px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Calendar size={16} color="#2563EB" />
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B' }}>From:</span>
+                        <input 
+                            type="date" 
+                            value={customStartDate} 
+                            onChange={(e) => { setCustomStartDate(e.target.value); setPage(1); }}
+                            style={{ padding: '6px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', fontWeight: '600', background: '#FFFFFF' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B' }}>To:</span>
+                        <input 
+                            type="date" 
+                            value={customEndDate} 
+                            onChange={(e) => { setCustomEndDate(e.target.value); setPage(1); }}
+                            style={{ padding: '6px 12px', borderRadius: '8px', border: '1.5px solid #CBD5E1', fontSize: '13px', fontWeight: '600', background: '#FFFFFF' }}
+                        />
+                    </div>
+                    <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '600', marginLeft: 'auto' }}>
+                        {summaryTotals.totalOrders} bills found between {customStartDate || 'start'} and {customEndDate || 'end'}
+                    </span>
+                </div>
+            )}
+
+            {/* Compact 2x2 for Mobile Devices */}
             <div className="compact-2x2-container">
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Total Official</span>
-                    <strong className="mini-stat-val">₹{totalAmount.toLocaleString()}</strong>
+                    <span className="mini-stat-label">Number of Bills</span>
+                    <strong className="mini-stat-val">{summaryTotals.totalOrders}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Total Records</span>
-                    <strong className="mini-stat-val">{totalOrders}</strong>
+                    <span className="mini-stat-label">Taxable Value</span>
+                    <strong className="mini-stat-val">₹{summaryTotals.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Gov Revenue</span>
-                    <strong className="mini-stat-val profit">₹{totalAmount.toLocaleString()}</strong>
+                    <span className="mini-stat-label">Total GST</span>
+                    <strong className="mini-stat-val" style={{ color: '#059669' }}>₹{summaryTotals.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
                 </div>
                 <div className="mini-stat-card">
-                    <span className="mini-stat-label">Items Sold</span>
-                    <strong className="mini-stat-val">{totalItems}</strong>
+                    <span className="mini-stat-label">Total Bill Amount</span>
+                    <strong className="mini-stat-val profit" style={{ color: '#2563EB' }}>₹{summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
                 </div>
             </div>
 
@@ -331,7 +683,7 @@ const GovSalesLogPage = () => {
                 <EmptyState 
                     icon={Receipt}
                     title="No Official Records Found"
-                    description={searchQuery ? `No records match your search "${searchQuery}".` : "No official government records for the selected period."}
+                    description={searchQuery ? `No records match your search "${searchQuery}".` : "No GST sales records for the selected period."}
                     actionLabel={searchQuery ? "Clear Search" : "Create New Sale"}
                     onAction={searchQuery ? () => setSearchQuery('') : () => window.location.href = `/shop/${shopId}/pos`}
                     secondaryActionLabel={!searchQuery ? "Change Date" : null}
@@ -339,8 +691,10 @@ const GovSalesLogPage = () => {
                 />
             ) : (
                 <>
+                    {/* Mobile Card List */}
                     <div className="sl-list sl-mobile-only">
                         {paginatedSales.map((sale) => {
+                            const td = sale.taxDetails || {};
                             const isAuditMatched = productFilter && (sale.items || []).some(item => 
                                 (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
                             );
@@ -362,22 +716,31 @@ const GovSalesLogPage = () => {
                                             )}
                                         </div>
                                         <div className="sl-card-amount-wrap">
-                                            <div className="sl-card-amount">₹{(sale.totalAmount || 0).toLocaleString()}</div>
+                                            <div className="sl-card-amount" style={{ color: '#2563EB' }}>
+                                                ₹{Number(td.grandTotal || sale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                            </div>
                                             <ChevronRight size={16} color="#98A2B3" />
                                         </div>
                                     </div>
-                                    <div className="sl-card-mid">
-                                        <div className="sl-card-qty">
-                                            {(sale.items || []).length === 1 
-                                                ? `${sale.items[0].productName} • ${sale.items[0].soldQtyEntered || sale.items[0].quantity} ${sale.items[0].soldUnit || sale.items[0].unit || 'Piece'}`
-                                                : `${(sale.items || []).length} Items Purchased`}
+                                    <div className="sl-card-mid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginTop: '4px', background: '#F8FAFC', padding: '8px 10px', borderRadius: '8px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '10.5px', color: '#64748B', textTransform: 'uppercase', fontWeight: '700' }}>Taxable</div>
+                                            <div style={{ fontSize: '12.5px', fontWeight: '700', color: '#1E293B' }}>₹{Number(td.taxableAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10.5px', color: '#64748B', textTransform: 'uppercase', fontWeight: '700' }}>GST</div>
+                                            <div style={{ fontSize: '12.5px', fontWeight: '700', color: '#059669' }}>₹{Number(td.totalGst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: '10.5px', color: '#64748B', textTransform: 'uppercase', fontWeight: '700' }}>Amount</div>
+                                            <div style={{ fontSize: '12.5px', fontWeight: '800', color: '#2563EB' }}>₹{Number(td.grandTotal || sale.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
                                         </div>
                                     </div>
                                     <div className="sl-card-bot">
                                         <div className="sl-card-meta">
-                                            <span>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                            <span>{new Date(sale.date).toLocaleDateString('en-IN')} {new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                             <span className="divider-dot">•</span>
-                                            <span>Gov Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
+                                            <span>GST Bill #{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
                                             <span className="divider-dot">•</span>
                                             <span className="sl-cp-pay-badge upi" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                                 <ShieldCheck size={12} /> Official
@@ -389,29 +752,40 @@ const GovSalesLogPage = () => {
                         })}
                     </div>
 
+                    {/* Desktop Redesigned Table with 9 Columns and Footer Totals */}
                     <div className="sl-desktop-only radical-desktop-container">
                         <div className="rdc-header">
                             <div className="rdch-left">
-                                <h3>Official Government Records</h3>
-                                <p>{filteredSales.length} Records Found</p>
+                                <h3>GST Sales Register</h3>
+                                <p>{filteredSales.length} Records Found  •  Period: {getPeriodDisplayLabel()}</p>
                             </div>
-                            <div className="rdch-right">
-                                <span className="rdch-stat">Total Amount: <strong>₹{totalAmount.toLocaleString()}</strong></span>
+                            <div className="rdch-right" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <button 
+                                    className="btn-download-pdf-prominent"
+                                    onClick={handleExportGstRegisterPdf}
+                                    disabled={isGeneratingPdf}
+                                    title="Download GST Sales Register PDF"
+                                >
+                                    <Download size={15} />
+                                    <span>{isGeneratingPdf ? 'Generating...' : 'Download PDF'}</span>
+                                </button>
+                                <span className="rdch-stat">Total Value: <strong>₹{summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                             </div>
                         </div>
                         <table className="radical-desktop-table">
                             <thead>
                                 <tr>
-                                    <th>Bill No</th>
-                                    <th>Customer Name</th>
-                                    <th>Date & Time</th>
-                                    <th style={{ width: '25%' }}>Fertilizer Items Summary</th>
-                                    <th style={{ textAlign: 'center' }}>Gov Status</th>
-                                    <th style={{ textAlign: 'right' }}>Amount</th>
+                                    <th style={{ width: '16%' }}>Bill Number</th>
+                                    <th style={{ width: '25%' }}>Customer Name</th>
+                                    <th style={{ width: '18%' }}>Date & Time</th>
+                                    <th style={{ width: '13%', textAlign: 'right' }}>Taxable Value</th>
+                                    <th style={{ width: '13%', textAlign: 'right' }}>GST</th>
+                                    <th style={{ width: '15%', textAlign: 'right' }}>Final Bill Amount</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {paginatedSales.map((sale) => {
+                                    const td = sale.taxDetails || {};
                                     const isAuditMatched = productFilter && (sale.items || []).some(item => 
                                         (item.productName || '').toLowerCase().includes(productFilter.toLowerCase())
                                     );
@@ -421,6 +795,7 @@ const GovSalesLogPage = () => {
                                             key={sale._id} 
                                             className={`sl-desktop-row ${isAuditMatched ? 'audit-highlighted' : ''}`} 
                                             onClick={() => handleViewBill(sale)}
+                                            title="Click to view official invoice"
                                         >
                                             <td className="sld-bill">
                                                 <span className="bill-badge">#{sale.invoiceNumber || sale._id.slice(-6).toUpperCase()}</span>
@@ -440,24 +815,37 @@ const GovSalesLogPage = () => {
                                                 <div style={{ fontWeight: 600 }}>{new Date(sale.date).toLocaleDateString('en-IN')}</div>
                                                 <div style={{ fontSize: '12px', color: '#64748b' }}>{new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                             </td>
-                                            <td className="sld-items">
-                                                <div className="items-preview">
-                                                    {(sale.items || []).slice(0, 2).map(item => `${item.productName}`).join(', ')}
-                                                    {sale.items?.length > 2 && ` +${sale.items.length - 2} more`}
-                                                </div>
+                                            <td style={{ textAlign: 'right', fontWeight: 600, color: '#1E293B' }}>
+                                                ₹{Number(td.taxableAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                             </td>
-                                            <td className="sld-prev" style={{ textAlign: 'center' }}>
-                                                <span className="status-badge paid" style={{ background: '#ECFDF5', color: '#059669', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                    <ShieldCheck size={14} /> Logged
-                                                </span>
+                                            <td style={{ textAlign: 'right', fontWeight: 700, color: '#059669' }}>
+                                                ₹{Number(td.totalGst || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                             </td>
                                             <td className="sld-amt" style={{ textAlign: 'right' }}>
-                                                <div className="amt-val">₹{(sale.totalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                <div className="amt-val" style={{ color: '#2563EB', fontWeight: 800 }}>
+                                                    ₹{Number(td.grandTotal || sale.totalAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </div>
                                             </td>
                                         </tr>
                                     );
                                 })}
                             </tbody>
+                            <tfoot>
+                                <tr style={{ background: '#F8FAFC', fontWeight: 800, borderTop: '2px solid #CBD5E1' }}>
+                                    <td colSpan={3} style={{ padding: '14px 20px', color: '#475569', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '0.05em' }}>
+                                        Totals ({summaryTotals.totalOrders} Bills):
+                                    </td>
+                                    <td style={{ textAlign: 'right', padding: '14px 20px', color: '#1E293B', fontSize: '13px' }}>
+                                        ₹{summaryTotals.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td style={{ textAlign: 'right', padding: '14px 20px', color: '#059669', fontSize: '13px' }}>
+                                        ₹{summaryTotals.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td style={{ textAlign: 'right', padding: '14px 20px', color: '#2563EB', fontSize: '14px' }}>
+                                        ₹{summaryTotals.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                </tr>
+                            </tfoot>
                         </table>
                     </div>
                 </>
@@ -469,136 +857,276 @@ const GovSalesLogPage = () => {
                 </button>
             )}
 
-            {/* Invoice Modal Overlay */}
+            {/* Standard Invoice Preview Overlay (Matching Sales Log) */}
             <AnimatePresence>
-                {isInvoiceOpen && selectedSaleForInvoice && (
+                {isInvoiceOpen && (
                     <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="modal-overlay-v2"
-                        onClick={() => setIsInvoiceOpen(false)}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 20 }}
+                        className="invoice-preview-screen"
                     >
+                        <div className="ips-top-bar no-print">
+                            <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
+                                <ChevronLeft size={20} />
+                                <span>Back</span>
+                            </button>
+                            <div className="ips-title-area">
+                                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
+                                    View Bill
+                                </h2>
+                                <div style={{ marginTop: '4px' }}>
+                                    <PrintFormatSelector 
+                                        value={activePrintFormat}
+                                        onChange={(fmt) => setPrintFormatOverride(fmt)}
+                                        savedDefault={shop?.defaultPrintFormat || 'full_a4'}
+                                        shopId={shopId || shop?._id}
+                                        onShopUpdate={(updated) => {
+                                            setShop(updated);
+                                            setPrintFormatOverride(null);
+                                        }}
+                                        mode="pills"
+                                        showPrinterTip={false}
+                                    />
+                                </div>
+                            </div>
+                            <div style={{ width: 60 }} />
+                        </div>
+
+                        {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
+                            <div className="ips-printer-tip-bar no-print">
+                                <Info size={14} />
+                                <span>
+                                    <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
+                                </span>
+                            </div>
+                        )}
+
+                        <div className="ips-content">
+                            {!selectedSaleForInvoice ? (
+                                <div className="ips-error">Bill details could not be found.</div>
+                            ) : (
+                                <CompactInvoiceSheet 
+                                    bill1={selectedSaleForInvoice}
+                                    bill2={secondSaleForInvoice}
+                                    shop={shop}
+                                    products={products}
+                                    format={activePrintFormat}
+                                    availableBills={sales}
+                                    onSelectSecondBill={(second) => setSecondSaleForInvoice(second)}
+                                    onRemoveSecondBill={() => setSecondSaleForInvoice(null)}
+                                />
+                            )}
+                        </div>
+
+                        <div className="ips-actions-bar no-print">
+                            <button className="ips-btn ips-wa" onClick={() => handleShareWhatsApp()}>
+                                WhatsApp
+                            </button>
+                            <button className="ips-btn ips-pdf" onClick={() => handleDownloadPDF()}>
+                                Download PDF {secondSaleForInvoice && activePrintFormat === 'half_a4' ? '(2-on-1)' : ''}
+                            </button>
+                            <button 
+                                className="ips-btn ips-print" 
+                                onClick={() => {
+                                    applyPrintPageStyles(activePrintFormat);
+                                    window.print();
+                                }}
+                            >
+                                Print ({getFormatOption(activePrintFormat).name})
+                            </button>
+                            <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
+                                Close
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Historical Audit & Reconcile Modal */}
+            <AnimatePresence>
+                {isReconcileModalOpen && (
+                    <div className="modal-overlay-v2" style={{
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        backdropFilter: 'blur(4px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 99999,
+                        padding: '16px'
+                    }}>
                         <motion.div 
-                            initial={{ scale: 0.95, opacity: 0, y: 20 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 20 }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-                            className="gsl-invoice-modal gov-corner-accent"
-                            onClick={(e) => e.stopPropagation()}
+                            initial={{ scale: 0.95, opacity: 0 }} 
+                            animate={{ scale: 1, opacity: 1 }} 
+                            exit={{ scale: 0.95, opacity: 0 }} 
+                            style={{
+                                background: '#FFFFFF',
+                                borderRadius: '20px',
+                                maxWidth: '720px',
+                                width: '100%',
+                                maxHeight: '90vh',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                overflow: 'hidden',
+                                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
+                            }}
                         >
-                            <div className="gsl-im-header">
+                            <div style={{
+                                padding: '20px 24px',
+                                borderBottom: '1px solid #E2E8F0',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                background: '#F8FAFC'
+                            }}>
                                 <div>
-                                    <h3 style={{ margin: 0, color: '#059669', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px' }}>
-                                        <ShieldCheck size={24} /> Government Record Copy
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0F172A' }}>
+                                        Auditable Historical Rate Correction
                                     </h3>
-                                    <p style={{ margin: '4px 0 0', fontSize: '14px', color: '#047857', fontWeight: 600 }}>
-                                        Bill #{selectedSaleForInvoice.invoiceNumber || selectedSaleForInvoice._id.slice(-6).toUpperCase()}
+                                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748B' }}>
+                                        Found {discrepancies.length} records where retail prices were stored instead of configured GST ledger rates.
                                     </p>
                                 </div>
-                                <button className="gsl-close-btn" onClick={() => setIsInvoiceOpen(false)}>
-                                    <X size={24} />
+                                <button 
+                                    onClick={() => setIsReconcileModalOpen(false)}
+                                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748B' }}
+                                >
+                                    <X size={20} />
                                 </button>
                             </div>
-                            
-                            <div className="gsl-im-body">
-                                {isInspectionCopy && (
-                                    <div className="gov-watermark-overlay">
-                                        OFFICIAL INSPECTION COPY
-                                    </div>
-                                )}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
-                                    <div>
-                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Customer</div>
-                                        <div style={{ fontWeight: 700, fontSize: '16px', color: '#101828' }}>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</div>
-                                        {selectedSaleForInvoice.customerMobile && <div style={{ color: '#667085' }}>{selectedSaleForInvoice.customerMobile}</div>}
-                                        {selectedSaleForInvoice.customerAadhaar && <div style={{ color: '#047857', fontWeight: 'bold', fontSize: '13px', marginTop: '4px' }}>Aadhaar: {selectedSaleForInvoice.customerAadhaar}</div>}
-                                    </div>
-                                    <div style={{ textAlign: 'right' }}>
-                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#98A2B3', textTransform: 'uppercase' }}>Date & Time</div>
-                                        <div style={{ fontWeight: 600, color: '#101828' }}>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</div>
-                                        <div style={{ color: '#667085' }}>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                                    </div>
-                                </div>
 
-                                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '24px' }}>
+                            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                                     <thead>
-                                        <tr style={{ borderBottom: '2px solid #F2F4F7' }}>
-                                            <th style={{ textAlign: 'left', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Fertilizer Details</th>
-                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Sold</th>
-                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Returned</th>
-                                            <th style={{ textAlign: 'center', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Remaining</th>
-                                            <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Gov Rate</th>
-                                            <th style={{ textAlign: 'right', padding: '12px 0', color: '#667085', fontSize: '12px', textTransform: 'uppercase' }}>Amount</th>
+                                        <tr style={{ background: '#F1F5F9', textAlign: 'left', color: '#475569' }}>
+                                            <th style={{ padding: '8px 10px', borderRadius: '6px 0 0 6px' }}>Bill #</th>
+                                            <th style={{ padding: '8px 10px' }}>Date</th>
+                                            <th style={{ padding: '8px 10px' }}>Customer</th>
+                                            <th style={{ padding: '8px 10px' }}>Items & Rates</th>
+                                            <th style={{ padding: '8px 10px', textAlign: 'right' }}>Stored</th>
+                                            <th style={{ padding: '8px 10px', textAlign: 'right', borderRadius: '0 6px 6px 0' }}>GST Total</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {(selectedSaleForInvoice.items || []).map((item, i) => {
-                                            const soldVal = item.soldQtyEntered || item.quantity || 0;
-                                            const returnedVal = item.returnedQty || 0;
-                                            const remainingVal = item.remainingQty !== undefined ? item.remainingQty : Math.max(0, soldVal - returnedVal);
-                                            const unitStr = item.soldUnit || item.unit || 'Pc';
-                                            
-                                            return (
-                                                <tr key={i} style={{ borderBottom: '1px solid #F2F4F7' }}>
-                                                    <td style={{ padding: '16px 0', fontWeight: 600, color: '#101828' }}>{item.productName}</td>
-                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#475467' }}>{soldVal} {unitStr}</td>
-                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#EF4444', fontWeight: returnedVal > 0 ? 700 : 500 }}>{returnedVal} {unitStr}</td>
-                                                    <td style={{ padding: '16px 0', textAlign: 'center', color: '#059669', fontWeight: 700 }}>{remainingVal} {unitStr}</td>
-                                                    <td style={{ padding: '16px 0', textAlign: 'right', color: '#475467' }}>₹{(item.pricePerBaseUnit || item.price).toFixed(2)}</td>
-                                                    <td style={{ padding: '16px 0', textAlign: 'right', fontWeight: 700, color: '#101828' }}>₹{(remainingVal * (item.pricePerBaseUnit || item.price)).toFixed(2)}</td>
-                                                </tr>
-                                            );
-                                        })}
+                                        {discrepancies.map(disc => (
+                                            <tr key={disc._id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                                                <td style={{ padding: '8px 10px', fontWeight: '700' }}>#{disc.invoiceNumber}</td>
+                                                <td style={{ padding: '8px 10px', color: '#64748B' }}>{new Date(disc.date).toLocaleDateString('en-IN')}</td>
+                                                <td style={{ padding: '8px 10px' }}>{disc.customerName || 'Walk-in'}</td>
+                                                <td style={{ padding: '8px 10px' }}>
+                                                    {disc.items.map((it, idx) => (
+                                                        <div key={idx} style={{ color: '#0F172A' }}>
+                                                            {it.productName}: {it.quantity} {it.unit} @ <del style={{ color: '#DC2626' }}>₹{it.storedRate}</del> <strong>₹{it.persistedGovPrice}</strong>
+                                                        </div>
+                                                    ))}
+                                                </td>
+                                                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#DC2626', fontWeight: '700' }}>
+                                                    ₹{disc.storedTotalAmount}
+                                                </td>
+                                                <td style={{ padding: '8px 10px', textAlign: 'right', color: '#059669', fontWeight: '700' }}>
+                                                    ₹{disc.recalculatedTotalAmount}
+                                                </td>
+                                            </tr>
+                                        ))}
                                     </tbody>
                                 </table>
 
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '16px', borderRadius: '12px' }}>
-                                    <div style={{ color: '#047857', fontWeight: 600 }}>Payment: {selectedSaleForInvoice.paymentMethod}</div>
-                                    <div style={{ textAlign: 'right' }}>
-                                        <span style={{ fontSize: '14px', color: '#047857', marginRight: '12px', fontWeight: 600 }}>Total Gov Amount</span>
-                                        <strong style={{ fontSize: '24px', color: '#059669', fontWeight: 800 }}>₹{selectedSaleForInvoice.totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
-                                    </div>
+                                <div style={{ marginTop: '20px', background: '#FFFBEB', border: '1px solid #FDE68A', padding: '14px', borderRadius: '12px' }}>
+                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: '700', color: '#92400E', marginBottom: '6px' }}>
+                                        Authorization Audit Reason / Notes:
+                                    </label>
+                                    <input 
+                                        type="text" 
+                                        value={reconcileReason} 
+                                        onChange={(e) => setReconcileReason(e.target.value)}
+                                        style={{
+                                            width: '100%',
+                                            padding: '8px 12px',
+                                            borderRadius: '8px',
+                                            border: '1px solid #D97706',
+                                            fontSize: '13px'
+                                        }}
+                                        placeholder="Enter reason for audit record..."
+                                    />
                                 </div>
                             </div>
-                            
-                            <div className="gsl-im-footer" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', borderBottom: '1px solid #E4E7EC', paddingBottom: '12px' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: 700, color: '#344054' }}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={isInspectionCopy} 
-                                            onChange={(e) => setIsInspectionCopy(e.target.checked)}
-                                            style={{ width: '18px', height: '18px', accentColor: '#059669', cursor: 'pointer' }}
-                                        />
-                                        <span>Apply Official Inspection Watermark</span>
-                                    </label>
-                                </div>
-                                <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
-                                    <button 
-                                        className="gsl-print-btn"
-                                        style={{ flex: 1 }}
-                                        onClick={() => handleDownloadPDF(selectedSaleForInvoice)}
-                                    >
-                                        Print Government Copy
-                                    </button>
-                                    <button 
-                                        className="gsl-wa-btn"
-                                        style={{ flex: 1 }}
-                                        onClick={() => handleShareWhatsApp(selectedSaleForInvoice)}
-                                    >
-                                        <MessageSquare size={18} /> Download / Share PDF
-                                    </button>
-                                </div>
+
+                            <div style={{
+                                padding: '16px 24px',
+                                borderTop: '1px solid #E2E8F0',
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                gap: '12px',
+                                background: '#F8FAFC'
+                            }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsReconcileModalOpen(false)}
+                                    style={{
+                                        padding: '10px 18px',
+                                        borderRadius: '10px',
+                                        border: '1px solid #CBD5E1',
+                                        background: '#FFFFFF',
+                                        color: '#475569',
+                                        fontWeight: '700',
+                                        fontSize: '13px',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={isReconciling}
+                                    onClick={handleReconcileHistorical}
+                                    style={{
+                                        padding: '10px 20px',
+                                        borderRadius: '10px',
+                                        border: 'none',
+                                        background: isReconciling ? '#94A3B8' : '#059669',
+                                        color: '#FFFFFF',
+                                        fontWeight: '800',
+                                        fontSize: '13px',
+                                        cursor: isReconciling ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {isReconciling ? 'Reconciling Records...' : 'Authorize & Reconcile All'}
+                                </button>
                             </div>
                         </motion.div>
-                    </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
 
             <style jsx="true">{`
 
                  .sales-log-v3 { display: flex; flex-direction: column; gap: 20px; padding: 16px; }
+                 .btn-download-pdf-prominent {
+                     display: inline-flex;
+                     align-items: center;
+                     gap: 8px;
+                     background: #2563EB;
+                     color: #FFFFFF;
+                     border: none;
+                     padding: 8px 16px;
+                     border-radius: 10px;
+                     font-size: 13px;
+                     font-weight: 700;
+                     cursor: pointer;
+                     box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+                     transition: all 0.2s ease;
+                 }
+                 .btn-download-pdf-prominent:hover:not(:disabled) {
+                     background: #1D4ED8;
+                     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+                     transform: translateY(-1px);
+                 }
+                 .btn-download-pdf-prominent:disabled {
+                     opacity: 0.6;
+                     cursor: not-allowed;
+                 }
                  .sl-active-filters {
                      display: flex;
                      gap: 10px;
@@ -693,17 +1221,12 @@ const GovSalesLogPage = () => {
                     .sl-controls { flex-direction: row; align-items: center; justify-content: flex-start; gap: 20px; }
                     .sl-search { flex: 0 0 350px; }
                     .sl-filters { width: auto; flex: 0 0 auto; }
-                    .payment-filters { margin-left: auto; }
                 }
 
                 .sl-search { height: 42px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 99px; display: flex; align-items: center; padding: 0 16px; gap: 10px; box-sizing: border-box; }
                 .sl-search input { border: none; outline: none; flex: 1; font-size: 14px; font-weight: 600; background: transparent; color: #1e293b; }
                 .sl-filters { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; flex-shrink: 0; }
                 .sl-filters::-webkit-scrollbar { display: none; }
-                .payment-filters { border-left: 0; padding-left: 0; }
-                @media (min-width: 1024px) {
-                    .payment-filters { border-left: 1.5px solid #e2e8f0; padding-left: 20px; }
-                }
                 .sl-pill { flex: 0 0 auto; height: 36px; padding: 0 16px; border: 1.5px solid #e2e8f0; background: white; border-radius: 99px; font-size: 13px; font-weight: 700; color: #64748b; cursor: pointer; white-space: nowrap; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
                 .sl-pill.active { background: #2563eb; color: white; border-color: #2563eb; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2); }
                 .compact-2x2-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; background: white; border-radius: 18px; padding: 16px; border: 1.5px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
@@ -1223,78 +1746,6 @@ const GovSalesLogPage = () => {
 
                     .sl-m-actions-v3 { padding: 12px 16px; }
                     .btn-v3-primary, .btn-v3-success, .btn-v3-secondary { height: 44px; font-size: 13px; border-radius: 10px; }
-                }
-            
-
-                /* MODAL STYLES & GOV DECORATION */
-                .modal-overlay-v2 { position: fixed; inset: 0; z-index: 7000; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); padding: 20px; }
-                .gsl-invoice-modal { background: white; border-radius: 16px; width: 100%; max-width: 700px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); overflow: hidden; border-top: 6px solid #10B981; }
-                .gsl-im-header { padding: 20px 24px; border-bottom: 1px solid #E4E7EC; display: flex; justify-content: space-between; align-items: center; background: #ECFDF5; }
-                .gsl-close-btn { background: transparent; border: none; cursor: pointer; color: #047857; width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
-                .gsl-close-btn:hover { background: #D1FAE5; }
-                .gsl-im-body { position: relative; padding: 24px; overflow-y: auto; flex: 1; }
-                .gov-watermark-overlay {
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%) rotate(-30deg);
-                    font-size: 32px;
-                    font-weight: 900;
-                    color: rgba(239, 68, 68, 0.12); /* Semi-transparent light red */
-                    border: 4px solid rgba(239, 68, 68, 0.12);
-                    padding: 10px 20px;
-                    text-transform: uppercase;
-                    pointer-events: none;
-                    white-space: nowrap;
-                    z-index: 10;
-                    user-select: none;
-                    letter-spacing: 2px;
-                }
-                .gsl-im-footer { padding: 20px 24px; border-top: 1px solid #E4E7EC; display: flex; gap: 16px; background: #F9FAFB; }
-                
-                .gsl-print-btn { flex: 1; padding: 12px; background: white; border: 1px solid #D0D5DD; border-radius: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; color: #344054; transition: 0.2s; }
-                .gsl-print-btn:hover { background: #F9FAFB; border-color: #98A2B3; }
-                
-                .gsl-wa-btn { flex: 1; padding: 12px; background: #10B981; border: none; border-radius: 8px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; color: white; transition: 0.2s; }
-                .gsl-wa-btn:hover { background: #059669; }
-
-                @media (max-width: 768px) {
-                    .modal-overlay-v2 { padding: 0; align-items: flex-end; }
-                    .gsl-invoice-modal { max-width: 100%; border-radius: 20px 20px 0 0; max-height: 90vh; border-top: none; }
-                }
-
-                /* Decorative Curved Corner Accent */
-                .gov-corner-accent {
-                    position: relative;
-                    overflow: hidden;
-                }
-                .gov-corner-accent::before {
-                    content: '';
-                    position: absolute;
-                    bottom: -10px;
-                    right: -10px;
-                    width: 180px;
-                    height: 180px;
-                    background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.02));
-                    border-top-left-radius: 120px;
-                    z-index: 0;
-                    pointer-events: none;
-                }
-                .gov-corner-accent::after {
-                    content: '';
-                    position: absolute;
-                    bottom: -5px;
-                    right: -5px;
-                    width: 100px;
-                    height: 100px;
-                    background: linear-gradient(135deg, rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.05));
-                    border-top-left-radius: 80px;
-                    z-index: 0;
-                    pointer-events: none;
-                }
-                .gov-corner-accent > * {
-                    position: relative;
-                    z-index: 1;
                 }
             `}</style>
         </div>

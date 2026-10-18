@@ -6,12 +6,30 @@ const GovernmentSale = require('../models/GovernmentSale');
 const InventoryHistory = require('../models/InventoryHistory');
 const ReturnRecord = require('../models/ReturnRecord');
 const ExchangeRecord = require('../models/ExchangeRecord');
+const Shop = require('../models/Shop');
 const mongoose = require('mongoose');
+const { processExpiryAlerts } = require('../utils/expiryHelper');
+
+const normalizeUnit = (u) => {
+    if (!u) return '';
+    const s = u.toLowerCase().trim();
+    if (s === 'pieces' || s === 'pcs' || s === 'pc') return 'piece';
+    if (s === 'grams' || s === 'g') return 'gram';
+    if (s === 'kilograms' || s === 'kgs') return 'kg';
+    if (s === 'liters' || s === 'litres' || s === 'l') return 'liter';
+    if (s === 'milliliters' || s === 'mls') return 'ml';
+    if (s === 'meters' || s === 'm') return 'meter';
+    if (s === 'centimeters') return 'cm';
+    if (s === 'dozens') return 'dozen';
+    return s;
+};
 
 const getConversionMultiplier = (fromUnit, toUnit) => {
     if (!fromUnit || !toUnit) return 1;
-    if (fromUnit.toLowerCase() === toUnit.toLowerCase()) return 1;
-    const key = `${fromUnit.toLowerCase()}-${toUnit.toLowerCase()}`;
+    const u1 = normalizeUnit(fromUnit);
+    const u2 = normalizeUnit(toUnit);
+    if (u1 === u2) return 1;
+    const key = `${u1}-${u2}`;
     const table = {
         'gram-kg': 0.001,
         'kg-gram': 1000,
@@ -27,35 +45,146 @@ const getConversionMultiplier = (fromUnit, toUnit) => {
     return table[key];
 };
 
-// @desc    Get all sales for owner
+// Helper to resolve payment status, paidAmount, and remainingAmount accurately
+const resolvePaymentInfo = (tx, khataCustomerMap) => {
+    const total = Number(tx.totalAmount !== undefined ? tx.totalAmount : (tx.totalPrice || 0));
+    const method = (tx.paymentMethod || tx.paymentMode || 'Cash').toUpperCase();
+
+    // 1. CASH / UPI: always fully paid unless explicitly recorded otherwise
+    if (method === 'CASH' || method === 'UPI') {
+        const paid = (tx.paidAmount !== undefined && tx.paidAmount !== null) ? Number(tx.paidAmount) : total;
+        const due = (tx.remainingAmount !== undefined && tx.remainingAmount !== null) ? Number(tx.remainingAmount) : Math.max(0, total - paid);
+        const status = tx.paymentStatus || (due === 0 ? 'Paid' : (paid > 0 ? 'Partial' : 'Unpaid'));
+        return { paidAmount: paid, remainingAmount: due, paymentStatus: status };
+    }
+
+    // 2. KHATA:
+    if (method === 'KHATA') {
+        let khata = null;
+        if (khataCustomerMap) {
+            if (tx.customerMobile) {
+                khata = khataCustomerMap.get(tx.customerMobile.toString().trim());
+            }
+            if (!khata && tx.customerName) {
+                khata = khataCustomerMap.get(tx.customerName.toString().toLowerCase().trim());
+            }
+        }
+
+        // If customer has 0 outstanding due in Khata (all cleared!) and has payment records
+        if (khata && Number(khata.outstandingDue) === 0 && (khata.transactions || []).some(t => t.type === 'payment')) {
+            return { paidAmount: total, remainingAmount: 0, paymentStatus: 'Paid' };
+        }
+
+        // Check if tx already has persisted paidAmount & remainingAmount
+        if (tx.paidAmount !== undefined && tx.paidAmount !== null && tx.remainingAmount !== undefined && tx.remainingAmount !== null) {
+            const paid = Number(tx.paidAmount);
+            const due = Number(tx.remainingAmount);
+            const status = tx.paymentStatus || (due === 0 ? 'Paid' : (paid > 0 ? 'Partial' : 'Unpaid'));
+            return { paidAmount: paid, remainingAmount: due, paymentStatus: status };
+        }
+
+        // If tx is linked to a specific Khata due entry
+        if (khata && Array.isArray(khata.transactions)) {
+            const saleIdStr = tx._id?.toString();
+            const matchedTx = saleIdStr ? khata.transactions.find(t => t.saleId && t.saleId.toString() === saleIdStr) : null;
+            if (matchedTx) {
+                let remainingPayments = khata.transactions
+                    .filter(t => t.type === 'payment')
+                    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+
+                const dues = khata.transactions.filter(t => t.type === 'due');
+                for (const d of dues) {
+                    const dAmt = Number(d.amount) || 0;
+                    const paidForDue = Math.min(dAmt, remainingPayments);
+                    remainingPayments = Math.max(0, remainingPayments - paidForDue);
+                    if (d.saleId && d.saleId.toString() === saleIdStr) {
+                        const dueForThis = parseFloat((dAmt - paidForDue).toFixed(2));
+                        const status = dueForThis === 0 ? 'Paid' : (paidForDue > 0 ? 'Partial' : 'Unpaid');
+                        return { paidAmount: paidForDue, remainingAmount: dueForThis, paymentStatus: status };
+                    }
+                }
+            }
+        }
+
+        // Fallback for Khata where no payment was recorded or customer has outstanding debt
+        return { paidAmount: 0, remainingAmount: total, paymentStatus: 'Unpaid' };
+    }
+
+    // Other methods / fallback
+    const paid = (tx.paidAmount !== undefined && tx.paidAmount !== null) ? Number(tx.paidAmount) : total;
+    const due = (tx.remainingAmount !== undefined && tx.remainingAmount !== null) ? Number(tx.remainingAmount) : Math.max(0, total - paid);
+    return {
+        paidAmount: paid,
+        remainingAmount: due,
+        paymentStatus: tx.paymentStatus || (due === 0 ? 'Paid' : (paid > 0 ? 'Partial' : 'Unpaid'))
+    };
+};
+
+// @desc    Get all sales for owner or shop
 // @route   GET /api/sales
 // @access  Private
 exports.getSales = async (req, res) => {
     try {
-        let query = { owner: req.user.id };
+        let query = {};
         if (req.query.shop) {
             query.shop = req.query.shop;
+        } else {
+            query.owner = req.user.id;
         }
         
-        const [sales, returns, exchanges] = await Promise.all([
+        const [sales, returns, exchanges, govSales, khataRecords] = await Promise.all([
             Sale.find(query).populate('shop', 'name').lean(),
             ReturnRecord.find(query).populate('shop', 'name').lean(),
-            ExchangeRecord.find(query).populate('shop', 'name').lean()
+            ExchangeRecord.find(query).populate('shop', 'name').lean(),
+            GovernmentSale.find(query).populate('shop', 'name').populate('items.product', 'name category isGstApplicable gstRate gstPricingMode gst governmentPrice sellPrice unit').lean(),
+            Khata.find(query).lean()
         ]);
+
+        const khataCustomerMap = new Map();
+        (khataRecords || []).forEach(k => {
+            if (k.mobile) khataCustomerMap.set(k.mobile.trim(), k);
+            if (k.customerName) khataCustomerMap.set(k.customerName.toLowerCase().trim(), k);
+        });
 
         sales.forEach(s => {
             s.type = 'SALE';
+            const payInfo = resolvePaymentInfo(s, khataCustomerMap);
+            s.paidAmount = payInfo.paidAmount;
+            s.remainingAmount = payInfo.remainingAmount;
+            s.paymentStatus = payInfo.paymentStatus;
         });
 
         returns.forEach(r => {
             r.type = 'RETURN';
             r.totalAmount = -r.totalRefundAmount; // Displayed as negative in sales list
-            r.paymentMethod = r.refundMethod;
+            r.paymentMethod = r.refundMethod || 'Cash';
+            r.paidAmount = r.totalRefundAmount || 0;
+            r.remainingAmount = 0;
+            r.paymentStatus = 'Refunded';
         });
 
         exchanges.forEach(e => {
             e.type = 'EXCHANGE';
-            e.totalAmount = e.balanceDifference;
+            e.totalAmount = e.balanceDifference || 0;
+            if (e.balanceDifference > 0) {
+                if ((e.paymentMethod || '').toUpperCase() === 'KHATA') {
+                    e.paidAmount = 0;
+                    e.remainingAmount = e.balanceDifference;
+                    e.paymentStatus = 'Unpaid';
+                } else {
+                    e.paidAmount = e.balanceDifference;
+                    e.remainingAmount = 0;
+                    e.paymentStatus = 'Paid';
+                }
+            } else if (e.balanceDifference < 0) {
+                e.paidAmount = Math.abs(e.balanceDifference);
+                e.remainingAmount = 0;
+                e.paymentStatus = 'Refunded';
+            } else {
+                e.paidAmount = 0;
+                e.remainingAmount = 0;
+                e.paymentStatus = 'Paid';
+            }
             // For detail modal compatibility, combine returned and replacement items
             e.items = [
                 ...(e.returnedItems || []).map(item => ({ 
@@ -74,7 +203,20 @@ exports.getSales = async (req, res) => {
             ];
         });
 
-        const allTransactions = [...sales, ...returns, ...exchanges].sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Filter government sales so that auto-generated ones linked to an existing sale are not duplicated
+        const existingSaleIds = new Set(sales.map(s => s._id.toString()));
+        const unlinkedGovSales = (govSales || []).filter(g => !g.linkedSaleId || !existingSaleIds.has(g.linkedSaleId.toString()));
+
+        unlinkedGovSales.forEach(g => {
+            g.type = 'GOV_SALE';
+            g.totalProfit = g.totalProfit || 0;
+            const payInfo = resolvePaymentInfo(g, khataCustomerMap);
+            g.paidAmount = payInfo.paidAmount;
+            g.remainingAmount = payInfo.remainingAmount;
+            g.paymentStatus = payInfo.paymentStatus;
+        });
+
+        const allTransactions = [...sales, ...returns, ...exchanges, ...unlinkedGovSales].sort((a, b) => new Date(b.date) - new Date(a.date));
 
         res.status(200).json({ success: true, data: allTransactions });
     } catch (error) {
@@ -90,11 +232,10 @@ exports.createSale = async (req, res) => {
         const { shop, items, paymentMethod, date, customerName, customerMobile, discountType, discountValue, paidAmount } = req.body;
         const ownerId = req.user.id;
 
-        let totalAmount = 0;
-        let totalProfit = 0;
-        const processedItems = [];
+        // Pass 1: Validate stock, convert units, and compute base line amounts
+        const preliminaryItems = [];
+        let rawSubtotal = 0;
 
-        // Process each item in the cart
         for (const item of items) {
             const product = await Product.findById(item.product);
             if (!product) continue;
@@ -120,64 +261,190 @@ exports.createSale = async (req, res) => {
             }
 
             const sellPricePerBaseUnit = product.sellPrice;
-            const totalPrice = parseFloat((convertedQuantityInBaseUnit * sellPricePerBaseUnit).toFixed(2));
-            
-            const buyPricePerBaseUnit = product.buyPrice || 0;
-            const itemProfit = parseFloat((totalPrice - (convertedQuantityInBaseUnit * buyPricePerBaseUnit)).toFixed(2));
+            const unitPrice = parseFloat((sellPricePerBaseUnit * multiplier).toFixed(2));
+            const baseLineAmount = parseFloat((convertedQuantityInBaseUnit * sellPricePerBaseUnit).toFixed(2));
 
-            totalAmount += totalPrice;
-            totalProfit += itemProfit;
+            // Tax configuration: use item-level snapshot if provided, else product setting with legacy fallback
+            let isGstApplicable = false;
+            if (item.isGstApplicable !== undefined) {
+                isGstApplicable = Boolean(item.isGstApplicable);
+            } else if (product.isGstApplicable !== undefined) {
+                isGstApplicable = Boolean(product.isGstApplicable);
+            } else {
+                isGstApplicable = (product.gst || 0) > 0;
+            }
 
-            // Update Stock with floating point safety
-            const previousStock = product.quantity;
-            product.quantity = Math.max(0, parseFloat((product.quantity - convertedQuantityInBaseUnit).toFixed(3)));
-            await product.save();
+            let gstRate = 0;
+            if (item.gstRate !== undefined) {
+                gstRate = Number(item.gstRate) || 0;
+            } else if (product.gstRate !== undefined) {
+                gstRate = Number(product.gstRate) || 0;
+            } else {
+                gstRate = Number(product.gst || 0);
+            }
+            if (!isGstApplicable) {
+                gstRate = 0;
+            }
 
-            processedItems.push({
-                product: product._id,
-                productName: product.name,
-                soldQtyEntered: enteredQuantity,
-                soldUnit: sellingUnit,
-                soldQtyBaseUnit: convertedQuantityInBaseUnit,
-                pricePerBaseUnit: sellPricePerBaseUnit,
-                totalPrice: totalPrice,
-                
-                // Legacy compatibility
-                quantity: enteredQuantity,
-                unit: sellingUnit,
-                multiplier: multiplier,
-                price: parseFloat((totalPrice / enteredQuantity).toFixed(2)) || sellPricePerBaseUnit,
-                profit: itemProfit,
-                
-                // For history tracking
-                previousStock: previousStock,
-                newStock: product.quantity
+            const gstPricingMode = item.gstPricingMode || product.gstPricingMode || 'inclusive';
+
+            rawSubtotal += baseLineAmount;
+
+            preliminaryItems.push({
+                product,
+                enteredQuantity,
+                sellingUnit,
+                baseUnit,
+                multiplier,
+                convertedQuantityInBaseUnit,
+                sellPricePerBaseUnit,
+                unitPrice,
+                baseLineAmount,
+                isGstApplicable,
+                gstRate,
+                gstPricingMode,
+                buyPricePerBaseUnit: product.buyPrice || 0
             });
         }
 
-        // --- DISCOUNT & PARTIAL PAYMENT CALCULATION & VALIDATIONS ---
-        const subtotal = totalAmount;
-        let calculatedDiscountAmount = 0;
+        rawSubtotal = parseFloat(rawSubtotal.toFixed(2));
 
+        // --- DISCOUNT CALCULATION & VALIDATIONS ---
+        let calculatedDiscountAmount = 0;
         if (discountType === 'flat') {
-            calculatedDiscountAmount = Number(discountValue) || 0;
+            calculatedDiscountAmount = Math.min(rawSubtotal, Number(discountValue) || 0);
         } else if (discountType === 'percentage') {
             const pct = Number(discountValue) || 0;
-            calculatedDiscountAmount = parseFloat(((subtotal * pct) / 100).toFixed(2));
+            calculatedDiscountAmount = Math.min(rawSubtotal, parseFloat(((rawSubtotal * pct) / 100).toFixed(2)));
         }
 
         // Validations
         if (Number(discountValue) < 0) {
             return res.status(400).json({ success: false, message: 'Discount value cannot be negative.' });
         }
-        if (calculatedDiscountAmount > subtotal) {
+        if (calculatedDiscountAmount > rawSubtotal) {
             return res.status(400).json({ success: false, message: 'Discount cannot exceed subtotal.' });
         }
 
-        const finalAmount = parseFloat((subtotal - calculatedDiscountAmount).toFixed(2));
-        const netProfit = parseFloat((totalProfit - calculatedDiscountAmount).toFixed(2));
+        // Pass 2: Allocate discount proportionally & compute GST and line totals
+        let accumulatedItemDiscount = 0;
+        const processedItems = [];
+        let totalTaxableAmount = 0;
+        let totalGstAmount = 0;
+        let totalCgst = 0;
+        let totalSgst = 0;
+        let finalPayableAmount = 0;
+        let totalProfitAmount = 0;
 
-        let finalPaidAmount = finalAmount;
+        for (let i = 0; i < preliminaryItems.length; i++) {
+            const pItem = preliminaryItems[i];
+            const isLast = (i === preliminaryItems.length - 1);
+
+            let itemDiscount = 0;
+            if (calculatedDiscountAmount > 0 && rawSubtotal > 0) {
+                if (isLast) {
+                    itemDiscount = parseFloat((calculatedDiscountAmount - accumulatedItemDiscount).toFixed(2));
+                } else {
+                    itemDiscount = parseFloat(((pItem.baseLineAmount / rawSubtotal) * calculatedDiscountAmount).toFixed(2));
+                    accumulatedItemDiscount += itemDiscount;
+                }
+            }
+
+            let itemTaxable = 0;
+            let itemGst = 0;
+            let itemCgst = 0;
+            let itemSgst = 0;
+            let itemLineTotal = 0;
+
+            if (pItem.isGstApplicable && pItem.gstRate > 0) {
+                if (pItem.gstPricingMode === 'exclusive') {
+                    // GST Exclusive: selling price does not include GST
+                    // Taxable value = discounted base amount
+                    // GST = taxable value * (rate / 100)
+                    // Line total = taxable value + GST
+                    itemTaxable = Math.max(0, parseFloat((pItem.baseLineAmount - itemDiscount).toFixed(2)));
+                    itemGst = parseFloat((itemTaxable * (pItem.gstRate / 100)).toFixed(2));
+                    itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                    itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                    itemLineTotal = parseFloat((itemTaxable + itemGst).toFixed(2));
+                } else {
+                    // GST Inclusive: selling price already includes GST
+                    // Gross line total = discounted base amount
+                    // Taxable value = gross line total / (1 + rate / 100)
+                    // GST = gross line total - taxable value
+                    const netGross = Math.max(0, parseFloat((pItem.baseLineAmount - itemDiscount).toFixed(2)));
+                    itemTaxable = parseFloat((netGross / (1 + (pItem.gstRate / 100))).toFixed(2));
+                    itemGst = parseFloat((netGross - itemTaxable).toFixed(2));
+                    itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                    itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                    itemLineTotal = netGross;
+                }
+            } else {
+                // GST Disabled or 0%
+                itemTaxable = Math.max(0, parseFloat((pItem.baseLineAmount - itemDiscount).toFixed(2)));
+                itemGst = 0;
+                itemCgst = 0;
+                itemSgst = 0;
+                itemLineTotal = itemTaxable;
+            }
+
+            const costOfGoods = pItem.convertedQuantityInBaseUnit * pItem.buyPricePerBaseUnit;
+            const itemProfit = parseFloat((itemTaxable - costOfGoods).toFixed(2));
+
+            totalTaxableAmount += itemTaxable;
+            totalGstAmount += itemGst;
+            totalCgst += itemCgst;
+            totalSgst += itemSgst;
+            finalPayableAmount += itemLineTotal;
+            totalProfitAmount += itemProfit;
+
+            // Deduct stock safely
+            const product = pItem.product;
+            const previousStock = product.quantity;
+            product.quantity = Math.max(0, parseFloat((product.quantity - pItem.convertedQuantityInBaseUnit).toFixed(3)));
+            await product.save();
+
+            processedItems.push({
+                product: product._id,
+                productName: product.name,
+                soldQtyEntered: pItem.enteredQuantity,
+                soldUnit: pItem.sellingUnit,
+                soldQtyBaseUnit: pItem.convertedQuantityInBaseUnit,
+                pricePerBaseUnit: pItem.sellPricePerBaseUnit,
+                totalPrice: itemLineTotal,
+
+                // Legacy compatibility fields
+                quantity: pItem.enteredQuantity,
+                unit: pItem.sellingUnit,
+                multiplier: pItem.multiplier,
+                price: parseFloat((itemLineTotal / pItem.enteredQuantity).toFixed(2)) || pItem.sellPricePerBaseUnit,
+                profit: itemProfit,
+
+                // Tax snapshot
+                isGstApplicable: pItem.isGstApplicable,
+                gstRate: pItem.gstRate,
+                gstPricingMode: pItem.gstPricingMode,
+                taxableValue: itemTaxable,
+                gstAmount: itemGst,
+                cgst: itemCgst,
+                sgst: itemSgst,
+                igst: 0,
+                lineTotal: itemLineTotal,
+
+                // For history tracking
+                previousStock: previousStock,
+                newStock: product.quantity
+            });
+        }
+
+        totalTaxableAmount = parseFloat(totalTaxableAmount.toFixed(2));
+        totalGstAmount = parseFloat(totalGstAmount.toFixed(2));
+        totalCgst = parseFloat(totalCgst.toFixed(2));
+        totalSgst = parseFloat(totalSgst.toFixed(2));
+        finalPayableAmount = parseFloat(finalPayableAmount.toFixed(2));
+        totalProfitAmount = parseFloat(totalProfitAmount.toFixed(2));
+
+        let finalPaidAmount = finalPayableAmount;
         let finalRemainingAmount = 0;
         let finalPaymentStatus = 'Paid';
 
@@ -186,11 +453,11 @@ exports.createSale = async (req, res) => {
             if (paidAmountVal < 0) {
                 return res.status(400).json({ success: false, message: 'Paid amount cannot be negative.' });
             }
-            if (paidAmountVal > finalAmount + 0.01) {
+            if (paidAmountVal > finalPayableAmount + 0.01) {
                 return res.status(400).json({ success: false, message: 'Paid amount cannot exceed final amount.' });
             }
             finalPaidAmount = paidAmountVal;
-            finalRemainingAmount = parseFloat((finalAmount - paidAmountVal).toFixed(2));
+            finalRemainingAmount = parseFloat((finalPayableAmount - paidAmountVal).toFixed(2));
             
             if (finalRemainingAmount === 0) {
                 finalPaymentStatus = 'Paid';
@@ -219,8 +486,15 @@ exports.createSale = async (req, res) => {
             customerName: customerName || 'Walk-in Customer',
             customerMobile: customerMobile || '',
             items: processedItems,
-            totalAmount: finalAmount,
-            totalProfit: netProfit,
+            subtotal: rawSubtotal,
+            taxableAmount: totalTaxableAmount,
+            totalGst: totalGstAmount,
+            cgstTotal: totalCgst,
+            sgstTotal: totalSgst,
+            igstTotal: 0,
+            isGstInvoice: totalGstAmount > 0,
+            totalAmount: finalPayableAmount,
+            totalProfit: totalProfitAmount,
             discountType: discountType || 'none',
             discountValue: Number(discountValue) || 0,
             discountAmount: calculatedDiscountAmount,
@@ -230,7 +504,7 @@ exports.createSale = async (req, res) => {
             paymentStatus: finalPaymentStatus,
             paymentMethod,
             date: date || new Date(),
-            owner: ownerId
+            owner: shopRecord?.owner || ownerId
         });
 
         // --- Log Inventory History for Normal Sale ---
@@ -309,65 +583,157 @@ exports.createSale = async (req, res) => {
         }
 
         // --- AUTO-GENERATE GOVERNMENT RECORD ---
-        let totalGovernmentAmount = 0;
-        const govItems = [];
+        if (shopRecord && shopRecord.type === 'Fertilizers') {
+            let totalGovernmentAmount = 0;
+            let totalGovTaxableAmount = 0;
+            let totalGovGstAmount = 0;
+            let totalGovCgst = 0;
+            let totalGovSgst = 0;
+            const govItems = [];
 
-        for (const item of items) {
-            const product = await Product.findById(item.product);
-            if (!product) continue;
+            for (const item of items) {
+                const product = await Product.findById(item.product);
+                if (!product) continue;
 
-            if (product.category === 'Fertilizers' && product.governmentPrice && product.governmentPrice > 0) {
-                const enteredQuantity = item.quantity;
-                const sellingUnit = item.unit || product.unit;
-                const baseUnit = product.unit;
+                if (product.governmentPrice !== undefined && product.governmentPrice !== null && Number(product.governmentPrice) > 0) {
+                    const enteredQuantity = item.quantity;
+                    const sellingUnit = item.unit || product.unit;
+                    const baseUnit = product.unit;
 
-                const multiplier = getConversionMultiplier(sellingUnit, baseUnit);
-                if (multiplier === undefined) continue;
+                    const multiplier = getConversionMultiplier(sellingUnit, baseUnit);
+                    if (multiplier === undefined) continue;
 
-                const convertedQuantityInBaseUnit = enteredQuantity * multiplier;
-                const govPricePerBaseUnit = product.governmentPrice;
-                const totalItemGovAmount = parseFloat((convertedQuantityInBaseUnit * govPricePerBaseUnit).toFixed(2));
+                    const convertedQuantityInBaseUnit = enteredQuantity * multiplier;
+                    const govPricePerBaseUnit = Number(product.governmentPrice);
+                    const rawLineBase = parseFloat((convertedQuantityInBaseUnit * govPricePerBaseUnit).toFixed(2));
 
-                totalGovernmentAmount += totalItemGovAmount;
+                    let isGstApplicable = false;
+                    if (product.isGstApplicable !== undefined) {
+                        isGstApplicable = Boolean(product.isGstApplicable);
+                    } else {
+                        isGstApplicable = (product.gstRate || product.gst || 0) > 0;
+                    }
 
-                govItems.push({
-                    product: product._id,
-                    productName: product.name,
-                    soldQtyEntered: enteredQuantity,
-                    soldUnit: sellingUnit,
-                    soldQtyBaseUnit: convertedQuantityInBaseUnit,
-                    pricePerBaseUnit: govPricePerBaseUnit,
-                    totalPrice: totalItemGovAmount,
-                    governmentPrice: govPricePerBaseUnit
+                    let gstRate = 0;
+                    if (product.gstRate !== undefined) {
+                        gstRate = Number(product.gstRate) || 0;
+                    } else {
+                        gstRate = Number(product.gst || 0);
+                    }
+                    if (!isGstApplicable) gstRate = 0;
+
+                    const gstPricingMode = product.gstPricingMode || 'inclusive';
+
+                    let itemTaxable = 0;
+                    let itemGst = 0;
+                    let itemCgst = 0;
+                    let itemSgst = 0;
+                    let itemLineTotal = 0;
+
+                    if (isGstApplicable && gstRate > 0) {
+                        if (gstPricingMode === 'exclusive') {
+                            itemTaxable = rawLineBase;
+                            itemGst = parseFloat((itemTaxable * (gstRate / 100)).toFixed(2));
+                            itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                            itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                            itemLineTotal = parseFloat((itemTaxable + itemGst).toFixed(2));
+                        } else {
+                            itemTaxable = parseFloat((rawLineBase / (1 + (gstRate / 100))).toFixed(2));
+                            itemGst = parseFloat((rawLineBase - itemTaxable).toFixed(2));
+                            itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                            itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                            itemLineTotal = rawLineBase;
+                        }
+                    } else {
+                        itemTaxable = rawLineBase;
+                        itemGst = 0;
+                        itemCgst = 0;
+                        itemSgst = 0;
+                        itemLineTotal = rawLineBase;
+                    }
+
+                    totalGovTaxableAmount += itemTaxable;
+                    totalGovGstAmount += itemGst;
+                    totalGovCgst += itemCgst;
+                    totalGovSgst += itemSgst;
+                    totalGovernmentAmount += itemLineTotal;
+
+                    govItems.push({
+                        product: product._id,
+                        productName: product.name,
+                        soldQtyEntered: enteredQuantity,
+                        soldUnit: sellingUnit,
+                        soldQtyBaseUnit: convertedQuantityInBaseUnit,
+                        pricePerBaseUnit: govPricePerBaseUnit,
+                        governmentPrice: govPricePerBaseUnit,
+                        totalPrice: itemLineTotal,
+                        returnedQty: 0,
+                        remainingQty: enteredQuantity,
+                        isGstApplicable,
+                        gstRate,
+                        gstPricingMode,
+                        taxableValue: itemTaxable,
+                        gstAmount: itemGst,
+                        cgst: itemCgst,
+                        sgst: itemSgst,
+                        igst: 0,
+                        lineTotal: itemLineTotal
+                    });
+                }
+            }
+
+            if (govItems.length > 0) {
+                let govInvoiceNumber = `GOV-${Math.floor(100000 + Math.random() * 900000)}`;
+                if (shopRecord) {
+                    const prefix = (shopRecord.invoicePrefix || 'LK') + 'G'; // 'LKG' for Gov
+                    const counter = shopRecord.govInvoiceCounter || 1000;
+                    govInvoiceNumber = `${prefix}-${counter}`;
+                    shopRecord.govInvoiceCounter = counter + 1;
+                    await shopRecord.save();
+                }
+
+                const subtotalCalculated = parseFloat(govItems.reduce((s, it) => s + (it.soldQtyEntered * it.governmentPrice), 0).toFixed(2));
+                totalGovTaxableAmount = parseFloat(totalGovTaxableAmount.toFixed(2));
+                totalGovGstAmount = parseFloat(totalGovGstAmount.toFixed(2));
+                totalGovCgst = parseFloat(totalGovCgst.toFixed(2));
+                totalGovSgst = parseFloat(totalGovSgst.toFixed(2));
+                totalGovernmentAmount = parseFloat(totalGovernmentAmount.toFixed(2));
+
+                let govPaidAmount = totalGovernmentAmount;
+                let govRemainingAmount = 0;
+                let govPaymentStatus = 'Paid';
+
+                if (paymentMethod === 'Khata') {
+                    const paid = Number(paidAmount) || 0;
+                    govPaidAmount = Math.min(totalGovernmentAmount, paid);
+                    govRemainingAmount = parseFloat(Math.max(0, totalGovernmentAmount - govPaidAmount).toFixed(2));
+                    govPaymentStatus = req.body.paymentStatus || (govRemainingAmount === 0 ? 'Paid' : (govPaidAmount > 0 ? 'Partial' : 'Unpaid'));
+                }
+
+                await GovernmentSale.create({
+                    shop,
+                    linkedSaleId: sale._id,
+                    invoiceNumber: govInvoiceNumber,
+                    customerName: customerName || 'Walk-in Customer',
+                    customerMobile: customerMobile || '',
+                    items: govItems,
+                    subtotal: subtotalCalculated,
+                    taxableAmount: totalGovTaxableAmount,
+                    totalGst: totalGovGstAmount,
+                    cgstTotal: totalGovCgst,
+                    sgstTotal: totalGovSgst,
+                    igstTotal: 0,
+                    isGstInvoice: totalGovGstAmount > 0,
+                    totalAmount: totalGovernmentAmount,
+                    paymentMethod,
+                    paidAmount: govPaidAmount,
+                    remainingAmount: govRemainingAmount,
+                    paymentStatus: govPaymentStatus,
+                    date: date || new Date(),
+                    owner: ownerId,
+                    isInspectionCopy: true
                 });
             }
-        }
-
-        if (govItems.length > 0) {
-            let govInvoiceNumber = `GOV-${Math.floor(100000 + Math.random() * 900000)}`;
-            if (shopRecord) {
-                const prefix = (shopRecord.invoicePrefix || 'LK') + 'G'; // 'LKG' for Gov
-                const counter = shopRecord.govInvoiceCounter || 1000;
-                govInvoiceNumber = `${prefix}-${counter}`;
-                shopRecord.govInvoiceCounter = counter + 1;
-                await shopRecord.save();
-            }
-
-            await GovernmentSale.create({
-                shop,
-                linkedSaleId: sale._id,
-                invoiceNumber: govInvoiceNumber,
-                customerName: customerName || 'Walk-in Customer',
-                customerMobile: customerMobile || '',
-                items: govItems,
-                totalAmount: totalGovernmentAmount,
-                paymentMethod,
-                date: date || new Date(),
-                owner: ownerId,
-                isInspectionCopy: true
-            });
-
-
         }
         // --- END AUTO-GENERATE GOVERNMENT RECORD ---
 
@@ -384,21 +750,23 @@ exports.getStats = async (req, res) => {
     try {
         const ownerId = req.user._id;
         const { shop: shopId } = req.query;
-        let match = { owner: ownerId };
+        let match = {};
 
         if (shopId) {
             match.shop = new mongoose.Types.ObjectId(shopId);
+        } else {
+            match.owner = new mongoose.Types.ObjectId(ownerId);
         }
 
         // Today's range
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         
         const todayMatch = { ...match, date: { $gte: startOfToday, $lte: endOfToday } };
 
-        // Query sales, returns, and exchanges for today
-        const [salesToday, returnsToday, exchangesToday] = await Promise.all([
+        // Query sales, returns, exchanges, and unlinked government sales for today
+        const [salesToday, returnsToday, exchangesToday, govSalesToday] = await Promise.all([
             Sale.aggregate([
                 { $match: todayMatch },
                 { $group: { _id: null, total: { $sum: '$totalAmount' }, profit: { $sum: '$totalProfit' } } }
@@ -410,15 +778,21 @@ exports.getStats = async (req, res) => {
             ExchangeRecord.aggregate([
                 { $match: todayMatch },
                 { $group: { _id: null, total: { $sum: '$balanceDifference' }, profit: { $sum: '$totalProfit' } } }
+            ]),
+            GovernmentSale.aggregate([
+                { $match: { ...todayMatch, linkedSaleId: null } },
+                { $group: { _id: null, total: { $sum: '$totalAmount' } } }
             ])
         ]);
 
-        const netSalesToday = (salesToday[0]?.total || 0) - (returnsToday[0]?.total || 0) + (exchangesToday[0]?.total || 0);
+        const netSalesToday = (salesToday[0]?.total || 0) - (returnsToday[0]?.total || 0) + (exchangesToday[0]?.total || 0) + (govSalesToday[0]?.total || 0);
         const netProfitToday = (salesToday[0]?.profit || 0) + (returnsToday[0]?.profit || 0) + (exchangesToday[0]?.profit || 0);
-        const totalOrders = await Sale.countDocuments(todayMatch);
+        const totalSaleOrders = await Sale.countDocuments(todayMatch);
+        const totalGovOrders = await GovernmentSale.countDocuments({ ...todayMatch, linkedSaleId: null });
+        const totalOrders = totalSaleOrders + totalGovOrders;
 
-        // Payment Breakdown for Today (adjusting for returns and exchanges)
-        const [salesPaymentBreakdown, returnsPaymentBreakdown, exchangesPaymentBreakdown] = await Promise.all([
+        // Payment Breakdown for Today (adjusting for returns, exchanges, and government sales)
+        const [salesPaymentBreakdown, returnsPaymentBreakdown, exchangesPaymentBreakdown, govPaymentBreakdown] = await Promise.all([
             Sale.aggregate([
                 { $match: todayMatch },
                 { $group: { _id: '$paymentMethod', amount: { $sum: '$totalAmount' } } }
@@ -430,6 +804,10 @@ exports.getStats = async (req, res) => {
             ExchangeRecord.aggregate([
                 { $match: todayMatch },
                 { $group: { _id: '$paymentMethod', amount: { $sum: '$balanceDifference' } } }
+            ]),
+            GovernmentSale.aggregate([
+                { $match: { ...todayMatch, linkedSaleId: null } },
+                { $group: { _id: '$paymentMethod', amount: { $sum: '$totalAmount' } } }
             ])
         ]);
 
@@ -453,6 +831,11 @@ exports.getStats = async (req, res) => {
         exchangesPaymentBreakdown.forEach(item => {
             if (breakdown.hasOwnProperty(item._id)) {
                 breakdown[item._id] += item.amount; // Exchange difference increases/decreases total
+            }
+        });
+        govPaymentBreakdown.forEach(item => {
+            if (breakdown.hasOwnProperty(item._id)) {
+                breakdown[item._id] += item.amount;
             }
         });
 
@@ -516,6 +899,21 @@ exports.getStats = async (req, res) => {
             }
         ]);
 
+        // Expiry alerts calculation for pendingMetrics
+        const candidateExpiryProducts = await Product.find({
+            ...match,
+            $or: [
+                { expiryDate: { $exists: true, $ne: null } },
+                { 'batches.0': { $exists: true } }
+            ]
+        }).select('name category brand sku barcode quantity unit expiryDate batchNumber batches shop');
+
+        const expiryResult = processExpiryAlerts(candidateExpiryProducts, {
+            maxDays: 45,
+            baseDate: new Date(),
+            shopId: shopId || null
+        });
+
         res.status(200).json({
             success: true,
             data: {
@@ -528,8 +926,10 @@ exports.getStats = async (req, res) => {
                 pendingMetrics: {
                     supplierDues: supplierDues[0]?.total || 0,
                     customerCredits: customerCredits[0]?.total || 0,
-                    lowStockCount
+                    lowStockCount,
+                    expiryAlerts: expiryResult.summary
                 },
+                expiryAlerts: expiryResult.summary,
                 recentSales,
                 lowStockCount
             }
@@ -1058,8 +1458,8 @@ exports.getSaleById = async (req, res) => {
         }
 
         // Try Sale first
-        let transaction = await Sale.findOne({ _id: id, owner: req.user.id })
-            .populate('shop', 'name')
+        let transaction = await Sale.findById(id)
+            .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
             .lean();
             
         if (transaction) {
@@ -1077,8 +1477,10 @@ exports.getSaleById = async (req, res) => {
                 totalRefundAmount += ret.totalRefundAmount;
                 totalReturnsProfitImpact += (ret.totalProfit || 0);
                 ret.items.forEach(item => {
-                    const prodId = item.product.toString();
-                    returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                    const prodId = item.product ? item.product.toString() : '';
+                    if (prodId) {
+                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                    }
                 });
             });
 
@@ -1091,30 +1493,37 @@ exports.getSaleById = async (req, res) => {
                 totalExchangeProfitImpact += (exc.totalProfit || 0);
                 totalExchangesDiff += exc.balanceDifference;
                 exc.returnedItems.forEach(item => {
-                    const prodId = item.product.toString();
-                    returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                    const prodId = item.product ? item.product.toString() : '';
+                    if (prodId) {
+                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                    }
                 });
             });
 
             // Populate returnedQty and remainingQty per item
-            transaction.items = transaction.items.map(item => {
-                const prodId = item.product.toString();
+            transaction.items = (transaction.items || []).map(item => {
+                const prodId = item.product ? item.product.toString() : '';
                 const returnedBase = returnedQtyMap[prodId] || 0;
                 const multiplier = item.multiplier || 1;
                 const returnedQty = parseFloat((returnedBase / multiplier).toFixed(3));
-                const remainingQty = parseFloat((item.soldQtyEntered - returnedQty).toFixed(3));
+                const enteredQty = item.soldQtyEntered !== undefined && item.soldQtyEntered !== null && !isNaN(item.soldQtyEntered)
+                    ? Number(item.soldQtyEntered)
+                    : Number(item.quantity || 0);
+                const safeReturnedQty = isNaN(returnedQty) ? 0 : returnedQty;
+                const remainingQty = parseFloat((enteredQty - safeReturnedQty).toFixed(3));
 
                 return {
                     ...item,
-                    returnedQty,
+                    soldQtyEntered: enteredQty,
+                    returnedQty: safeReturnedQty,
                     exchangedQty: 0,
-                    remainingQty: Math.max(0, remainingQty)
+                    remainingQty: isNaN(remainingQty) ? enteredQty : Math.max(0, remainingQty)
                 };
             });
 
             // Dynamic financial summary
-            const originalSaleAmount = transaction.totalAmount;
-            const originalProfit = transaction.totalProfit;
+            const originalSaleAmount = transaction.totalAmount || 0;
+            const originalProfit = transaction.totalProfit || 0;
             const returnedAmount = totalRefundAmount + totalExchangeReturnedValue;
             const netSaleAmount = originalSaleAmount - totalRefundAmount + totalExchangesDiff;
             const netProfitAmount = originalProfit + totalReturnsProfitImpact + totalExchangeProfitImpact;
@@ -1130,8 +1539,8 @@ exports.getSaleById = async (req, res) => {
         }
 
         // Try ReturnRecord next
-        transaction = await ReturnRecord.findOne({ _id: id, owner: req.user.id })
-            .populate('shop', 'name')
+        transaction = await ReturnRecord.findById(id)
+            .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
             .lean();
             
         if (transaction) {
@@ -1157,30 +1566,38 @@ exports.getSaleById = async (req, res) => {
                 const returnedQtyMap = {};
                 prevReturns.forEach(ret => {
                     ret.items.forEach(item => {
-                        const prodId = item.product.toString();
-                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        const prodId = item.product ? item.product.toString() : '';
+                        if (prodId) {
+                            returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        }
                     });
                 });
                 prevExchanges.forEach(exc => {
                     exc.returnedItems.forEach(item => {
-                        const prodId = item.product.toString();
-                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        const prodId = item.product ? item.product.toString() : '';
+                        if (prodId) {
+                            returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        }
                     });
                 });
 
-                transaction.remainingActiveItems = origSale.items.map(item => {
-                    const prodId = item.product.toString();
+                transaction.remainingActiveItems = (origSale.items || []).map(item => {
+                    const prodId = item.product ? item.product.toString() : '';
                     const returnedBase = returnedQtyMap[prodId] || 0;
                     const multiplier = item.multiplier || 1;
                     const returnedQty = parseFloat((returnedBase / multiplier).toFixed(3));
-                    const remainingQty = parseFloat((item.soldQtyEntered - returnedQty).toFixed(3));
+                    const enteredQty = item.soldQtyEntered !== undefined && item.soldQtyEntered !== null && !isNaN(item.soldQtyEntered)
+                        ? Number(item.soldQtyEntered)
+                        : Number(item.quantity || 0);
+                    const safeReturnedQty = isNaN(returnedQty) ? 0 : returnedQty;
+                    const remainingQty = parseFloat((enteredQty - safeReturnedQty).toFixed(3));
 
                     return {
                         productName: item.productName,
-                        quantity: Math.max(0, remainingQty),
+                        quantity: isNaN(remainingQty) ? enteredQty : Math.max(0, remainingQty),
                         unit: item.soldUnit || item.unit,
                         price: item.pricePerBaseUnit || item.price,
-                        totalPrice: Math.max(0, remainingQty) * (item.pricePerBaseUnit || item.price)
+                        totalPrice: (isNaN(remainingQty) ? enteredQty : Math.max(0, remainingQty)) * (item.pricePerBaseUnit || item.price)
                     };
                 }).filter(item => item.quantity > 0);
             }
@@ -1189,8 +1606,8 @@ exports.getSaleById = async (req, res) => {
         }
 
         // Try ExchangeRecord
-        transaction = await ExchangeRecord.findOne({ _id: id, owner: req.user.id })
-            .populate('shop', 'name')
+        transaction = await ExchangeRecord.findById(id)
+            .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
             .lean();
             
         if (transaction) {
@@ -1231,34 +1648,71 @@ exports.getSaleById = async (req, res) => {
                 const returnedQtyMap = {};
                 prevReturns.forEach(ret => {
                     ret.items.forEach(item => {
-                        const prodId = item.product.toString();
-                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        const prodId = item.product ? item.product.toString() : '';
+                        if (prodId) {
+                            returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        }
                     });
                 });
                 prevExchanges.forEach(exc => {
                     exc.returnedItems.forEach(item => {
-                        const prodId = item.product.toString();
-                        returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        const prodId = item.product ? item.product.toString() : '';
+                        if (prodId) {
+                            returnedQtyMap[prodId] = (returnedQtyMap[prodId] || 0) + item.quantity;
+                        }
                     });
                 });
 
-                transaction.remainingActiveItems = origSale.items.map(item => {
-                    const prodId = item.product.toString();
+                transaction.remainingActiveItems = (origSale.items || []).map(item => {
+                    const prodId = item.product ? item.product.toString() : '';
                     const returnedBase = returnedQtyMap[prodId] || 0;
                     const multiplier = item.multiplier || 1;
                     const returnedQty = parseFloat((returnedBase / multiplier).toFixed(3));
-                    const remainingQty = parseFloat((item.soldQtyEntered - returnedQty).toFixed(3));
+                    const enteredQty = item.soldQtyEntered !== undefined && item.soldQtyEntered !== null && !isNaN(item.soldQtyEntered)
+                        ? Number(item.soldQtyEntered)
+                        : Number(item.quantity || 0);
+                    const safeReturnedQty = isNaN(returnedQty) ? 0 : returnedQty;
+                    const remainingQty = parseFloat((enteredQty - safeReturnedQty).toFixed(3));
 
                     return {
                         productName: item.productName,
-                        quantity: Math.max(0, remainingQty),
+                        quantity: isNaN(remainingQty) ? enteredQty : Math.max(0, remainingQty),
                         unit: item.soldUnit || item.unit,
                         price: item.pricePerBaseUnit || item.price,
-                        totalPrice: Math.max(0, remainingQty) * (item.pricePerBaseUnit || item.price)
+                        totalPrice: (isNaN(remainingQty) ? enteredQty : Math.max(0, remainingQty)) * (item.pricePerBaseUnit || item.price)
                     };
                 }).filter(item => item.quantity > 0);
             }
 
+            return res.status(200).json({ success: true, data: transaction });
+        }
+
+        // Try GovernmentSale
+        transaction = await GovernmentSale.findById(id)
+            .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
+            .lean();
+
+        if (transaction) {
+            transaction.type = 'GOV_SALE';
+            let khataCustomerMap = null;
+            if (transaction.customerMobile || transaction.customerName) {
+                const khata = await Khata.findOne({
+                    shop: transaction.shop?._id || transaction.shop,
+                    $or: [
+                        { mobile: transaction.customerMobile || '' },
+                        { customerName: transaction.customerName || '' }
+                    ]
+                }).lean();
+                if (khata) {
+                    khataCustomerMap = new Map();
+                    if (khata.mobile) khataCustomerMap.set(khata.mobile.trim(), khata);
+                    if (khata.customerName) khataCustomerMap.set(khata.customerName.toLowerCase().trim(), khata);
+                }
+            }
+            const payInfo = resolvePaymentInfo(transaction, khataCustomerMap);
+            transaction.paidAmount = payInfo.paidAmount;
+            transaction.remainingAmount = payInfo.remainingAmount;
+            transaction.paymentStatus = payInfo.paymentStatus;
             return res.status(200).json({ success: true, data: transaction });
         }
 
@@ -1268,6 +1722,7 @@ exports.getSaleById = async (req, res) => {
         res.status(500).json({ success: false, message: 'Internal server error while fetching sale details' });
     }
 };
+
 
 // @desc    Process a sale return (Partial/Full)
 // @route   POST /api/sales/:id/return
@@ -1422,6 +1877,10 @@ exports.processReturn = async (req, res) => {
         const govSale = await GovernmentSale.findOne({ linkedSaleId: saleId });
         if (govSale) {
             let updatedGovTotal = 0;
+            let updatedGovTaxable = 0;
+            let updatedGovGst = 0;
+            let updatedGovCgst = 0;
+            let updatedGovSgst = 0;
             const updatedGovItems = [];
 
             for (const govItem of govSale.items) {
@@ -1433,16 +1892,50 @@ exports.processReturn = async (req, res) => {
                     
                     itemObj.returnedQty = parseFloat(((govItem.returnedQty || 0) + returnedEntered).toFixed(3));
                     itemObj.remainingQty = Math.max(0, parseFloat((govItem.soldQtyEntered - itemObj.returnedQty).toFixed(3)));
-                    itemObj.totalPrice = parseFloat((itemObj.remainingQty * multiplier * govItem.governmentPrice).toFixed(2));
+                    
+                    // Recalculate tax and total for remaining quantity
+                    const rawLineBase = parseFloat((itemObj.remainingQty * multiplier * govItem.governmentPrice).toFixed(2));
+                    const isTax = Boolean(itemObj.isGstApplicable && itemObj.gstRate > 0);
+                    if (isTax) {
+                        if (itemObj.gstPricingMode === 'exclusive') {
+                            itemObj.taxableValue = rawLineBase;
+                            itemObj.gstAmount = parseFloat((rawLineBase * (itemObj.gstRate / 100)).toFixed(2));
+                            itemObj.cgst = parseFloat((itemObj.gstAmount / 2).toFixed(2));
+                            itemObj.sgst = parseFloat((itemObj.gstAmount - itemObj.cgst).toFixed(2));
+                            itemObj.lineTotal = parseFloat((itemObj.taxableValue + itemObj.gstAmount).toFixed(2));
+                        } else {
+                            itemObj.taxableValue = parseFloat((rawLineBase / (1 + (itemObj.gstRate / 100))).toFixed(2));
+                            itemObj.gstAmount = parseFloat((rawLineBase - itemObj.taxableValue).toFixed(2));
+                            itemObj.cgst = parseFloat((itemObj.gstAmount / 2).toFixed(2));
+                            itemObj.sgst = parseFloat((itemObj.gstAmount - itemObj.cgst).toFixed(2));
+                            itemObj.lineTotal = rawLineBase;
+                        }
+                    } else {
+                        itemObj.taxableValue = rawLineBase;
+                        itemObj.gstAmount = 0;
+                        itemObj.cgst = 0;
+                        itemObj.sgst = 0;
+                        itemObj.lineTotal = rawLineBase;
+                    }
+                    itemObj.totalPrice = itemObj.lineTotal;
                 } else {
                     itemObj.returnedQty = govItem.returnedQty || 0;
                     itemObj.remainingQty = govItem.remainingQty !== undefined ? govItem.remainingQty : govItem.soldQtyEntered;
                 }
                 updatedGovItems.push(itemObj);
-                updatedGovTotal += itemObj.totalPrice;
+                updatedGovTaxable += (itemObj.taxableValue || 0);
+                updatedGovGst += (itemObj.gstAmount || 0);
+                updatedGovCgst += (itemObj.cgst || 0);
+                updatedGovSgst += (itemObj.sgst || 0);
+                updatedGovTotal += (itemObj.totalPrice || itemObj.lineTotal || 0);
             }
 
             govSale.items = updatedGovItems;
+            govSale.taxableAmount = parseFloat(updatedGovTaxable.toFixed(2));
+            govSale.totalGst = parseFloat(updatedGovGst.toFixed(2));
+            govSale.cgstTotal = parseFloat(updatedGovCgst.toFixed(2));
+            govSale.sgstTotal = parseFloat(updatedGovSgst.toFixed(2));
+            govSale.isGstInvoice = updatedGovGst > 0;
             govSale.totalAmount = parseFloat(updatedGovTotal.toFixed(2));
             await govSale.save();
         }
@@ -1719,11 +2212,11 @@ exports.processExchange = async (req, res) => {
                 updatedGovTotal += itemObj.totalPrice;
             }
 
-            // Add replacement fertilizer items as new entries (keeping audit trail clear)
+            // Add replacement items with valid government price as new entries (keeping audit trail clear)
             for (const repItem of processedReplacementItems) {
                 const product = await Product.findById(repItem.product);
-                if (product && product.category === 'Fertilizers' && product.governmentPrice > 0) {
-                    const govPrice = product.governmentPrice;
+                if (product && product.governmentPrice !== undefined && product.governmentPrice !== null && Number(product.governmentPrice) > 0) {
+                    const govPrice = Number(product.governmentPrice);
                     const itemTotal = parseFloat((repItem.quantity * govPrice).toFixed(2));
 
                     updatedGovItems.push({

@@ -79,17 +79,36 @@ export const offlineDB = {
     }
   },
 
+  // --- HELPER TO NORMALIZE OBJECT/STRING SHOP ID ---
+  _normalizeItem(item) {
+    if (!item || typeof item !== 'object') return item;
+    const clone = { ...item };
+    if (clone.shop && typeof clone.shop === 'object' && clone.shop._id) {
+      clone.shopDetails = clone.shop;
+      clone.shop = clone.shop._id.toString();
+    } else if (clone.shop) {
+      clone.shop = clone.shop.toString();
+    }
+    if (!clone.updatedAt) {
+      clone.updatedAt = clone.date || clone.createdAt || new Date().toISOString();
+    }
+    return clone;
+  },
+
   // --- PRODUCTS ---
   async saveProductsBulk(products) {
     try {
-      await db.products.bulkPut(products);
+      if (!Array.isArray(products)) return;
+      const normalized = products.filter(Boolean).map(p => this._normalizeItem(p));
+      await db.products.bulkPut(normalized);
     } catch (e) {
       console.error('Dexie saveProductsBulk error:', e);
     }
   },
   async saveProduct(product) {
     try {
-      await db.products.put(product);
+      if (!product) return;
+      await db.products.put(this._normalizeItem(product));
     } catch (e) {
       console.error('Dexie saveProduct error:', e);
     }
@@ -103,10 +122,12 @@ export const offlineDB = {
   },
   async getProducts(shopId) {
     try {
-      if (shopId) {
-        return await db.products.where('shop').equals(shopId).toArray();
-      }
-      return await db.products.toArray();
+      const all = await db.products.toArray();
+      if (!shopId) return all;
+      return all.filter(p => {
+        const pShop = (p.shop && typeof p.shop === 'object') ? p.shop._id?.toString() : String(p.shop || '');
+        return pShop === String(shopId);
+      });
     } catch (e) {
       console.error('Dexie getProducts error:', e);
       return [];
@@ -124,24 +145,29 @@ export const offlineDB = {
   // --- SALES ---
   async saveSalesBulk(sales) {
     try {
-      await db.sales.bulkPut(sales);
+      if (!Array.isArray(sales)) return;
+      const normalized = sales.filter(Boolean).map(s => this._normalizeItem(s));
+      await db.sales.bulkPut(normalized);
     } catch (e) {
       console.error('Dexie saveSalesBulk error:', e);
     }
   },
   async saveSale(sale) {
     try {
-      await db.sales.put(sale);
+      if (!sale) return;
+      await db.sales.put(this._normalizeItem(sale));
     } catch (e) {
       console.error('Dexie saveSale error:', e);
     }
   },
   async getSales(shopId) {
     try {
-      if (shopId) {
-        return await db.sales.where('shop').equals(shopId).toArray();
-      }
-      return await db.sales.toArray();
+      const allSales = await db.sales.toArray();
+      if (!shopId) return allSales;
+      return allSales.filter(s => {
+        const sShop = (s.shop && typeof s.shop === 'object') ? s.shop._id?.toString() : String(s.shop || '');
+        return sShop === String(shopId);
+      });
     } catch (e) {
       console.error('Dexie getSales error:', e);
       return [];
@@ -205,24 +231,29 @@ export const offlineDB = {
   // --- GOVERNMENT SALES ---
   async saveGovSalesBulk(govSales) {
     try {
-      await db.governmentSales.bulkPut(govSales);
+      if (!Array.isArray(govSales)) return;
+      const normalized = govSales.filter(Boolean).map(s => this._normalizeItem(s));
+      await db.governmentSales.bulkPut(normalized);
     } catch (e) {
       console.error('Dexie saveGovSalesBulk error:', e);
     }
   },
   async saveGovSale(govSale) {
     try {
-      await db.governmentSales.put(govSale);
+      if (!govSale) return;
+      await db.governmentSales.put(this._normalizeItem(govSale));
     } catch (e) {
       console.error('Dexie saveGovSale error:', e);
     }
   },
   async getGovSales(shopId) {
     try {
-      if (shopId) {
-        return await db.governmentSales.where('shop').equals(shopId).toArray();
-      }
-      return await db.governmentSales.toArray();
+      const allGovSales = await db.governmentSales.toArray();
+      if (!shopId) return allGovSales;
+      return allGovSales.filter(s => {
+        const sShop = (s.shop && typeof s.shop === 'object') ? s.shop._id?.toString() : String(s.shop || '');
+        return sShop === String(shopId);
+      });
     } catch (e) {
       console.error('Dexie getGovSales error:', e);
       return [];

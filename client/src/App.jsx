@@ -103,7 +103,7 @@ function App() {
                       <Route path="/shop/:shopId/purchase-ledger/:purchaseId" element={<PurchaseDetailsPage />} />
                       <Route path="/shop/:shopId/suppliers/:supplierName" element={<SupplierLedgerPage />} />
                       
-                      {/* Government Records Routes */}
+                      {/* GST Records Routes */}
                       <Route path="/shop/:shopId/gov-sales-log" element={<GovSalesLogPage />} />
                       <Route path="/shop/:shopId/gov-reports" element={<GovReportsPage />} />
                       

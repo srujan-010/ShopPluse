@@ -29,8 +29,71 @@ const saleSchema = new mongoose.Schema({
         unit: String,
         multiplier: Number,
         price: Number,
-        profit: Number
+        profit: Number,
+        // Tax snapshot fields
+        isGstApplicable: {
+            type: Boolean,
+            default: false
+        },
+        gstRate: {
+            type: Number,
+            default: 0
+        },
+        gstPricingMode: {
+            type: String,
+            enum: ['inclusive', 'exclusive'],
+            default: 'inclusive'
+        },
+        taxableValue: {
+            type: Number,
+            default: 0
+        },
+        gstAmount: {
+            type: Number,
+            default: 0
+        },
+        cgst: {
+            type: Number,
+            default: 0
+        },
+        sgst: {
+            type: Number,
+            default: 0
+        },
+        igst: {
+            type: Number,
+            default: 0
+        },
+        lineTotal: {
+            type: Number,
+            default: 0
+        }
     }],
+    subtotal: Number,
+    taxableAmount: {
+        type: Number,
+        default: 0
+    },
+    totalGst: {
+        type: Number,
+        default: 0
+    },
+    cgstTotal: {
+        type: Number,
+        default: 0
+    },
+    sgstTotal: {
+        type: Number,
+        default: 0
+    },
+    igstTotal: {
+        type: Number,
+        default: 0
+    },
+    isGstInvoice: {
+        type: Boolean,
+        default: false
+    },
     totalAmount: {
         type: Number,
         required: true
@@ -83,6 +146,6 @@ const saleSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model('Sale', saleSchema);

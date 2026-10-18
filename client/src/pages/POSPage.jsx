@@ -26,7 +26,8 @@ import {
     Smartphone,
     FileText,
     Receipt as ReceiptIcon,
-    ChevronRight
+    ChevronRight,
+    ShieldCheck
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { productService, saleService, shopService, khataService, govSaleService } from '../services/api';
@@ -54,7 +55,7 @@ const POSPage = () => {
     const [customerName, setCustomerName] = useState('');
     const [customerMobile, setCustomerMobile] = useState('');
     const [customerAadhaar, setCustomerAadhaar] = useState('');
-    const [isInspectionCopy, setIsInspectionCopy] = useState(true);
+    const [saleMode, setSaleMode] = useState('government');
     const [khataCustomers, setKhataCustomers] = useState([]);
     const [orderSuccess, setOrderSuccess] = useState(false);
     const [lastCreatedSale, setLastCreatedSale] = useState(null);
@@ -66,21 +67,141 @@ const POSPage = () => {
     const [discountType, setDiscountType] = useState('none');
     const [discountValue, setDiscountValue] = useState('');
     const [paidAmount, setPaidAmount] = useState('');
+    const [isItemListExpanded, setIsItemListExpanded] = useState(true);
 
-    const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
+    const isFertilizerShop = shop?.type === 'Fertilizers';
+    const isGovSale = Boolean(isFertilizerShop && saleMode === 'government');
+
+    useEffect(() => {
+        if (shop?.type === 'Fertilizers') {
+            setSaleMode('government');
+        } else if (shop) {
+            setSaleMode('retail');
+        }
+    }, [shop?.type]);
+
+    const rawSubtotal = useMemo(() => {
+        return parseFloat(cart.reduce((s, i) => s + ((Number(i.price) || 0) * (Number(i.quantity) || 0)), 0).toFixed(2));
+    }, [cart]);
+
+    const distinctProductsCount = cart.length;
+
+    const totalQuantityCount = useMemo(() => {
+        const total = cart.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+        return Number.isInteger(total) ? total : parseFloat(total.toFixed(3));
+    }, [cart]);
 
     const discountAmount = useMemo(() => {
         if (discountType === 'flat') {
-            return Math.min(subtotal, Number(discountValue) || 0);
+            return Math.min(rawSubtotal, Number(discountValue) || 0);
         }
         if (discountType === 'percentage') {
             const pct = Number(discountValue) || 0;
-            return Math.min(subtotal, parseFloat(((subtotal * pct) / 100).toFixed(2)));
+            return Math.min(rawSubtotal, parseFloat(((rawSubtotal * pct) / 100).toFixed(2)));
         }
         return 0;
-    }, [subtotal, discountType, discountValue]);
+    }, [rawSubtotal, discountType, discountValue]);
 
-    const finalAmount = Math.max(0, parseFloat((subtotal - discountAmount).toFixed(2)));
+    // Complete GST and line-item tax calculations
+    const taxCalculation = useMemo(() => {
+        let totalTaxable = 0;
+        let totalGst = 0;
+        let totalCgst = 0;
+        let totalSgst = 0;
+        let grandTotal = 0;
+        let accumulatedDiscount = 0;
+
+        const itemsWithTax = cart.map((item, idx) => {
+            const qty = Number(item.quantity) || 0;
+            const price = Number(item.price) || 0;
+            const itemBaseAmount = parseFloat((qty * price).toFixed(2));
+            const isLast = idx === cart.length - 1;
+
+            let itemDiscount = 0;
+            if (discountAmount > 0 && rawSubtotal > 0) {
+                if (isLast) {
+                    itemDiscount = parseFloat((discountAmount - accumulatedDiscount).toFixed(2));
+                } else {
+                    itemDiscount = parseFloat(((itemBaseAmount / rawSubtotal) * discountAmount).toFixed(2));
+                    accumulatedDiscount += itemDiscount;
+                }
+            }
+
+            const isApplicable = item.isGstApplicable !== undefined ? Boolean(item.isGstApplicable) : (Number(item.gst) > 0);
+            const rate = isApplicable ? (Number(item.gstRate !== undefined ? item.gstRate : item.gst) || 0) : 0;
+            const mode = item.gstPricingMode || 'inclusive';
+
+            let itemTaxable = 0;
+            let itemGst = 0;
+            let itemCgst = 0;
+            let itemSgst = 0;
+            let itemLineTotal = 0;
+
+            if (isApplicable && rate > 0) {
+                if (mode === 'exclusive') {
+                    itemTaxable = Math.max(0, parseFloat((itemBaseAmount - itemDiscount).toFixed(2)));
+                    itemGst = parseFloat((itemTaxable * (rate / 100)).toFixed(2));
+                    itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                    itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                    itemLineTotal = parseFloat((itemTaxable + itemGst).toFixed(2));
+                } else {
+                    const netGross = Math.max(0, parseFloat((itemBaseAmount - itemDiscount).toFixed(2)));
+                    itemTaxable = parseFloat((netGross / (1 + (rate / 100))).toFixed(2));
+                    itemGst = parseFloat((netGross - itemTaxable).toFixed(2));
+                    itemCgst = parseFloat((itemGst / 2).toFixed(2));
+                    itemSgst = parseFloat((itemGst - itemCgst).toFixed(2));
+                    itemLineTotal = netGross;
+                }
+            } else {
+                itemTaxable = Math.max(0, parseFloat((itemBaseAmount - itemDiscount).toFixed(2)));
+                itemGst = 0;
+                itemCgst = 0;
+                itemSgst = 0;
+                itemLineTotal = itemTaxable;
+            }
+
+            totalTaxable += itemTaxable;
+            totalGst += itemGst;
+            totalCgst += itemCgst;
+            totalSgst += itemSgst;
+            grandTotal += itemLineTotal;
+
+            return {
+                ...item,
+                itemBaseAmount,
+                itemDiscount,
+                isGstApplicable: isApplicable,
+                gstRate: rate,
+                gstPricingMode: mode,
+                taxableValue: itemTaxable,
+                gstAmount: itemGst,
+                cgst: itemCgst,
+                sgst: itemSgst,
+                lineTotal: itemLineTotal
+            };
+        });
+
+        totalTaxable = parseFloat(totalTaxable.toFixed(2));
+        totalGst = parseFloat(totalGst.toFixed(2));
+        totalCgst = parseFloat(totalCgst.toFixed(2));
+        totalSgst = parseFloat(totalSgst.toFixed(2));
+        grandTotal = parseFloat(grandTotal.toFixed(2));
+
+        return {
+            itemsWithTax,
+            subtotal: rawSubtotal,
+            discountAmount,
+            taxableAmount: totalTaxable,
+            totalGst,
+            cgstTotal: totalCgst,
+            sgstTotal: totalSgst,
+            finalAmount: grandTotal,
+            isTaxable: totalGst > 0
+        };
+    }, [cart, rawSubtotal, discountAmount]);
+
+    const subtotal = rawSubtotal;
+    const finalAmount = taxCalculation.finalAmount;
 
     const remainingAmount = useMemo(() => {
         if (paymentMethod === 'Khata') {
@@ -89,6 +210,66 @@ const POSPage = () => {
         }
         return 0;
     }, [finalAmount, paymentMethod, paidAmount]);
+
+    const getUnitStep = (unit) => {
+        const u = (unit || '').toLowerCase();
+        if (u === 'gram' || u === 'g') return 50;
+        if (u === 'ml') return 50;
+        return 1;
+    };
+
+    const formatCartItemEquation = (item, productObj) => {
+        const qty = Number(item.quantity) || 0;
+        const unit = (item.unit || productObj?.unit || '').trim();
+        const baseUnit = (item.baseUnit || productObj?.unit || unit || 'Piece').trim();
+        const multiplier = Number(item.multiplier) || 1;
+        const basePrice = item.basePrice != null 
+            ? Number(item.basePrice) 
+            : (productObj?.sellPrice != null ? Number(productObj.sellPrice) : (multiplier ? item.price / multiplier : 0));
+        const lineTotal = parseFloat(((Number(item.price) || 0) * qty).toFixed(2));
+
+        const formattedTotal = `₹${lineTotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+        // Quantity string with unit
+        let qtyStr = `${qty}`;
+        const uLower = unit.toLowerCase();
+        const buLower = baseUnit.toLowerCase();
+        const isPiece = !unit || uLower === 'piece' || uLower === 'pieces' || uLower === 'pc' || uLower === 'pcs';
+
+        if (uLower === 'gram' || uLower === 'g') qtyStr = `${qty} g`;
+        else if (uLower === 'kg') qtyStr = `${qty} kg`;
+        else if (uLower === 'ml') qtyStr = `${qty} ml`;
+        else if (uLower === 'liter' || uLower === 'l') qtyStr = `${qty} L`;
+        else if (isPiece) qtyStr = `${qty}`;
+        else if (unit) qtyStr = `${qty} ${unit}`;
+
+        // Rate string
+        let rateStr;
+        const formattedBasePrice = `₹${basePrice.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+        if (multiplier !== 1 && baseUnit) {
+            let buDisplay = baseUnit;
+            if (buLower === 'kg') buDisplay = 'kg';
+            else if (buLower === 'liter' || buLower === 'l') buDisplay = 'L';
+            else if (buLower === 'piece' || buLower === 'pieces' || buLower === 'pc' || buLower === 'pcs') buDisplay = 'pc';
+            rateStr = `${formattedBasePrice}/${buDisplay}`;
+        } else if (isPiece) {
+            rateStr = `${formattedBasePrice}`;
+        } else {
+            let uDisplay = unit;
+            if (uLower === 'kg') uDisplay = 'kg';
+            else if (uLower === 'liter' || uLower === 'l') uDisplay = 'L';
+            rateStr = `${formattedBasePrice}/${uDisplay}`;
+        }
+
+        return {
+            qtyStr,
+            rateStr,
+            lineTotal,
+            formattedTotal,
+            equationStr: `${qtyStr} × ${rateStr} = ${formattedTotal}`
+        };
+    };
 
     const checkoutBtnText = useMemo(() => {
         if (isCheckingOut) {
@@ -99,9 +280,13 @@ const POSPage = () => {
                 </div>
             );
         }
+
+        if (cart.length === 0) {
+            return 'Cart is Empty';
+        }
         
         if (paymentMethod === 'Cash' || paymentMethod === 'UPI') {
-            return `Collect ₹${finalAmount.toLocaleString()}`;
+            return `Collect ₹${finalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
         }
         
         // Khata
@@ -109,8 +294,8 @@ const POSPage = () => {
         if (paid === 0) {
             return 'Save Khata Due';
         }
-        return `Collect ₹${paid.toLocaleString()}`;
-    }, [isCheckingOut, paymentMethod, finalAmount, paidAmount]);
+        return `Collect ₹${paid.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+    }, [isCheckingOut, cart.length, paymentMethod, finalAmount, paidAmount]);
     
     // Sell Modal for measured items
     const [sellingProduct, setSellingProduct] = useState(null);
@@ -218,6 +403,15 @@ const POSPage = () => {
 
     const handleProductClick = (product) => {
         if (product.quantity <= 0) return;
+        if (isGovSale && (product.governmentPrice === undefined || product.governmentPrice === null || Number(product.governmentPrice) <= 0)) {
+            setAlertConfig({
+                open: true,
+                title: 'Missing GST Ledger Price',
+                message: `"${product.name}" does not have a configured GST Ledger Price (current: ₹${product.governmentPrice || 0}). GST sales require a configured GST ledger rate. Please edit this product in Inventory to set a valid GST Ledger Price before adding it to a GST sale.`,
+                type: 'error'
+            });
+            return;
+        }
         setSellingProduct(product);
         setSellUnit(product.unit || 'Piece');
         setSellQty('1');
@@ -226,13 +420,26 @@ const POSPage = () => {
     const addToCart = (product, qty, unit, multiplier) => {
         const q = parseFloat(qty);
         const cartKey = `${product._id}-${unit}`;
-        const priceForUnit = product.sellPrice * multiplier;
+        const m = multiplier || 1;
+
+        if (isGovSale && (product.governmentPrice === undefined || product.governmentPrice === null || Number(product.governmentPrice) <= 0)) {
+            setAlertConfig({
+                open: true,
+                title: 'Missing GST Ledger Price',
+                message: `Cannot add "${product.name}" to a GST sale: Missing configured GST Ledger Price. Please update this product in Inventory first.`,
+                type: 'error'
+            });
+            return;
+        }
+
+        const activeBasePrice = isGovSale ? Number(product.governmentPrice) : Number(product.sellPrice);
+        const priceForUnit = activeBasePrice * m;
 
         setCart(prev => {
             const existing = prev.find(item => item.cartKey === cartKey);
             if (existing) {
                 return prev.map(item => item.cartKey === cartKey 
-                    ? { ...item, quantity: item.quantity + q } 
+                    ? { ...item, quantity: parseFloat((item.quantity + q).toFixed(4)) } 
                     : item
                 );
             }
@@ -241,10 +448,19 @@ const POSPage = () => {
                 product: product._id, 
                 productName: product.name, 
                 unit: unit,
+                baseUnit: product.unit || unit || 'Piece',
+                basePrice: activeBasePrice,
                 price: priceForUnit, 
-                multiplier: multiplier,
+                multiplier: m,
                 quantity: q, 
-                maxStock: product.quantity
+                maxStock: product.quantity,
+                brand: product.brand,
+                category: product.category,
+                productType: product.productType,
+                governmentPrice: Number(product.governmentPrice || 0),
+                isGstApplicable: product.isGstApplicable !== undefined ? Boolean(product.isGstApplicable) : (Number(product.gst) > 0),
+                gstRate: product.gstRate !== undefined ? Number(product.gstRate) : Number(product.gst || 0),
+                gstPricingMode: product.gstPricingMode || 'inclusive'
             }];
         });
         setSellingProduct(null);
@@ -253,10 +469,14 @@ const POSPage = () => {
     const updateCartQty = (cartKey, delta) => {
         setCart(prev => prev.map(item => {
             if (item.cartKey !== cartKey) return item;
-            const newQty = item.quantity + delta;
+            const newQty = parseFloat((item.quantity + delta).toFixed(4));
             if (newQty <= 0) return null;
             return { ...item, quantity: newQty };
         }).filter(Boolean));
+    };
+
+    const removeFromCart = (cartKey) => {
+        setCart(prev => prev.filter(item => item.cartKey !== cartKey));
     };
 
     const handleCheckout = async () => {
@@ -287,13 +507,26 @@ const POSPage = () => {
             return;
         }
 
-        if (shop?.type === 'Fertilizers') {
+        if (isGovSale) {
             if (customerAadhaar.trim() && !/^\d{12}$/.test(customerAadhaar.trim())) {
                 showToast('Aadhaar Card number must be exactly 12 digits.', 'warning');
                 return;
             }
 
-
+            // Verify all items have valid positive government price
+            for (const it of cart) {
+                const productObj = products.find(p => p._id === it.product);
+                if (!productObj?.governmentPrice || Number(productObj.governmentPrice) <= 0) {
+                    showToast(`Cannot complete GST sale: "${it.productName}" lacks a valid GST Ledger Price.`, 'error');
+                    setAlertConfig({
+                        open: true,
+                        title: 'Missing GST Ledger Price',
+                        message: `Product "${it.productName}" does not have a configured GST Ledger Price. Please update this product in Inventory before completing this GST sale.`,
+                        type: 'error'
+                    });
+                    return;
+                }
+            }
         }
         
         let reqPaidAmount = finalAmount;
@@ -323,33 +556,73 @@ const POSPage = () => {
 
         setIsCheckingOut(true);
         try {
-            const res = shop?.type === 'Fertilizers'
+            const res = isGovSale
                 ? await govSaleService.create({
                     shop: shopId,
                     customerName: customerName || 'Walk-in Customer',
                     customerMobile: customerMobile || '',
                     customerAadhaar: customerAadhaar || '',
-                    items: cart.map(item => {
+                    items: taxCalculation.itemsWithTax.map(item => {
                         const productObj = products.find(p => p._id === item.product);
-                        const rateCharged = item.price / (item.multiplier || 1);
+                        const govPrice = Number(productObj?.governmentPrice);
                         return {
                             product: item.product,
                             productName: item.productName,
                             soldQtyEntered: item.quantity,
                             soldUnit: item.unit,
-                            pricePerBaseUnit: rateCharged,
-                            governmentPrice: productObj?.governmentPrice || rateCharged,
-                            totalPrice: item.price * item.quantity
+                            pricePerBaseUnit: govPrice,
+                            governmentPrice: govPrice,
+                            totalPrice: item.lineTotal,
+                            isGstApplicable: item.isGstApplicable,
+                            gstRate: item.gstRate,
+                            gstPricingMode: item.gstPricingMode,
+                            taxableValue: item.taxableValue,
+                            gstAmount: item.gstAmount,
+                            cgst: item.cgst,
+                            sgst: item.sgst,
+                            lineTotal: item.lineTotal
                         };
                     }),
+                    subtotal: taxCalculation.subtotal,
+                    taxableAmount: taxCalculation.taxableAmount,
+                    totalGst: taxCalculation.totalGst,
+                    cgstTotal: taxCalculation.cgstTotal,
+                    sgstTotal: taxCalculation.sgstTotal,
+                    isGstInvoice: taxCalculation.totalGst > 0,
                     totalAmount: finalAmount,
                     paymentMethod,
-                    isInspectionCopy,
+                    paidAmount: reqPaidAmount,
+                    remainingAmount: reqRemainingAmount,
+                    paymentStatus: reqPaymentStatus,
                     date: new Date()
                 })
                 : await saleService.create({
                     shop: shopId,
-                    items: cart,
+                    items: taxCalculation.itemsWithTax.map(item => ({
+                        product: item.product,
+                        productName: item.productName,
+                        quantity: item.quantity,
+                        unit: item.unit,
+                        baseUnit: item.baseUnit,
+                        basePrice: item.basePrice,
+                        price: item.price,
+                        multiplier: item.multiplier,
+                        isGstApplicable: item.isGstApplicable,
+                        gstRate: item.gstRate,
+                        gstPricingMode: item.gstPricingMode,
+                        taxableValue: item.taxableValue,
+                        gstAmount: item.gstAmount,
+                        cgst: item.cgst,
+                        sgst: item.sgst,
+                        lineTotal: item.lineTotal
+                    })),
+                    subtotal: taxCalculation.subtotal,
+                    taxableAmount: taxCalculation.taxableAmount,
+                    totalGst: taxCalculation.totalGst,
+                    cgstTotal: taxCalculation.cgstTotal,
+                    sgstTotal: taxCalculation.sgstTotal,
+                    isGstInvoice: taxCalculation.totalGst > 0,
+                    totalAmount: finalAmount,
                     paymentMethod,
                     customerName,
                     customerMobile,
@@ -361,7 +634,15 @@ const POSPage = () => {
                     paymentStatus: reqPaymentStatus,
                     date: new Date()
                 });
-            setLastCreatedSale(res.data.data);
+            const createdSale = res.data?.data;
+            if (createdSale) {
+                if (isGovSale) {
+                    await offlineDB.saveGovSale(createdSale);
+                } else {
+                    await offlineDB.saveSale(createdSale);
+                }
+            }
+            setLastCreatedSale(createdSale);
             setOrderSuccess(true);
             setCart([]);
             setIsCartDrawerOpen(false);
@@ -371,6 +652,12 @@ const POSPage = () => {
             setDiscountValue('');
             setPaidAmount('');
             setCustomerAadhaar('');
+
+            // Invalidate cached query stats so navigation to sales ledger / dashboard is immediately fresh
+            await offlineDB.deleteQueryCache(`/api/sales/stats?shop=${shopId}`);
+            await offlineDB.deleteQueryCache('/api/sales/stats');
+            await offlineDB.deleteQueryCache(`/api/sales?shop=${shopId}`);
+            window.dispatchEvent(new CustomEvent('offline-mutation-queued'));
 
             fetchData();
             showToast('Sale created successfully!', 'success');
@@ -388,11 +675,104 @@ const POSPage = () => {
                     title="Sales Terminal"
                     subtitle={`Recording sales for ${shop?.name || 'your shop'}`}
                     backAction={() => navigate(-1)}
+                    actions={
+                        <button 
+                            type="button"
+                            className="pos-header-cart-btn" 
+                            onClick={() => setIsCartDrawerOpen(true)}
+                            title="Open Checkout Panel"
+                        >
+                            <ShoppingCart size={18} />
+                            <span>Cart</span>
+                            {cart.length > 0 && (
+                                <span className="pos-hcb-count">{cart.length}</span>
+                            )}
+                        </button>
+                    }
                 />
 
                 {!isOnline && (
                     <div style={{ background: '#FFFBEB', color: '#B45309', padding: '10px 24px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid #FEF3C7', fontWeight: 'bold' }}>
                         Offline Mode – recording sales locally
+                    </div>
+                )}
+
+                {isFertilizerShop && (
+                    <div style={{
+                        display: 'flex',
+                        gap: '8px',
+                        padding: '12px 24px 0 24px',
+                        background: '#FFFFFF'
+                    }}>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (saleMode !== 'government') {
+                                    if (cart.length > 0) {
+                                        if (window.confirm('Switching to GST Sale mode will reset your current cart. Continue?')) {
+                                            setCart([]);
+                                            setSaleMode('government');
+                                        }
+                                    } else {
+                                        setSaleMode('government');
+                                    }
+                                }
+                            }}
+                            style={{
+                                flex: 1,
+                                padding: '10px 16px',
+                                borderRadius: '12px',
+                                border: isGovSale ? '2px solid #059669' : '1.5px solid #E2E8F0',
+                                background: isGovSale ? '#ECFDF5' : '#FFFFFF',
+                                color: isGovSale ? '#065F46' : '#64748B',
+                                fontWeight: '800',
+                                fontSize: '13px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            <ShieldCheck size={16} color={isGovSale ? '#059669' : '#94A3B8'} />
+                            <span>GST Sale (Special Price)</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (saleMode !== 'retail') {
+                                    if (cart.length > 0) {
+                                        if (window.confirm('Switching to Retail Sale mode will reset your current cart. Continue?')) {
+                                            setCart([]);
+                                            setSaleMode('retail');
+                                        }
+                                    } else {
+                                        setSaleMode('retail');
+                                    }
+                                }
+                            }}
+                            style={{
+                                flex: 1,
+                                padding: '10px 16px',
+                                borderRadius: '12px',
+                                border: !isGovSale ? '2px solid #1E6BFF' : '1.5px solid #E2E8F0',
+                                background: !isGovSale ? '#EFF6FF' : '#FFFFFF',
+                                color: !isGovSale ? '#1E40AF' : '#64748B',
+                                fontWeight: '800',
+                                fontSize: '13px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            <ShoppingBag size={16} color={!isGovSale ? '#1E6BFF' : '#94A3B8'} />
+                            <span>Regular Retail Sale (Selling Price)</span>
+                        </button>
                     </div>
                 )}
 
@@ -450,7 +830,17 @@ const POSPage = () => {
                                         </div>
                                     </div>
                                     <div className="pcv2-footer">
-                                        <div className="pcv2-price">₹{product.sellPrice}</div>
+                                        <div className="pcv2-price">
+                                            {isGovSale ? (
+                                                product.governmentPrice && Number(product.governmentPrice) > 0 ? (
+                                                    <span>₹{product.governmentPrice} <small style={{ fontSize: '10px', color: '#059669', fontWeight: '800' }}>GST</small></span>
+                                                ) : (
+                                                    <span style={{ color: '#DC2626', fontSize: '11px', fontWeight: '800' }}>No GST Price</span>
+                                                )
+                                            ) : (
+                                                <span>₹{product.sellPrice}</span>
+                                            )}
+                                        </div>
                                         {totalQtyInCart > 0 ? (
                                             <div className="pcv2-qty-controls" onClick={(e) => e.stopPropagation()}>
                                                 <button onClick={() => updateCartQty(productCartItems[0].cartKey, -1)}><Minus size={14} /></button>
@@ -496,10 +886,10 @@ const POSPage = () => {
             {cart.length > 0 && (
                 <div className="mobile-pos-bar-v2 zomato-cart-bar" onClick={() => setIsCartDrawerOpen(true)}>
                     <div className="mpbv2-left">
-                        <div className="mpbv2-count">{cart.length} ITEMS</div>
-                        <div className="mpbv2-total">₹{subtotal.toLocaleString()}</div>
+                        <div className="mpbv2-count">{distinctProductsCount} {distinctProductsCount === 1 ? 'PRODUCT' : 'PRODUCTS'} ({totalQuantityCount} TOTAL)</div>
+                        <div className="mpbv2-total">₹{finalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
                     </div>
-                    <button className="mpbv2-btn">View Cart <ShoppingCart size={18} /></button>
+                    <button type="button" className="mpbv2-btn">Complete Transaction <ArrowRight size={18} /></button>
                 </div>
             )}
 
@@ -545,7 +935,7 @@ const POSPage = () => {
                                 </div>
                                 <div className="sell-banner-v2">
                                     <span>Total Amount</span>
-                                    <strong>₹{(calculateConversion(sellQty, sellUnit, sellingProduct.unit).multiplier * sellingProduct.sellPrice * parseFloat(sellQty || 0)).toFixed(2)}</strong>
+                                    <strong>₹{(calculateConversion(sellQty, sellUnit, sellingProduct.unit).multiplier * (isGovSale ? Number(sellingProduct.governmentPrice) : Number(sellingProduct.sellPrice)) * parseFloat(sellQty || 0)).toFixed(2)}</strong>
                                 </div>
                                 <button className="btn-add-cart-v2" onClick={() => {
                                     if (parseFloat(sellQty) <= 0 || isNaN(parseFloat(sellQty))) {
@@ -571,98 +961,69 @@ const POSPage = () => {
                     <div className="modal-overlay-v2">
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="m-backdrop-v2" onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }} />
                         <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} className="checkout-drawer-v2">
+                            {/* 1. HEADER */}
                             <div className="cdv2-header">
-                                <button className="btn-cdv2-back" onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }}><ChevronLeft size={24} /></button>
-                                <h3>Complete Transaction</h3>
+                                <button 
+                                    type="button"
+                                    className="btn-cdv2-back" 
+                                    onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }}
+                                    title="Back to Catalog"
+                                    aria-label="Back to Catalog"
+                                >
+                                    <ChevronLeft size={24} />
+                                </button>
+                                <div className="cdv2-header-text">
+                                    <h3>Complete Transaction</h3>
+                                    <p>{shop?.name ? `Checkout for ${shop.name}` : 'Order Summary & Payment'}</p>
+                                </div>
                             </div>
+
                             <div className="cdv2-body">
-                                <div className="premium-bill-card">
-                                    <div className="pbc-header">
-                                        <div className="pbc-title">
-                                            <ReceiptIcon size={18} />
-                                            <span>Bill Summary</span>
-                                        </div>
-                                        <span className="pbc-count">{cart.length} Items</span>
-                                    </div>
-                                    
-                                    <div className="pbc-items-list">
-                                        {cart.map(item => {
-                                            const itemPrice = Number(item.price ?? 0);
-                                            const itemQty = Number(item.quantity ?? 0);
-                                            const displayPrice = itemPrice.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-                                            const displayTotal = (itemPrice * itemQty).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-                                            const displayUnit = item.unit && item.unit !== 'Piece' ? ` ${item.unit}` : '';
-
-                                            return (
-                                                <div key={item.cartKey} className="pbc-item-row">
-                                                    <div className="pbc-item-info">
-                                                        <span className="pbc-item-name">{item.productName}</span>
-                                                        <span className="pbc-item-qty">
-                                                            {itemQty}{displayUnit} × ₹{displayPrice}
-                                                        </span>
-                                                    </div>
-                                                    <span className="pbc-item-total">₹{displayTotal}</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-
-                                    <div className="pbc-divider" />
-                                    
-                                    <div className="pbc-summary-rows" style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '16px 20px 4px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', color: '#667085', fontWeight: '600' }}>
-                                            <span>Subtotal</span>
-                                            <span>₹{subtotal.toLocaleString()}</span>
+                                {/* 1. DISCOUNT */}
+                                <div className="checkout-card discount-card-v2">
+                                    <div className="cc-header">
+                                        <div className="cc-title-left">
+                                            <Tag size={18} color="#1E6BFF" />
+                                            <span>Apply Discount</span>
                                         </div>
                                         {discountAmount > 0 && (
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', color: '#10B981', fontWeight: '700' }}>
-                                                <span>Discount {discountType === 'percentage' ? `(${discountValue}%)` : ''}</span>
-                                                <span>- ₹{discountAmount.toLocaleString()}</span>
-                                            </div>
+                                            <span className="cc-badge-green">-₹{discountAmount.toLocaleString()} Saved</span>
                                         )}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', color: '#101828', fontWeight: '900', paddingTop: '8px', borderTop: '1px dashed #F2F4F7' }}>
-                                            <span>Grand Total</span>
-                                            <span>₹{finalAmount.toLocaleString()}</span>
-                                        </div>
                                     </div>
-                                </div>
-
-                                {/* DISCOUNT SECTION */}
-                                <div className="discount-section-v2" style={{ margin: '16px 0', padding: '16px', background: '#F8FAFC', borderRadius: '18px', border: '1.5px solid #F1F5F9' }}>
-                                    <label style={{ fontSize: '14px', fontWeight: '800', color: '#334155', display: 'block', marginBottom: '10px' }}>Apply Discount</label>
-                                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                                        <div style={{ display: 'flex', background: '#E2E8F0', padding: '3px', borderRadius: '12px', flexShrink: 0 }}>
+                                    <div className="discount-tabs-container">
+                                        <div className="discount-segmented-group">
                                             <button 
                                                 type="button"
-                                                onClick={() => { setDiscountType('none'); setDiscountValue(''); }} 
-                                                style={{ border: 'none', background: discountType === 'none' ? 'white' : 'transparent', color: discountType === 'none' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                                className={`ds-btn ${discountType === 'none' ? 'active' : ''}`}
+                                                onClick={() => { setDiscountType('none'); setDiscountValue(''); }}
                                             >
                                                 None
                                             </button>
                                             <button 
                                                 type="button"
-                                                onClick={() => { setDiscountType('flat'); setDiscountValue(''); }} 
-                                                style={{ border: 'none', background: discountType === 'flat' ? 'white' : 'transparent', color: discountType === 'flat' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                                className={`ds-btn ${discountType === 'flat' ? 'active' : ''}`}
+                                                onClick={() => { setDiscountType('flat'); setDiscountValue(''); }}
                                             >
                                                 ₹ Flat
                                             </button>
                                             <button 
                                                 type="button"
-                                                onClick={() => { setDiscountType('percentage'); setDiscountValue(''); }} 
-                                                style={{ border: 'none', background: discountType === 'percentage' ? 'white' : 'transparent', color: discountType === 'percentage' ? '#071B44' : '#64748B', fontWeight: '800', fontSize: '12px', padding: '6px 12px', borderRadius: '9px', cursor: 'pointer', transition: '0.2s' }}
+                                                className={`ds-btn ${discountType === 'percentage' ? 'active' : ''}`}
+                                                onClick={() => { setDiscountType('percentage'); setDiscountValue(''); }}
                                             >
                                                 % Percentage
                                             </button>
                                         </div>
 
                                         {discountType !== 'none' && (
-                                            <div style={{ display: 'flex', alignItems: 'center', background: 'white', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '0 12px', flex: 1, height: '38px' }}>
-                                                <span style={{ fontSize: '14px', fontWeight: '700', color: '#64748B', marginRight: '4px' }}>
+                                            <div className="discount-input-box">
+                                                <span className="dib-prefix">
                                                     {discountType === 'flat' ? '₹' : '%'}
                                                 </span>
                                                 <input 
                                                     type="number" 
-                                                    placeholder={discountType === 'flat' ? 'Discount' : 'Percentage'} 
+                                                    min="0"
+                                                    placeholder={discountType === 'flat' ? 'Enter flat discount amount' : 'Enter discount percentage'} 
                                                     value={discountValue}
                                                     onChange={(e) => {
                                                         const val = e.target.value;
@@ -670,6 +1031,7 @@ const POSPage = () => {
                                                             setDiscountValue('');
                                                         } else {
                                                             const numVal = Number(val);
+                                                            if (numVal < 0) return;
                                                             if (discountType === 'percentage') {
                                                                 setDiscountValue(Math.min(100, numVal));
                                                             } else {
@@ -677,25 +1039,60 @@ const POSPage = () => {
                                                             }
                                                         }
                                                     }}
-                                                    style={{ border: 'none', outline: 'none', width: '100%', fontSize: '14px', fontWeight: '700', color: '#0F172A' }}
                                                 />
                                             </div>
                                         )}
                                     </div>
                                 </div>
 
-                                <div className="pm-section-v2">
-                                    <label>Payment Mode</label>
+                                {/* 4. PAYMENT MODE */}
+                                <div className="checkout-card payment-mode-card">
+                                    <div className="cc-header">
+                                        <div className="cc-title-left">
+                                            <CreditCard size={18} color="#1E6BFF" />
+                                            <span>Payment Mode</span>
+                                        </div>
+                                    </div>
                                     <div className="pm-grid-v2">
-                                        <button className={paymentMethod === 'Cash' ? 'active' : ''} onClick={() => setPaymentMethod('Cash')}><Wallet size={20} /><span>Cash</span></button>
-                                        <button className={paymentMethod === 'UPI' ? 'active' : ''} onClick={() => setPaymentMethod('UPI')}><QrCode size={20} /><span>UPI</span></button>
-                                        <button className={paymentMethod === 'Khata' ? 'active' : ''} onClick={() => { setPaymentMethod('Khata'); setPaidAmount(''); }}><FileText size={20} /><span>Khata</span></button>
+                                        <button 
+                                            type="button"
+                                            className={paymentMethod === 'Cash' ? 'active' : ''} 
+                                            onClick={() => setPaymentMethod('Cash')}
+                                        >
+                                            <Wallet size={20} />
+                                            <span>Cash</span>
+                                        </button>
+                                        <button 
+                                            type="button"
+                                            className={paymentMethod === 'UPI' ? 'active' : ''} 
+                                            onClick={() => setPaymentMethod('UPI')}
+                                        >
+                                            <QrCode size={20} />
+                                            <span>UPI</span>
+                                        </button>
+                                        <button 
+                                            type="button"
+                                            className={paymentMethod === 'Khata' ? 'active' : ''} 
+                                            onClick={() => { setPaymentMethod('Khata'); setPaidAmount(''); }}
+                                        >
+                                            <FileText size={20} />
+                                            <span>Khata</span>
+                                        </button>
                                     </div>
                                 </div>
 
-                                <div className="cust-section-v3">
-                                    <label>Customer Details</label>
-                                    
+                                {/* 5. CUSTOMER DETAILS */}
+                                <div className="checkout-card customer-details-card">
+                                    <div className="cc-header">
+                                        <div className="cc-title-left">
+                                            <User size={18} color="#1E6BFF" />
+                                            <span>Customer Details</span>
+                                        </div>
+                                        <span className="cc-badge-muted">
+                                            {paymentMethod === 'Khata' ? 'Required for Khata' : 'Optional'}
+                                        </span>
+                                    </div>
+
                                     {paymentMethod === 'Khata' ? (
                                         <div className="khata-selector-wrapper">
                                             {customerMobile ? (
@@ -704,10 +1101,10 @@ const POSPage = () => {
                                                         <span className="skc-name">{customerName}</span>
                                                         <span className="skc-phone">{customerMobile}</span>
                                                     </div>
-                                                    <button className="skc-change-btn" onClick={() => setIsKhataPickerOpen(true)}>Change</button>
+                                                    <button type="button" className="skc-change-btn" onClick={() => setIsKhataPickerOpen(true)}>Change</button>
                                                 </div>
                                             ) : (
-                                                <button className="khata-picker-trigger" onClick={() => setIsKhataPickerOpen(true)}>
+                                                <button type="button" className="khata-picker-trigger" onClick={() => setIsKhataPickerOpen(true)}>
                                                     <div className="kpt-left">
                                                         <div className="kpt-icon"><User size={20} /></div>
                                                         <div className="kpt-text">
@@ -723,7 +1120,7 @@ const POSPage = () => {
                                                 <div className="new-khata-inline-form">
                                                     <div className="nkif-header">
                                                         <span>New Customer Details</span>
-                                                        <button onClick={() => { setIsAddingNewKhata(false); setCustomerName(''); setCustomerMobile(''); }}>Cancel</button>
+                                                        <button type="button" onClick={() => { setIsAddingNewKhata(false); setCustomerName(''); setCustomerMobile(''); }}>Cancel</button>
                                                     </div>
                                                     <div className="nkif-inputs">
                                                         <div className="cust-input-v2">
@@ -758,7 +1155,8 @@ const POSPage = () => {
                                             </div>
                                         </div>
                                     )}
-                                    {shop?.type === 'Fertilizers' && (
+
+                                    {isGovSale && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
                                             <div className="cust-input-v2">
                                                 <FileText size={18} color="#98A2B3" />
@@ -775,90 +1173,268 @@ const POSPage = () => {
                                                     placeholder="Aadhaar Card Number (12 digits)" 
                                                 />
                                             </div>
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', fontWeight: '700', color: '#334155', cursor: 'pointer', marginTop: '4px' }}>
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={isInspectionCopy} 
-                                                    onChange={(e) => setIsInspectionCopy(e.target.checked)}
-                                                    style={{ width: '18px', height: '18px', accentColor: '#071B44', cursor: 'pointer' }}
-                                                />
-                                                <span>Inspection Copy</span>
+                                        </div>
+                                    )}
+
+                                    {/* KHATA PAYMENT SPLIT DETAILS (when Khata selected) */}
+                                    {paymentMethod === 'Khata' && customerMobile && (
+                                        <div className="khata-payment-section" style={{ marginTop: '16px', padding: '16px', background: '#FFFDF5', border: '1.5px solid #FEF3C7', borderRadius: '18px' }}>
+                                            <label style={{ fontSize: '13px', fontWeight: '800', color: '#854D0E', display: 'block', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                                Khata Due Breakdown
                                             </label>
+                                            
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Paid Now</span>
+                                                    <div style={{ display: 'flex', alignItems: 'center', background: 'white', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '0 12px', width: '150px', height: '40px' }}>
+                                                        <span style={{ fontSize: '14px', fontWeight: '700', color: '#64748B', marginRight: '4px' }}>₹</span>
+                                                        <input 
+                                                            type="number"
+                                                            placeholder="0.00"
+                                                            value={paidAmount}
+                                                            onChange={(e) => {
+                                                                const val = e.target.value;
+                                                                if (val === '') {
+                                                                    setPaidAmount('');
+                                                                } else {
+                                                                    const numVal = Number(val);
+                                                                    setPaidAmount(Math.min(finalAmount, numVal));
+                                                                }
+                                                            }}
+                                                            style={{ border: 'none', outline: 'none', width: '100%', fontSize: '15px', fontWeight: '800', color: '#0F172A' }}
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => setPaidAmount(parseFloat((finalAmount * 0.25).toFixed(2)))} 
+                                                        style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                    >
+                                                        25%
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => setPaidAmount(parseFloat((finalAmount * 0.50).toFixed(2)))} 
+                                                        style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                    >
+                                                        50%
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => setPaidAmount(parseFloat((finalAmount * 0.75).toFixed(2)))} 
+                                                        style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                    >
+                                                        75%
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => setPaidAmount(finalAmount)} 
+                                                        style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
+                                                    >
+                                                        Full
+                                                    </button>
+                                                </div>
+
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px dashed #FEF3C7' }}>
+                                                    <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Remaining Due</span>
+                                                    <span style={{ fontSize: '16px', fontWeight: '900', color: '#EF4444' }}>₹{remainingAmount.toLocaleString()}</span>
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
 
-                                {/* KHATA PAYMENT SECTION */}
-                                {paymentMethod === 'Khata' && customerMobile && (
-                                    <div className="khata-payment-section" style={{ marginTop: '20px', padding: '16px', background: '#FFFDF5', border: '1.5px solid #FEF3C7', borderRadius: '18px' }}>
-                                        <label style={{ fontSize: '14px', fontWeight: '800', color: '#854D0E', display: 'block', marginBottom: '12px' }}>Khata Payment Details</label>
-                                        
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Paid Now</span>
-                                                <div style={{ display: 'flex', alignItems: 'center', background: 'white', border: '1.5px solid #CBD5E1', borderRadius: '12px', padding: '0 12px', width: '150px', height: '40px' }}>
-                                                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#64748B', marginRight: '4px' }}>₹</span>
-                                                    <input 
-                                                        type="number"
-                                                        placeholder="0.00"
-                                                        value={paidAmount}
-                                                        onChange={(e) => {
-                                                            const val = e.target.value;
-                                                            if (val === '') {
-                                                                setPaidAmount('');
-                                                            } else {
-                                                                const numVal = Number(val);
-                                                                setPaidAmount(Math.min(finalAmount, numVal));
-                                                            }
-                                                        }}
-                                                        style={{ border: 'none', outline: 'none', width: '100%', fontSize: '15px', fontWeight: '800', color: '#0F172A' }}
-                                                    />
+                                {/* 4. PAYMENT SUMMARY WITH ITEMIZED CART ITEMS */}
+                                <div className="checkout-card final-total-card">
+                                    <div className="cc-header">
+                                        <div className="cc-title-left">
+                                            <ReceiptIcon size={18} color="#071B44" />
+                                            <span>Payment Summary</span>
+                                        </div>
+                                        {cart.length > 0 && (
+                                            <div className="ps-header-right">
+                                                <span className="ps-pill-badge ps-badge-count">
+                                                    {distinctProductsCount} {distinctProductsCount === 1 ? 'Product' : 'Products'}
+                                                </span>
+                                                <span className="ps-pill-badge ps-badge-qty">
+                                                    Qty: {totalQuantityCount}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    className="ps-toggle-btn"
+                                                    onClick={() => setIsItemListExpanded(!isItemListExpanded)}
+                                                    title={isItemListExpanded ? "Collapse item list" : "Expand item list"}
+                                                    aria-label="Toggle cart items list"
+                                                >
+                                                    {isItemListExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Itemized Cart Items List */}
+                                    {cart.length === 0 ? (
+                                        <div className="ps-empty-wrap">
+                                            <ShoppingBag size={24} strokeWidth={1.5} color="#94A3B8" />
+                                            <span>Your cart is empty</span>
+                                        </div>
+                                    ) : isItemListExpanded ? (
+                                        <div className="ps-cart-items-scrollable">
+                                            {cart.map(item => {
+                                                const productObj = products.find(p => p._id === item.product);
+                                                const { qtyStr, formattedTotal, equationStr } = formatCartItemEquation(item, productObj);
+                                                const uLower = (item.unit || '').toLowerCase();
+                                                const isPiece = !item.unit || uLower === 'piece' || uLower === 'pieces' || uLower === 'pc' || uLower === 'pcs';
+                                                const variantLabel = !isPiece ? item.unit : (item.brand || productObj?.brand || '');
+                                                const step = getUnitStep(item.unit);
+
+                                                return (
+                                                    <div key={item.cartKey} className="ps-cart-item-row">
+                                                        <div className="ps-item-left">
+                                                            <div className="ps-item-title-row">
+                                                                <span className="ps-item-name">{item.productName}</span>
+                                                                {variantLabel && (
+                                                                    <span className="ps-item-variant">{variantLabel}</span>
+                                                                )}
+                                                                {item.isGstApplicable && item.gstRate > 0 && (
+                                                                    <span style={{
+                                                                        fontSize: '10px',
+                                                                        fontWeight: '700',
+                                                                        padding: '1px 5px',
+                                                                        borderRadius: '4px',
+                                                                        background: item.gstPricingMode === 'exclusive' ? '#EFF6FF' : '#F0FDF4',
+                                                                        color: item.gstPricingMode === 'exclusive' ? '#1E6BFF' : '#16A34A',
+                                                                        border: item.gstPricingMode === 'exclusive' ? '1px solid #BFDBFE' : '1px solid #BBF7D0'
+                                                                    }}>
+                                                                        {item.gstPricingMode === 'exclusive' ? `+${item.gstRate}% GST` : `${item.gstRate}% Incl.`}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div className="ps-item-equation-row">
+                                                                <span className="ps-item-equation">{equationStr}</span>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="ps-item-right">
+                                                            <div className="ps-item-stepper">
+                                                                <button 
+                                                                    type="button" 
+                                                                    onClick={() => updateCartQty(item.cartKey, -step)}
+                                                                    title="Decrease quantity"
+                                                                >
+                                                                    <Minus size={11} />
+                                                                </button>
+                                                                <span className="ps-item-stepper-qty">{qtyStr}</span>
+                                                                <button 
+                                                                    type="button" 
+                                                                    onClick={() => {
+                                                                        const maxAvailable = item.maxStock ?? productObj?.quantity ?? Infinity;
+                                                                        const nextDeduction = (item.quantity + step) * (item.multiplier || 1);
+                                                                        if (nextDeduction > maxAvailable) {
+                                                                            showToast(`Cannot exceed available stock (${maxAvailable} ${item.baseUnit || productObj?.unit || ''}).`, 'warning');
+                                                                            return;
+                                                                        }
+                                                                        updateCartQty(item.cartKey, step);
+                                                                    }}
+                                                                    title="Increase quantity"
+                                                                >
+                                                                    <Plus size={11} />
+                                                                </button>
+                                                            </div>
+
+                                                            <span className="ps-item-line-total">{formattedTotal}</span>
+
+                                                            <button 
+                                                                type="button" 
+                                                                className="ps-item-delete"
+                                                                onClick={() => removeFromCart(item.cartKey)}
+                                                                title="Remove from cart"
+                                                            >
+                                                                <Trash2 size={13} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <button 
+                                            type="button" 
+                                            className="ps-collapsed-bar"
+                                            onClick={() => setIsItemListExpanded(true)}
+                                        >
+                                            <span>{distinctProductsCount} {distinctProductsCount === 1 ? 'item' : 'items'} in cart ({cart.map(i => i.productName).slice(0, 2).join(', ')}{cart.length > 2 ? '...' : ''})</span>
+                                            <span className="ps-show-link">View items</span>
+                                        </button>
+                                    )}
+
+                                    <div className="ps-divider" />
+
+                                    <div className="final-total-content">
+                                        <div className="ft-row">
+                                            <span className="ft-label">Cart Subtotal</span>
+                                            <span className="ft-val">₹{subtotal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                        </div>
+                                        {discountAmount > 0 && (
+                                            <div className="ft-row ft-discount">
+                                                <span className="ft-label">Discount Deducted {discountType === 'percentage' ? `(${discountValue}%)` : ''}</span>
+                                                <span className="ft-val">- ₹{discountAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                            </div>
+                                        )}
+                                        {taxCalculation.totalGst > 0 && (
+                                            <>
+                                                <div className="ft-row">
+                                                    <span className="ft-label">Taxable Amount</span>
+                                                    <span className="ft-val">₹{taxCalculation.taxableAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                                 </div>
+                                                <div className="ft-row" style={{ color: '#1E6BFF' }}>
+                                                    <span className="ft-label" style={{ fontWeight: '700', color: '#1E6BFF' }}>Total GST</span>
+                                                    <span className="ft-val" style={{ fontWeight: '700', color: '#1E6BFF' }}>+ ₹{taxCalculation.totalGst.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748B', padding: '0 0 4px 2px' }}>
+                                                    <span>GST Breakdown:</span>
+                                                    <span>CGST: ₹{taxCalculation.cgstTotal.toFixed(2)} | SGST: ₹{taxCalculation.sgstTotal.toFixed(2)}</span>
+                                                </div>
+                                            </>
+                                        )}
+                                        {paymentMethod === 'Khata' && (
+                                            <>
+                                                <div className="ft-row">
+                                                    <span className="ft-label">Paid Upfront</span>
+                                                    <span className="ft-val">₹{(Number(paidAmount) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                                </div>
+                                                {remainingAmount > 0 && (
+                                                    <div className="ft-row ft-due">
+                                                        <span className="ft-label">Khata Balance Due</span>
+                                                        <span className="ft-val">₹{remainingAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                        <div className="ft-divider" />
+                                        <div className="ft-row ft-grand-total">
+                                            <div className="ft-grand-titles">
+                                                <span className="ft-grand-label">Grand Total</span>
+                                                <span className="ft-grand-sub">Net Payable Amount</span>
                                             </div>
-
-                                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.25).toFixed(2)))} 
-                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
-                                                >
-                                                    25%
-                                                </button>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.50).toFixed(2)))} 
-                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
-                                                >
-                                                    50%
-                                                </button>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setPaidAmount(parseFloat((finalAmount * 0.75).toFixed(2)))} 
-                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
-                                                >
-                                                    75%
-                                                </button>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setPaidAmount(finalAmount)} 
-                                                    style={{ border: '1px solid #FEF3C7', background: 'white', color: '#854D0E', fontSize: '12px', fontWeight: '800', padding: '6px 10px', borderRadius: '8px', cursor: 'pointer' }}
-                                                >
-                                                    Full
-                                                </button>
-                                            </div>
-
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px dashed #FEF3C7' }}>
-                                                <span style={{ fontSize: '14px', fontWeight: '600', color: '#64748B' }}>Remaining Due</span>
-                                                <span style={{ fontSize: '16px', fontWeight: '900', color: '#EF4444' }}>₹{remainingAmount.toLocaleString()}</span>
-                                            </div>
+                                            <span className="ft-grand-val">₹{finalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
                                         </div>
                                     </div>
-                                )}
-                                <div style={{ marginTop: '24px', flexShrink: 0 }}>
-                                    <button className="btn-final-v2" onClick={handleCheckout} disabled={isCheckingOut}>
-                                        {checkoutBtnText}
-                                    </button>
                                 </div>
+                            </div>
+
+                            {/* 7. FIXED BOTTOM FOOTER (Collect Payment) */}
+                            <div className="cdv2-footer">
+                                <button 
+                                    type="button"
+                                    className="btn-final-v2" 
+                                    onClick={handleCheckout} 
+                                    disabled={isCheckingOut || cart.length === 0}
+                                >
+                                    {checkoutBtnText}
+                                </button>
                             </div>
                         </motion.div>
                     </div>
@@ -931,16 +1507,16 @@ const POSPage = () => {
                                 <button 
                                     className="ips-btn ips-wa" 
                                     style={{ flex: 1, background: '#25D366', color: 'white', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.shareInvoice(lastCreatedSale, shop, shop?.type === 'Fertilizers' ? 'GOV_SALE' : 'SALE')}
+                                    onClick={() => lastCreatedSale && invoiceService.shareInvoice(lastCreatedSale, shop, isGovSale ? 'GOV_SALE' : 'SALE', { products, format: shop?.defaultPrintFormat || 'full_a4' })}
                                 >
                                     Share
                                 </button>
                                 <button 
                                     className="ips-btn ips-pdf" 
                                     style={{ flex: 1, background: '#F2F4F7', color: '#101828', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, shop?.type === 'Fertilizers' ? 'GOV_SALE' : 'SALE')}
+                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, isGovSale ? 'GOV_SALE' : 'SALE', { products, format: shop?.defaultPrintFormat || 'full_a4' })}
                                 >
-                                    PDF
+                                    Download PDF
                                 </button>
                             </div>
 
@@ -1050,26 +1626,510 @@ const POSPage = () => {
                 .modal-overlay-v2 { position: fixed; inset: 0; z-index: 7000; display: flex; align-items: flex-end; justify-content: center; }
                 .m-backdrop-v2 { position: absolute; inset: 0; background: rgba(7, 27, 68, 0.4); backdrop-filter: blur(8px); }
 
-                /* Checkout Drawer */
-                .checkout-drawer-v2 { background: white; height: 100vh; width: 100%; max-width: 500px; display: flex; flex-direction: column; overflow: hidden; position: absolute; right: 0; top: 0; bottom: 0; box-shadow: -10px 0 40px rgba(0,0,0,0.1); }
-                .cdv2-header { padding: 24px; border-bottom: 1px solid #F2F4F7; display: flex; align-items: center; gap: 16px; }
-                .btn-cdv2-back { width: 44px; height: 44px; border-radius: 12px; border: none; background: #F9FAFB; display: flex; align-items: center; justify-content: center; }
-                .cdv2-body { flex: 1; min-height: 0; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
-                /* Premium Checkout Drawer */
-                .premium-bill-card { background: white; border: 1.5px solid #F2F4F7; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.03); }
-                .pbc-header { padding: 16px 20px; background: #F9FAFB; border-bottom: 1px solid #F2F4F7; display: flex; justify-content: space-between; align-items: center; }
-                .pbc-title { display: flex; align-items: center; gap: 8px; color: #101828; font-weight: 800; font-size: 14px; }
-                .pbc-count { font-size: 12px; font-weight: 700; color: #667085; background: white; padding: 4px 10px; border-radius: 8px; border: 1px solid #EAECF0; }
-                .pbc-items-list { padding: 12px 20px; display: flex; flex-direction: column; gap: 10px; }
-                .pbc-item-row { display: flex; justify-content: space-between; align-items: center; }
-                .pbc-item-info { display: flex; flex-direction: column; }
-                .pbc-item-name { font-size: 14px; font-weight: 700; color: #101828; }
-                .pbc-item-qty { font-size: 11px; font-weight: 600; color: #667085; }
-                .pbc-item-total { font-size: 14px; font-weight: 800; color: #101828; }
-                .pbc-divider { margin: 4px 20px; height: 1px; background: #F2F4F7; border-top: 2px dashed #EAECF0; }
-                .pbc-total-row { padding: 16px 20px; display: flex; justify-content: space-between; align-items: baseline; }
-                .pbc-total-row span:first-child { font-size: 14px; font-weight: 700; color: #667085; }
-                .pbc-grand-total { font-size: 24px; font-weight: 900; color: #071B44; }
+                .pos-header-cart-btn {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    background: white;
+                    color: #071B44;
+                    border: 1.5px solid #E2E8F0;
+                    padding: 8px 16px;
+                    border-radius: 14px;
+                    font-weight: 700;
+                    font-size: 14px;
+                    cursor: pointer;
+                    transition: 0.2s;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+                }
+                .pos-header-cart-btn:hover {
+                    border-color: #1E6BFF;
+                    color: #1E6BFF;
+                    background: #F5F9FF;
+                }
+                .pos-hcb-count {
+                    background: #1E6BFF;
+                    color: white;
+                    font-size: 11px;
+                    font-weight: 900;
+                    padding: 2px 8px;
+                    border-radius: 10px;
+                }
+
+                /* Checkout Drawer V2 */
+                .checkout-drawer-v2 { 
+                    background: #F8FAFC; 
+                    height: 100vh; 
+                    width: 100%; 
+                    max-width: 520px; 
+                    display: flex; 
+                    flex-direction: column; 
+                    overflow: hidden; 
+                    position: absolute; 
+                    right: 0; 
+                    top: 0; 
+                    bottom: 0; 
+                    box-shadow: -12px 0 50px rgba(7, 27, 68, 0.15); 
+                    z-index: 7001;
+                }
+                .cdv2-header { 
+                    padding: 18px 24px; 
+                    background: white;
+                    border-bottom: 1px solid #EAECF0; 
+                    display: flex; 
+                    align-items: center; 
+                    gap: 14px; 
+                    flex-shrink: 0;
+                }
+                .btn-cdv2-back { 
+                    width: 42px; 
+                    height: 42px; 
+                    border-radius: 12px; 
+                    border: 1px solid #EAECF0; 
+                    background: #F9FAFB; 
+                    color: #344054;
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                    cursor: pointer;
+                    transition: 0.2s;
+                }
+                .btn-cdv2-back:hover {
+                    background: #F2F4F7;
+                    color: #101828;
+                }
+                .cdv2-header-text h3 {
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #101828;
+                    margin: 0;
+                    line-height: 1.2;
+                }
+                .cdv2-header-text p {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #667085;
+                    margin: 2px 0 0 0;
+                }
+                .cdv2-body { 
+                    flex: 1; 
+                    min-height: 0; 
+                    overflow-y: auto; 
+                    padding: 20px 24px; 
+                    display: flex; 
+                    flex-direction: column; 
+                    gap: 18px; 
+                    background: #F8FAFC;
+                    -webkit-overflow-scrolling: touch;
+                }
+
+                /* Payment Summary Itemized Cart List */
+                .ps-header-right {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .ps-pill-badge {
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 3px 8px;
+                    border-radius: 8px;
+                }
+                .ps-badge-count {
+                    background: #EFF6FF;
+                    color: #1E6BFF;
+                    border: 1px solid #DBEAFE;
+                }
+                .ps-badge-qty {
+                    background: #F1F5F9;
+                    color: #475569;
+                    border: 1px solid #E2E8F0;
+                }
+                .ps-toggle-btn {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 6px;
+                    border: 1px solid #E2E8F0;
+                    background: white;
+                    color: #64748B;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: 0.15s;
+                    padding: 0;
+                }
+                .ps-toggle-btn:hover {
+                    background: #F1F5F9;
+                    color: #0F172A;
+                }
+                .ps-empty-wrap {
+                    padding: 18px 12px;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 6px;
+                    color: #94A3B8;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                .ps-cart-items-scrollable {
+                    max-height: 210px;
+                    overflow-y: auto;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    padding: 4px 2px 8px 2px;
+                    -webkit-overflow-scrolling: touch;
+                }
+                .ps-cart-items-scrollable::-webkit-scrollbar {
+                    width: 4px;
+                }
+                .ps-cart-items-scrollable::-webkit-scrollbar-thumb {
+                    background: #CBD5E1;
+                    border-radius: 4px;
+                }
+                .ps-cart-item-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px 12px;
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 12px;
+                    transition: 0.15s ease;
+                }
+                .ps-cart-item-row:hover {
+                    border-color: #CBD5E1;
+                    background: #F1F5F9;
+                }
+                .ps-item-left {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                    min-width: 0;
+                    flex: 1;
+                    padding-right: 8px;
+                }
+                .ps-item-title-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    flex-wrap: wrap;
+                }
+                .ps-item-name {
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: #0F172A;
+                    line-height: 1.2;
+                }
+                .ps-item-variant {
+                    font-size: 10px;
+                    font-weight: 700;
+                    padding: 1px 6px;
+                    background: #EFF6FF;
+                    color: #1E6BFF;
+                    border-radius: 6px;
+                    text-transform: uppercase;
+                }
+                .ps-item-equation-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .ps-item-equation {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #64748B;
+                }
+                .ps-item-right {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-shrink: 0;
+                }
+                .ps-item-stepper {
+                    display: flex;
+                    align-items: center;
+                    background: white;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 8px;
+                    padding: 2px 4px;
+                    gap: 2px;
+                    height: 28px;
+                }
+                .ps-item-stepper button {
+                    width: 22px;
+                    height: 22px;
+                    border: none;
+                    background: #F1F5F9;
+                    border-radius: 5px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #0F172A;
+                    cursor: pointer;
+                    transition: 0.15s;
+                }
+                .ps-item-stepper button:hover {
+                    background: #E2E8F0;
+                }
+                .ps-item-stepper-qty {
+                    padding: 0 4px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #0F172A;
+                    min-width: 20px;
+                    text-align: center;
+                }
+                .ps-item-line-total {
+                    font-size: 14px;
+                    font-weight: 900;
+                    color: #071B44;
+                    min-width: 50px;
+                    text-align: right;
+                }
+                .ps-item-delete {
+                    background: transparent;
+                    border: none;
+                    color: #94A3B8;
+                    cursor: pointer;
+                    padding: 4px;
+                    border-radius: 6px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: 0.15s;
+                }
+                .ps-item-delete:hover {
+                    color: #EF4444;
+                    background: #FEE2E2;
+                }
+                .ps-collapsed-bar {
+                    width: 100%;
+                    border: 1px dashed #CBD5E1;
+                    background: #F8FAFC;
+                    padding: 8px 12px;
+                    border-radius: 10px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #64748B;
+                    cursor: pointer;
+                    transition: 0.15s;
+                }
+                .ps-collapsed-bar:hover {
+                    background: #F1F5F9;
+                    color: #0F172A;
+                }
+                .ps-show-link {
+                    color: #1E6BFF;
+                    font-weight: 800;
+                }
+                .ps-divider {
+                    height: 1px;
+                    background: #E2E8F0;
+                    margin: 6px 0;
+                }
+
+                /* Shared Checkout Card */
+                .checkout-card {
+                    background: white;
+                    border: 1.5px solid #E2E8F0;
+                    border-radius: 20px;
+                    padding: 16px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.02);
+                }
+                .cc-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .cc-title-left {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: #334155;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                }
+                .cc-badge-green {
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #059669;
+                    background: #ECFDF5;
+                    padding: 3px 8px;
+                    border-radius: 8px;
+                    border: 1px solid #A7F3D0;
+                }
+                .cc-badge-muted {
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: #64748B;
+                    background: #F1F5F9;
+                    padding: 2px 8px;
+                    border-radius: 6px;
+                }
+
+                /* Discount Tabs & Input */
+                .discount-tabs-container {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .discount-segmented-group {
+                    display: flex;
+                    background: #F1F5F9;
+                    padding: 4px;
+                    border-radius: 12px;
+                    gap: 4px;
+                }
+                .ds-btn {
+                    flex: 1;
+                    border: none;
+                    background: transparent;
+                    color: #64748B;
+                    font-weight: 800;
+                    font-size: 12px;
+                    padding: 8px 10px;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: 0.2s;
+                }
+                .ds-btn.active {
+                    background: white;
+                    color: #071B44;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+                }
+                .discount-input-box {
+                    display: flex;
+                    align-items: center;
+                    background: white;
+                    border: 1.5px solid #CBD5E1;
+                    border-radius: 12px;
+                    padding: 0 12px;
+                    height: 42px;
+                }
+                .dib-prefix {
+                    font-size: 14px;
+                    font-weight: 800;
+                    color: #64748B;
+                    margin-right: 6px;
+                }
+                .discount-input-box input {
+                    border: none;
+                    outline: none;
+                    background: transparent;
+                    flex: 1;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #0F172A;
+                }
+
+                /* Final Total Card */
+                .final-total-card {
+                    background: #F8FAFC;
+                    border-color: #CBD5E1;
+                }
+                .final-total-content {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+                .ft-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .ft-label {
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #64748B;
+                }
+                .ft-val {
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #1E293B;
+                }
+                .ft-discount .ft-label, .ft-discount .ft-val {
+                    color: #059669;
+                    font-weight: 700;
+                }
+                .ft-due .ft-label, .ft-due .ft-val {
+                    color: #DC2626;
+                    font-weight: 800;
+                }
+                .ft-divider {
+                    height: 1px;
+                    background: #E2E8F0;
+                    margin: 4px 0;
+                }
+                .ft-grand-total {
+                    padding-top: 4px;
+                }
+                .ft-grand-titles {
+                    display: flex;
+                    flex-direction: column;
+                }
+                .ft-grand-label {
+                    font-size: 16px;
+                    font-weight: 900;
+                    color: #071B44;
+                }
+                .ft-grand-sub {
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: #64748B;
+                }
+                .ft-grand-val {
+                    font-size: 22px;
+                    font-weight: 900;
+                    color: #071B44;
+                }
+
+                /* Fixed Bottom Footer */
+                .cdv2-footer {
+                    padding: 16px 24px;
+                    background: white;
+                    border-top: 1.5px solid #EAECF0;
+                    box-shadow: 0 -8px 24px rgba(7, 27, 68, 0.05);
+                    flex-shrink: 0;
+                    z-index: 10;
+                }
+                .btn-final-v2 { 
+                    width: 100%; 
+                    height: 54px; 
+                    background: #071B44; 
+                    color: white; 
+                    border: none; 
+                    border-radius: 16px; 
+                    font-size: 17px; 
+                    font-weight: 800; 
+                    cursor: pointer; 
+                    transition: all 0.2s ease;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    box-shadow: 0 8px 20px rgba(7, 27, 68, 0.2);
+                }
+                .btn-final-v2:not(:disabled):hover {
+                    background: #0d2864;
+                    transform: translateY(-1px);
+                    box-shadow: 0 10px 24px rgba(7, 27, 68, 0.25);
+                }
+                .btn-final-v2:disabled {
+                    background: #94A3B8;
+                    cursor: not-allowed;
+                    box-shadow: none;
+                    opacity: 0.75;
+                }
 
                 .pm-section-v2 { display: flex; flex-direction: column; gap: 12px; }
                 .pm-section-v2 label { font-size: 13px; font-weight: 800; color: #667085; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1171,24 +2231,39 @@ const POSPage = () => {
                     .checkout-drawer-v2 { 
                         width: 100%; 
                         max-width: 100%; 
-                        height: 90dvh; 
+                        height: 92dvh; 
                         top: auto; 
                         bottom: 0; 
-                        border-radius: 32px 32px 0 0; 
-                        box-shadow: 0 -10px 40px rgba(0,0,0,0.1);
+                        border-radius: 28px 28px 0 0; 
+                        box-shadow: 0 -10px 40px rgba(0,0,0,0.15);
                         transform: translateY(0);
                         padding-bottom: var(--keyboard-height);
                         transition: padding-bottom 0.15s ease-out;
                     }
-                    .cdv2-header { padding: 12px 16px; height: 56px; border-bottom: 1px solid #F2F4F7; position: sticky; top: 0; background: white; z-index: 20; border-radius: 32px 32px 0 0; }
+                    .cdv2-header { 
+                        padding: 14px 18px; 
+                        height: 56px; 
+                        border-bottom: 1px solid #EAECF0; 
+                        position: sticky; 
+                        top: 0; 
+                        background: white; 
+                        z-index: 20; 
+                        border-radius: 28px 28px 0 0; 
+                    }
                     .btn-cdv2-back { width: 36px; height: 36px; border-radius: 10px; }
-                    .cdv2-body { padding: 16px; gap: 20px; min-height: 0; overflow-y: auto; }
+                    .cdv2-body { padding: 14px 16px; gap: 14px; min-height: 0; overflow-y: auto; }
                     
-                    .premium-bill-card { border-radius: 20px; }
-                    .pbc-header { padding: 12px 16px; }
-                    .pbc-items-list { padding: 10px 16px; }
-                    .pbc-item-name { font-size: 13px; }
-                    .pbc-grand-total { font-size: 20px; }
+                    .ps-cart-items-scrollable { max-height: 180px; gap: 6px; }
+                    .ps-cart-item-row { padding: 8px 10px; }
+                    .ps-item-name { font-size: 12px; }
+                    .ps-item-equation { font-size: 11px; }
+                    .ps-item-line-total { font-size: 13px; min-width: 45px; }
+                    .ps-item-stepper { height: 26px; }
+                    .ps-item-stepper button { width: 20px; height: 20px; }
+                    .ps-item-stepper-qty { font-size: 10px; padding: 0 3px; }
+
+                    .checkout-card { border-radius: 16px; padding: 14px; gap: 10px; }
+                    .final-total-card { border-radius: 16px; padding: 14px; }
 
                     .pm-grid-v2 { gap: 8px; }
                     .pm-grid-v2 button { height: 64px; border-radius: 14px; }
@@ -1197,7 +2272,8 @@ const POSPage = () => {
                     .cust-input-v2 { height: 48px; border-radius: 14px; padding: 0 12px; }
                     .cust-input-v2 input { font-size: 14px; }
 
-                    .btn-final-v2 { height: 56px; border-radius: 16px; font-size: 18px; }
+                    .cdv2-footer { padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+                    .btn-final-v2 { height: 50px; border-radius: 14px; font-size: 16px; }
                     
                     .khata-picker-sheet { 
                         height: 90dvh; 

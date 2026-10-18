@@ -5,6 +5,7 @@ import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, CustomSelect, ConfirmModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
+import PrintFormatSelector from '../components/PrintFormatSelector';
 
 const ShopsPage = () => {
     const [shops, setShops] = useState([]);
@@ -25,7 +26,8 @@ const ShopsPage = () => {
         gstNumber: '',
         email: '',
         footerMessage: 'Thank you visit again',
-        upiId: ''
+        upiId: '',
+        defaultPrintFormat: 'full_a4'
     });
     const [step, setStep] = useState(1);
     const [formErrors, setFormErrors] = useState({});
@@ -75,7 +77,8 @@ const ShopsPage = () => {
                 gstNumber: shop.gstNumber || '',
                 email: shop.email || '',
                 footerMessage: shop.footerMessage || 'Thank you visit again',
-                upiId: shop.upiId || ''
+                upiId: shop.upiId || '',
+                defaultPrintFormat: shop.defaultPrintFormat || 'full_a4'
             });
         } else {
             setCurrentShop(null);
@@ -92,7 +95,8 @@ const ShopsPage = () => {
                 gstNumber: '',
                 email: '',
                 footerMessage: 'Thank you visit again',
-                upiId: ''
+                upiId: '',
+                defaultPrintFormat: 'full_a4'
             });
         }
         setStep(1);
@@ -484,6 +488,16 @@ const ShopsPage = () => {
                                                 placeholder="Thank you visit again"
                                                 value={formData.footerMessage}
                                                 onChange={(e) => setFormData({...formData, footerMessage: e.target.value})}
+                                            />
+                                        </div>
+
+                                        <div className="input-group-premium">
+                                            <label>Default Bill Print Format</label>
+                                            <PrintFormatSelector 
+                                                value={formData.defaultPrintFormat || 'full_a4'}
+                                                onChange={(newFormat) => setFormData({ ...formData, defaultPrintFormat: newFormat })}
+                                                mode="select"
+                                                showPrinterTip={false}
                                             />
                                         </div>
                                     </motion.div>

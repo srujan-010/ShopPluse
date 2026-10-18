@@ -15,7 +15,7 @@ const PurchaseDetailsPage = () => {
     const [loading, setLoading] = useState(true);
     const [showReceivePayment, setShowReceivePayment] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [paymentInput, setPaymentInput] = useState({ amount: '', mode: 'Cash', note: '' });
+    const [paymentInput, setPaymentInput] = useState({ amount: '', mode: 'Cash', note: '', remark: '' });
     
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
     const [isItemsExpanded, setIsItemsExpanded] = useState(false);
@@ -63,10 +63,11 @@ const PurchaseDetailsPage = () => {
             await purchaseService.addPayment(purchaseId, {
                 amount: Number(paymentInput.amount),
                 mode: paymentInput.mode,
-                note: paymentInput.note
+                remark: paymentInput.remark || paymentInput.note,
+                note: paymentInput.remark || paymentInput.note
             });
             showToast("Payment recorded successfully!", "success");
-            setPaymentInput({ amount: '', mode: 'Cash', note: '' });
+            setPaymentInput({ amount: '', mode: 'Cash', note: '', remark: '' });
             setShowReceivePayment(false);
             fetchPurchaseDetails();
         } catch (error) {
@@ -278,7 +279,7 @@ const PurchaseDetailsPage = () => {
                                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F0FDF4', borderRadius: '12px', padding: '12px 14px', borderLeft: '4px solid #10B981' }}>
                                         <div>
                                             <div style={{ fontSize: '15px', fontWeight: '800', color: '#065F46' }}>₹{(h.amount||0).toLocaleString()}</div>
-                                            <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>via {h.mode}{h.note ? ` · ${h.note}` : ''}</div>
+                                            <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>via {h.mode}{(h.remark || h.note) ? ` · ${h.remark || h.note}` : ''}</div>
                                         </div>
                                         <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '600', background: 'white', padding: '4px 8px', borderRadius: '6px', border: '1px solid #D1FAE5', flexShrink: 0 }}>
                                             {new Date(h.paidAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
@@ -314,11 +315,11 @@ const PurchaseDetailsPage = () => {
                                 <select value={paymentInput.mode} onChange={e => setPaymentInput({...paymentInput, mode: e.target.value})}
                                     style={{ flex: 1, height: '44px', padding: '0 12px', borderRadius: '12px', border: '2px solid #E2E8F0', fontSize: '14px', fontWeight: '600', outline: 'none' }}>
                                     <option value="Cash">Cash</option>
-                                    <option value="UPI">UPI</option>
-                                    <option value="Bank">Bank</option>
+                                    <option value="Online">Online / UPI</option>
+                                    <option value="Bank Transfer">Bank Transfer</option>
                                 </select>
-                                <input type="text" placeholder="Note (optional)" value={paymentInput.note}
-                                    onChange={e => setPaymentInput({...paymentInput, note: e.target.value})}
+                                <input type="text" placeholder="Remark (optional)" value={paymentInput.remark || paymentInput.note}
+                                    onChange={e => setPaymentInput({...paymentInput, note: e.target.value, remark: e.target.value})}
                                     style={{ flex: 1, height: '44px', padding: '0 12px', borderRadius: '12px', border: '2px solid #E2E8F0', fontSize: '14px', outline: 'none' }} />
                             </div>
                             <div style={{ display: 'flex', gap: '10px' }}>
@@ -599,18 +600,18 @@ const PurchaseDetailsPage = () => {
                                         onChange={e => setPaymentInput({...paymentInput, mode: e.target.value})}
                                     >
                                         <option value="Cash">Cash</option>
-                                        <option value="UPI">UPI</option>
-                                        <option value="Bank">Bank</option>
+                                        <option value="Online">Online / UPI</option>
+                                        <option value="Bank Transfer">Bank Transfer</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: '700', color: '#92400E', display: 'block', marginBottom: '6px' }}>Note (Optional)</label>
+                                    <label style={{ fontSize: '12px', fontWeight: '700', color: '#92400E', display: 'block', marginBottom: '6px' }}>Remark (Optional)</label>
                                     <input 
                                         type="text" 
-                                        placeholder="Internal reference" 
+                                        placeholder="e.g. Bank name, Ref / Cheque No" 
                                         style={{ width: '100%', height: '44px', padding: '0 16px', borderRadius: '10px', border: '1px solid #FCD34D', outline: 'none', fontSize: '15px', fontWeight: '600', background: 'white' }} 
-                                        value={paymentInput.note} 
-                                        onChange={e => setPaymentInput({...paymentInput, note: e.target.value})} 
+                                        value={paymentInput.remark || paymentInput.note} 
+                                        onChange={e => setPaymentInput({...paymentInput, note: e.target.value, remark: e.target.value})} 
                                     />
                                 </div>
                                 <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>

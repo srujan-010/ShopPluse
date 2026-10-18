@@ -26,6 +26,9 @@ import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { invoiceService } from '../utils/invoiceService';
 import { useToast } from '../context/ToastContext';
+import CompactInvoiceSheet from '../components/CompactInvoiceSheet';
+import PrintFormatSelector from '../components/PrintFormatSelector';
+import { getFormatOption, applyPrintPageStyles } from '../utils/printFormatConstants';
 
 const KhataPage = () => {
     const { shopId } = useParams();
@@ -51,6 +54,9 @@ const KhataPage = () => {
     const [isInvoiceOpen, setIsInvoiceOpen] = useState(false);
     const [selectedSaleForInvoice, setSelectedSaleForInvoice] = useState(null);
     const [invoiceLoading, setInvoiceLoading] = useState(false);
+    const [printFormatOverride, setPrintFormatOverride] = useState(null);
+
+    const activePrintFormat = printFormatOverride || shop?.defaultPrintFormat || 'full_a4';
     
     // Transaction Details Modal
     const [selectedTxn, setSelectedTxn] = useState(null);
@@ -207,34 +213,36 @@ const KhataPage = () => {
     const handleViewBill = async (saleId) => {
         if (!saleId) return;
         
+        const fallback = txnSaleDetails || null;
+        if (fallback) setSelectedSaleForInvoice(fallback);
+
         // Close modal first
         setIsTxnModalOpen(false);
         setSelectedTxn(null);
         setTxnSaleDetails(null);
 
-        // Delay then open invoice
-        setTimeout(async () => {
-            setInvoiceLoading(true);
-            setIsInvoiceOpen(true);
-            try {
-                const res = await saleService.getSale(saleId);
+        setIsInvoiceOpen(true);
+        setInvoiceLoading(!fallback);
+        try {
+            const res = await saleService.getSale(saleId);
+            if (res.data?.data) {
                 setSelectedSaleForInvoice(res.data.data);
-            } catch (err) {
-                console.error('Failed to fetch bill:', err);
-            } finally {
-                setInvoiceLoading(false);
             }
-        }, 150);
+        } catch (err) {
+            console.error('Failed to fetch bill:', err);
+        } finally {
+            setInvoiceLoading(false);
+        }
     };
 
     const handleDownloadPDF = () => {
         if (!selectedSaleForInvoice) return;
-        invoiceService.downloadInvoice(selectedSaleForInvoice, shop, 'SALE');
+        invoiceService.downloadInvoice(selectedSaleForInvoice, shop, 'SALE', { format: activePrintFormat });
     };
 
     const handleShareWhatsApp = () => {
         if (!selectedSaleForInvoice) return;
-        invoiceService.shareInvoice(selectedSaleForInvoice, shop, 'SALE');
+        invoiceService.shareInvoice(selectedSaleForInvoice, shop, 'SALE', { format: activePrintFormat });
     };
 
     const filteredCustomers = customers.filter(c => 
@@ -497,14 +505,40 @@ const KhataPage = () => {
                         exit={{ opacity: 0 }}
                         className="invoice-preview-screen"
                     >
-                        <div className="ips-top-bar">
-                            <button className="ips-back-btn" onClick={() => setIsInvoiceOpen(false)}>
+                        <div className="ips-top-bar no-print">
+                            <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>
                                 <ChevronLeft size={20} />
                                 <span>Back</span>
                             </button>
-                            <h2>Invoice Preview</h2>
+                            <div className="ips-title-area">
+                                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
+                                    View Bill
+                                </h2>
+                                <div style={{ marginTop: '4px' }}>
+                                    <PrintFormatSelector 
+                                        value={activePrintFormat}
+                                        onChange={(fmt) => setPrintFormatOverride(fmt)}
+                                        savedDefault={shop?.defaultPrintFormat || 'full_a4'}
+                                        shopId={shopId || shop?._id}
+                                        onShopUpdate={(updated) => {
+                                            setShop(updated);
+                                            setPrintFormatOverride(null);
+                                        }}
+                                        mode="pills"
+                                        showPrinterTip={false}
+                                    />
+                                </div>
+                            </div>
                             <div style={{ width: 60 }} />
                         </div>
+
+                        {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
+                            <div className="ips-printer-tip-bar no-print">
+                                <span>
+                                    <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
+                                </span>
+                            </div>
+                        )}
 
                         <div className="ips-content">
                             {invoiceLoading ? (
@@ -512,162 +546,29 @@ const KhataPage = () => {
                             ) : !selectedSaleForInvoice ? (
                                 <div className="ips-error">Bill details could not be found.</div>
                             ) : (
-                                <div className="printable-invoice-sheet">
-                                    <div className="pis-header">
-                                        <div className="pis-logo-circle">{(shop?.name || 'S')[0]}</div>
-                                        <h1 className="pis-shop-name">{shop?.name || 'ShopPulse Business'}</h1>
-                                        <p className="pis-shop-address">{shop?.location || 'Ankisa, Maharashtra'}</p>
-                                        <p className="pis-shop-contact">Phone: {shop?.contactNumber || 'XXXXXXXXXX'} | GSTIN: {shop?.gstNumber || 'N/A'}</p>
-                                    </div>
-
-                                    <div className="pis-divider-solid"></div>
-
-                                    <div className="pis-info-grid">
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">INVOICE DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Invoice No:</label>
-                                                <strong>#{selectedSaleForInvoice._id.slice(-6).toUpperCase()}</strong>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Date:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleDateString('en-IN')}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Time:</label>
-                                                <span>{new Date(selectedSaleForInvoice.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="pis-info-row">
-                                                <label>Payment:</label>
-                                                <strong className="pis-payment-method">{selectedSaleForInvoice.paymentMethod?.toUpperCase() || 'KHATA'}</strong>
-                                            </div>
-                                        </div>
-                                        <div className="pis-info-col">
-                                            <span className="pis-info-label">CUSTOMER DETAILS</span>
-                                            <div className="pis-info-row">
-                                                <label>Name:</label>
-                                                <strong>{selectedSaleForInvoice.customerName || 'Walk-in Customer'}</strong>
-                                            </div>
-                                            {selectedSaleForInvoice.customerMobile && (
-                                                <div className="pis-info-row">
-                                                    <label>Mobile:</label>
-                                                    <span>{selectedSaleForInvoice.customerMobile}</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="table-responsive-wrapper">
-                                        <table className="pis-items-table-v2">
-                                            <thead>
-                                                <tr>
-                                                    <th style={{ width: '40px' }}>Sl</th>
-                                                    <th>Product Description</th>
-                                                    <th style={{ textAlign: 'center' }}>Qty</th>
-                                                    <th style={{ textAlign: 'right' }}>Rate</th>
-                                                    <th style={{ textAlign: 'right' }}>Amount</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                                    <tr key={i}>
-                                                        <td>{i + 1}</td>
-                                                        <td>{item.productName}</td>
-                                                        <td style={{ textAlign: 'center' }}>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</td>
-                                                        <td style={{ textAlign: 'right' }}>₹{(item.pricePerBaseUnit || item.price || (item.totalPrice / item.quantity)).toFixed(2)}</td>
-                                                        <td style={{ textAlign: 'right' }}>₹{(item.totalPrice || ((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity))).toFixed(2)}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-
-                                    {/* Mobile Item Cards (Stacked Layout) */}
-                                    <div className="pis-items-mobile-list">
-                                        {(selectedSaleForInvoice.items || []).map((item, i) => (
-                                            <div key={i} className="pis-mobile-item-card">
-                                                <div className="pmic-header">
-                                                    <span className="pmic-sl">#{i + 1}</span>
-                                                    <span className="pmic-name">{item.productName}</span>
-                                                </div>
-                                                <div className="pmic-body">
-                                                    <div className="pmic-col">
-                                                        <label>Qty</label>
-                                                        <span>{item.soldQtyEntered || item.quantity} {item.soldUnit || item.unit || 'Pc'}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Rate</label>
-                                                        <span>₹{(item.pricePerBaseUnit || item.price || (item.totalPrice / item.quantity)).toFixed(2)}</span>
-                                                    </div>
-                                                    <div className="pmic-col">
-                                                        <label>Amount</label>
-                                                        <strong>₹{(item.totalPrice || ((item.pricePerBaseUnit || item.price) * (item.soldQtyEntered || item.quantity))).toFixed(2)}</strong>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {(() => {
-                                        const discount = selectedSaleForInvoice.discount || selectedSaleForInvoice.discountAmount || 0;
-                                        const grandTotal = selectedSaleForInvoice.totalAmount || 0;
-                                        const subtotal = grandTotal + discount;
-                                        const paidAmount = selectedSaleForInvoice.paidAmount !== undefined ? selectedSaleForInvoice.paidAmount : (selectedSaleForInvoice.paymentStatus === 'Paid' || !selectedSaleForInvoice.paymentStatus ? grandTotal : 0);
-                                        const remainingAmount = selectedSaleForInvoice.remainingAmount !== undefined ? selectedSaleForInvoice.remainingAmount : (selectedSaleForInvoice.paymentStatus === 'Unpaid' ? grandTotal : 0);
-                                        const paymentStatus = selectedSaleForInvoice.paymentStatus || 'Paid';
-                                        
-                                        return (
-                                            <div className="pis-summary-v2">
-                                                <div className="pis-summary-box">
-                                                    <div className="pis-sum-row">
-                                                        <span>Subtotal:</span>
-                                                        <span>₹{subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                    {discount > 0 && (
-                                                        <div className="pis-sum-row discount">
-                                                            <span>Discount:</span>
-                                                            <span>- ₹{discount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                        </div>
-                                                    )}
-                                                    <div className="pis-sum-row grand">
-                                                        <span>GRAND TOTAL:</span>
-                                                        <span>₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                    <div className="pis-sum-row" style={{ paddingTop: '8px', borderTop: '1px dashed #E2E8F0', marginTop: '4px' }}>
-                                                        <span>Paid Amount:</span>
-                                                        <span style={{ color: '#067647', fontWeight: 600 }}>₹{paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                    <div className="pis-sum-row">
-                                                        <span>Due Amount:</span>
-                                                        <span style={{ color: remainingAmount > 0 ? '#B45309' : '#64748B', fontWeight: 600 }}>₹{remainingAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                    <div className="pis-sum-row">
-                                                        <span>Payment Status:</span>
-                                                        <span className={`status-badge-new ${paymentStatus.toLowerCase()}`} style={{ padding: '2px 8px', fontSize: '11px', borderRadius: '6px' }}>
-                                                            {paymentStatus === 'Paid' ? '🟢 Paid' : paymentStatus === 'Partial' ? '🟡 Partial' : '🔴 Unpaid'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })()}
-
-                                    <div className="pis-footer-v2">
-                                        <div className="pis-footer-divider"></div>
-                                        <h3>Thank you for your business!</h3>
-                                        <p>Returns accepted within 7 days with original bill.</p>
-                                        <p>This is a computer generated invoice.</p>
-                                        <div className="pis-brand-footer">Generated by ShopPulse POS</div>
-                                    </div>
-                                </div>
+                                <CompactInvoiceSheet 
+                                    bill1={selectedSaleForInvoice}
+                                    shop={shop}
+                                    format={activePrintFormat}
+                                />
                             )}
                         </div>
 
-                        <div className="ips-actions-bar">
+                        <div className="ips-actions-bar no-print">
                             <button className="ips-btn ips-wa" onClick={handleShareWhatsApp}>WhatsApp</button>
-                            <button className="ips-btn ips-pdf" onClick={handleDownloadPDF}>PDF</button>
-                            <button className="ips-btn ips-print" onClick={() => window.print()}>Print</button>
-                            <button className="ips-btn ips-close" onClick={() => setIsInvoiceOpen(false)}>Close</button>
+                            <button className="ips-btn ips-pdf" onClick={handleDownloadPDF}>
+                                Download PDF ({getFormatOption(activePrintFormat).name})
+                            </button>
+                            <button 
+                                className="ips-btn ips-print" 
+                                onClick={() => {
+                                    applyPrintPageStyles(activePrintFormat);
+                                    window.print();
+                                }}
+                            >
+                                Print ({getFormatOption(activePrintFormat).name})
+                            </button>
+                            <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>Close</button>
                         </div>
                     </motion.div>
                 )}

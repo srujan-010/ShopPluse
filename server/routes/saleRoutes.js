@@ -6,6 +6,15 @@ const router = express.Router();
 
 router.use(protect);
 
+// Dynamic transactional data must never be cached or return 304
+router.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+    next();
+});
+
 router.get('/stats', getStats);
 router.get('/reports', getReports);
 router.get('/history', getSalesHistory);

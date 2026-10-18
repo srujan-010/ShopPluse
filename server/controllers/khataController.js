@@ -11,7 +11,7 @@ exports.getKhataCustomers = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Provide a valid shopId' });
         }
 
-        const khataRecords = await Khata.find({ shop: shopId, owner: req.user.id }).sort({ updatedAt: -1 });
+        const khataRecords = await Khata.find({ shop: shopId }).sort({ updatedAt: -1 });
         res.status(200).json({ success: true, data: khataRecords });
     } catch (error) {
         console.error('Error in getKhataCustomers:', error);
@@ -24,7 +24,7 @@ exports.getKhataCustomers = async (req, res) => {
 // @access  Private
 exports.getKhataDetails = async (req, res) => {
     try {
-        const khataRecord = await Khata.findOne({ _id: req.params.id, owner: req.user.id });
+        const khataRecord = await Khata.findOne({ _id: req.params.id });
         if (!khataRecord) {
             return res.status(404).json({ success: false, message: 'Khata record not found' });
         }

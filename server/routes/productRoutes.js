@@ -1,5 +1,14 @@
 const express = require('express');
-const { getProducts, createProduct, updateProduct, deleteProduct, getProductRestockHistory, getProductInventoryHistory, restockProduct } = require('../controllers/productController');
+const { 
+    getProducts, 
+    createProduct, 
+    updateProduct, 
+    deleteProduct, 
+    getProductRestockHistory, 
+    getProductInventoryHistory, 
+    restockProduct,
+    getExpiryAlerts
+} = require('../controllers/productController');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -9,6 +18,8 @@ router.use(protect);
 router.route('/')
     .get(getProducts)
     .post(createProduct);
+
+router.get('/expiry-alerts', getExpiryAlerts);
 
 router.route('/:id')
     .put(updateProduct)

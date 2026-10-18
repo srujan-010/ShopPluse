@@ -63,7 +63,46 @@ const productSchema = new mongoose.Schema({
         min: 0,
         max: 100
     },
+    isGstApplicable: {
+        type: Boolean,
+        default: false
+    },
+    gstRate: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 100
+    },
+    gstPricingMode: {
+        type: String,
+        enum: ['inclusive', 'exclusive'],
+        default: 'inclusive'
+    },
     expiryDate: Date,
+    batchNumber: {
+        type: String,
+        trim: true
+    },
+    batches: [{
+        batchNumber: {
+            type: String,
+            trim: true
+        },
+        quantity: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+        expiryDate: Date,
+        buyPrice: {
+            type: Number,
+            default: 0
+        },
+        sellPrice: {
+            type: Number,
+            default: 0
+        }
+    }],
     supplier: String,
     notes: String,
     shop: {
@@ -79,6 +118,20 @@ const productSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    }
+});
+
+productSchema.pre('save', function () {
+    if (this.gstRate !== undefined) {
+        this.gst = this.gstRate;
+    } else if (this.gst !== undefined) {
+        this.gstRate = this.gst;
+    }
+    if (this.isGstApplicable === undefined) {
+        this.isGstApplicable = (this.gstRate || this.gst || 0) > 0;
+    }
+    if (!this.gstPricingMode) {
+        this.gstPricingMode = 'inclusive';
     }
 });
 

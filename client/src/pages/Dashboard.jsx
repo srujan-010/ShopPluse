@@ -31,10 +31,14 @@ import {
     LayoutGrid,
     MapPin,
     RotateCcw,
-    RefreshCw
+    RefreshCw,
+    Search,
+    X,
+    ExternalLink,
+    ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { saleService, shopService } from '../services/api';
+import { saleService, shopService, productService } from '../services/api';
 import { offlineDB } from '../services/offlineDB';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton } from '../components/PremiumUI';
@@ -49,6 +53,87 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(true);
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
     const [activityFilter, setActivityFilter] = useState('All');
+    const [expiryModalOpen, setExpiryModalOpen] = useState(false);
+    const [expiryModalTab, setExpiryModalTab] = useState('expiring');
+
+    const expiryMetrics = stats?.pendingMetrics?.expiryAlerts || stats?.expiryAlerts || {
+        expiringSoonCount: 0,
+        expiredCount: 0,
+        nearestExpiryDays: null,
+        nearestExpiryDate: null,
+        urgency: 'none'
+    };
+    const expiringCount = expiryMetrics.expiringSoonCount || 0;
+    const expiredCount = expiryMetrics.expiredCount || 0;
+    const nearestDays = expiryMetrics.nearestExpiryDays;
+    const nearestDate = expiryMetrics.nearestExpiryDate;
+    const expiryUrgency = expiryMetrics.urgency || 'none';
+
+    const handleOpenExpiryModal = (tab = 'expiring') => {
+        setExpiryModalTab(tab);
+        setExpiryModalOpen(true);
+    };
+
+    const formatNearestExpiry = (dateStr, days) => {
+        if (days === null || days === undefined) return '';
+        if (days === 0) return 'Nearest: Today';
+        if (days === 1) return 'Nearest: Tomorrow (1d left)';
+        if (!dateStr) return `Nearest: in ${days} days`;
+        try {
+            const d = new Date(dateStr);
+            const formatted = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+            return `Nearest: ${formatted} (${days}d left)`;
+        } catch (e) {
+            return `Nearest: in ${days} days`;
+        }
+    };
+
+    const getExpiryTheme = (urgency, count) => {
+        if (count === 0) {
+            return {
+                bg: '#F8FDF9',
+                border: '#D1FADF',
+                color: '#027A48',
+                iconBg: '#ECFDF3',
+                badgeBg: '#D1FADF',
+                badgeColor: '#027A48',
+                textColor: '#027A48'
+            };
+        }
+        if (urgency === 'critical') {
+            return {
+                bg: '#FEF3F2',
+                border: '#FECDCA',
+                color: '#B42318',
+                iconBg: '#FEE4E2',
+                badgeBg: '#FECDCA',
+                badgeColor: '#912018',
+                textColor: '#912018'
+            };
+        }
+        if (urgency === 'warning') {
+            return {
+                bg: '#FFF6ED',
+                border: '#FEE4E2',
+                color: '#C4320A',
+                iconBg: '#FFECE5',
+                badgeBg: '#FEDAD0',
+                badgeColor: '#B93815',
+                textColor: '#B93815'
+            };
+        }
+        return {
+            bg: '#FFFAEB',
+            border: '#FEDF89',
+            color: '#B54708',
+            iconBg: '#FEF0C7',
+            badgeBg: '#FEDF89',
+            badgeColor: '#93370D',
+            textColor: '#93370D'
+        };
+    };
+
+    const expiryTheme = getExpiryTheme(expiryUrgency, expiringCount);
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -197,6 +282,66 @@ const Dashboard = () => {
                                     <span>Khata credit</span>
                                 </div>
                             </div>
+
+                            {/* Expiring Soon Alert Card */}
+                            <div 
+                                className="alert-card expiry-card-interactive" 
+                                onClick={() => handleOpenExpiryModal('expiring')}
+                                style={{ 
+                                    background: expiryTheme.bg,
+                                    border: `1px solid ${expiryTheme.border}`
+                                }}
+                            >
+                                <div className="alert-icon" style={{ background: expiryTheme.iconBg, color: expiryTheme.color }}>
+                                    {expiringCount > 0 ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+                                </div>
+                                <div className="alert-text">
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <strong style={{ color: expiryTheme.textColor }}>
+                                            {expiringCount > 0 
+                                                ? `${expiringCount} ${expiringCount === 1 ? 'batch' : 'batches'} expiring`
+                                                : '0 batches expiring'}
+                                        </strong>
+                                        {expiringCount > 0 && nearestDays !== null && (
+                                            <span className="urgency-badge" style={{ background: expiryTheme.badgeBg, color: expiryTheme.badgeColor }}>
+                                                {nearestDays === 0 ? 'Today' : `${nearestDays}d`}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <span style={{ color: expiringCount > 0 ? '#475467' : '#027A48' }}>
+                                        {expiringCount > 0 
+                                            ? `${expiringCount} ${expiringCount === 1 ? 'batch' : 'batches'} expiring within 45 days`
+                                            : 'No products expiring within 45 days'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Expired Stock Alert Card (Separate red alert if any expired) */}
+                            {expiredCount > 0 && (
+                                <div 
+                                    className="alert-card expired-card-interactive" 
+                                    onClick={() => handleOpenExpiryModal('expired')}
+                                    style={{ 
+                                        background: '#FEF2F2',
+                                        border: '1px solid #FCA5A5'
+                                    }}
+                                >
+                                    <div className="alert-icon" style={{ background: '#FEE4E2', color: '#D92D20' }}>
+                                        <XCircle size={16} />
+                                    </div>
+                                    <div className="alert-text">
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <strong style={{ color: '#991B1B' }}>
+                                                {expiredCount} {expiredCount === 1 ? 'batch' : 'batches'} expired
+                                            </strong>
+                                            <span className="urgency-badge" style={{ background: '#FEE4E2', color: '#B42318' }}>
+                                                Expired Stock
+                                            </span>
+                                        </div>
+                                        <span style={{ color: '#B42318' }}>Requires immediate clearance</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </section>
 
@@ -280,6 +425,68 @@ const Dashboard = () => {
                                 </div>
                                 <ArrowRight size={20} className="arrow-icon-desktop" />
                             </div>
+
+                            {/* Expiring Soon Alert Card */}
+                            <div 
+                                className="alert-card expiry-card-interactive" 
+                                onClick={() => handleOpenExpiryModal('expiring')}
+                                style={{ 
+                                    background: expiryTheme.bg,
+                                    border: `1px solid ${expiryTheme.border}`
+                                }}
+                            >
+                                <div className="alert-icon" style={{ background: expiryTheme.iconBg, color: expiryTheme.color }}>
+                                    {expiringCount > 0 ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
+                                </div>
+                                <div className="alert-text">
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                        <strong style={{ color: expiryTheme.textColor }}>
+                                            {expiringCount > 0 
+                                                ? `${expiringCount} ${expiringCount === 1 ? 'batch' : 'batches'} expiring`
+                                                : '0 batches expiring'}
+                                        </strong>
+                                        {expiringCount > 0 && nearestDays !== null && (
+                                            <span className="urgency-badge" style={{ background: expiryTheme.badgeBg, color: expiryTheme.badgeColor }}>
+                                                {nearestDays === 0 ? 'Today' : `${nearestDays}d left`}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <span style={{ color: expiringCount > 0 ? '#475467' : '#027A48' }}>
+                                        {expiringCount > 0 
+                                            ? `${expiringCount} ${expiringCount === 1 ? 'batch' : 'batches'} expiring within 45 days • ${formatNearestExpiry(nearestDate, nearestDays)}`
+                                            : 'No products expiring within 45 days'}
+                                    </span>
+                                </div>
+                                <ArrowRight size={20} className="arrow-icon-desktop" />
+                            </div>
+
+                            {/* Expired Stock Alert Card (Separate red alert if any expired) */}
+                            {expiredCount > 0 && (
+                                <div 
+                                    className="alert-card expired-card-interactive" 
+                                    onClick={() => handleOpenExpiryModal('expired')}
+                                    style={{ 
+                                        background: '#FEF2F2',
+                                        border: '1px solid #FCA5A5'
+                                    }}
+                                >
+                                    <div className="alert-icon" style={{ background: '#FEE4E2', color: '#D92D20' }}>
+                                        <XCircle size={20} />
+                                    </div>
+                                    <div className="alert-text">
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                            <strong style={{ color: '#991B1B' }}>
+                                                {expiredCount} {expiredCount === 1 ? 'batch' : 'batches'} expired
+                                            </strong>
+                                            <span className="urgency-badge" style={{ background: '#FEE4E2', color: '#B42318' }}>
+                                                Expired Stock
+                                            </span>
+                                        </div>
+                                        <span style={{ color: '#B42318' }}>Requires immediate clearance</span>
+                                    </div>
+                                    <ArrowRight size={20} className="arrow-icon-desktop" />
+                                </div>
+                            )}
                         </div>
                     </section>
 
@@ -392,6 +599,15 @@ const Dashboard = () => {
                 </div>
             </section>
 
+            {/* Expiry Management Modal */}
+            <ExpiryManagementModal 
+                isOpen={expiryModalOpen}
+                onClose={() => setExpiryModalOpen(false)}
+                shopId={shopId}
+                currentShopName={shop?.name}
+                initialTab={expiryModalTab}
+            />
+
             <style jsx="true">{`
                 .premium-dashboard { display: flex; flex-direction: column; gap: 32px; }
                 
@@ -497,7 +713,7 @@ const Dashboard = () => {
                 }
 
                 /* Desktop Specific Upgrades */
-                .alerts-grid.desktop { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+                .alerts-grid.desktop { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
                 .alerts-grid.desktop .alert-card { 
                     padding: 24px; 
                     border-radius: 28px; 
@@ -540,6 +756,454 @@ const Dashboard = () => {
                 .alerts-grid.desktop .alert-card:hover .arrow-icon-desktop {
                     color: #1E6BFF;
                     transform: translateX(4px);
+                }
+
+                /* Expiry Alert Cards & Badges */
+                .urgency-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    padding: 2px 8px;
+                    border-radius: 999px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    text-transform: uppercase;
+                    letter-spacing: 0.04em;
+                }
+                .alert-card.expiry-card-interactive, .alert-card.expired-card-interactive {
+                    transition: all 0.25s ease;
+                    cursor: pointer;
+                }
+                .alert-card.expiry-card-interactive:hover, .alert-card.expired-card-interactive:hover {
+                    transform: translateY(-4px);
+                    box-shadow: 0 12px 24px rgba(0,0,0,0.08);
+                }
+
+                /* Expiry Management Modal Styles */
+                .emm-backdrop {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(15, 23, 42, 0.65);
+                    backdrop-filter: blur(8px);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 9999;
+                    padding: 20px;
+                    animation: emmFadeIn 0.2s ease-out;
+                }
+                @keyframes emmFadeIn {
+                    from { opacity: 0; }
+                    to { opacity: 1; }
+                }
+
+                .emm-container {
+                    background: #ffffff;
+                    border-radius: 24px;
+                    width: 100%;
+                    max-width: 920px;
+                    max-height: 88vh;
+                    display: flex;
+                    flex-direction: column;
+                    box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+                    border: 1px solid #E2E8F0;
+                    overflow: hidden;
+                    animation: emmSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+                }
+                @keyframes emmSlideUp {
+                    from { transform: translateY(20px) scale(0.97); opacity: 0; }
+                    to { transform: translateY(0) scale(1); opacity: 1; }
+                }
+
+                .emm-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 22px 28px;
+                    border-bottom: 1px solid #F1F5F9;
+                    background: #FAFAFC;
+                }
+                .emm-header-title {
+                    display: flex;
+                    align-items: center;
+                    gap: 14px;
+                }
+                .emm-icon-wrap {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 12px;
+                    background: #EFF6FF;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                .emm-header h3 {
+                    margin: 0;
+                    font-size: 20px;
+                    font-weight: 800;
+                    color: #0F172A;
+                    letter-spacing: -0.02em;
+                }
+                .emm-header p {
+                    margin: 3px 0 0 0;
+                    font-size: 13px;
+                    color: #64748B;
+                    font-weight: 600;
+                }
+                .emm-close-btn {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    border: 1px solid #E2E8F0;
+                    background: white;
+                    color: #64748B;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: all 0.15s;
+                }
+                .emm-close-btn:hover {
+                    background: #F1F5F9;
+                    color: #0F172A;
+                }
+
+                .emm-primary-tabs {
+                    display: flex;
+                    gap: 8px;
+                    padding: 14px 28px;
+                    background: #F8FAFC;
+                    border-bottom: 1px solid #F1F5F9;
+                }
+                .emm-tab-btn {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 10px 18px;
+                    border-radius: 12px;
+                    font-size: 14px;
+                    font-weight: 700;
+                    border: 1px solid transparent;
+                    background: transparent;
+                    color: #64748B;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                .emm-tab-btn:hover {
+                    background: #EDF2F7;
+                    color: #0F172A;
+                }
+                .emm-tab-btn.active {
+                    background: #1E6BFF;
+                    color: white;
+                    box-shadow: 0 4px 12px rgba(30, 107, 255, 0.25);
+                }
+                .emm-tab-btn.tab-danger.active {
+                    background: #D92D20;
+                    color: white;
+                    box-shadow: 0 4px 12px rgba(217, 45, 32, 0.25);
+                }
+                .emm-tab-count {
+                    padding: 2px 7px;
+                    border-radius: 99px;
+                    font-size: 11px;
+                    font-weight: 800;
+                    background: rgba(0,0,0,0.08);
+                }
+                .emm-tab-btn.active .emm-tab-count {
+                    background: rgba(255,255,255,0.25);
+                    color: white;
+                }
+                .emm-tab-count.count-danger {
+                    background: #FEE4E2;
+                    color: #D92D20;
+                }
+
+                .emm-toolbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 16px;
+                    padding: 16px 28px;
+                    border-bottom: 1px solid #F1F5F9;
+                    background: white;
+                    flex-wrap: wrap;
+                }
+                .emm-subfilters {
+                    display: flex;
+                    gap: 6px;
+                    flex-wrap: wrap;
+                }
+                .emm-subfilters button {
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: 700;
+                    border: 1px solid #E2E8F0;
+                    background: #F8FAFC;
+                    color: #64748B;
+                    cursor: pointer;
+                    transition: all 0.15s;
+                }
+                .emm-subfilters button.active {
+                    background: #0F172A;
+                    color: white;
+                    border-color: #0F172A;
+                }
+                .emm-subfilters button.btn-sub-crit.active {
+                    background: #B42318;
+                    color: white;
+                    border-color: #B42318;
+                }
+                .emm-subfilters button.btn-sub-warn.active {
+                    background: #C4320A;
+                    color: white;
+                    border-color: #C4320A;
+                }
+                .emm-subfilters button.btn-sub-att.active {
+                    background: #B54708;
+                    color: white;
+                    border-color: #B54708;
+                }
+
+                .emm-search-box {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 10px;
+                    padding: 6px 12px;
+                    width: 260px;
+                }
+                .emm-search-box input {
+                    border: none;
+                    background: transparent;
+                    outline: none;
+                    font-size: 13px;
+                    color: #0F172A;
+                    width: 100%;
+                }
+                .emm-search-clear {
+                    background: none;
+                    border: none;
+                    color: #94A3B8;
+                    cursor: pointer;
+                    padding: 2px;
+                }
+
+                .emm-content {
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 0;
+                }
+                .emm-table-container {
+                    overflow-x: auto;
+                }
+                .emm-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    text-align: left;
+                }
+                .emm-table th {
+                    padding: 12px 24px;
+                    background: #F8FAFC;
+                    font-size: 11px;
+                    font-weight: 800;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    color: #64748B;
+                    border-bottom: 1px solid #E2E8F0;
+                }
+                .emm-table td {
+                    padding: 16px 24px;
+                    border-bottom: 1px solid #F1F5F9;
+                    font-size: 14px;
+                    color: #0F172A;
+                    vertical-align: middle;
+                }
+                .emm-row:hover {
+                    background: #FBFDFF;
+                }
+                .emm-prod-info {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+                .emm-prod-name {
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: #0F172A;
+                }
+                .emm-prod-tags {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    flex-wrap: wrap;
+                }
+                .emm-tag {
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 2px 8px;
+                    border-radius: 6px;
+                    background: #F1F5F9;
+                    color: #475467;
+                }
+                .emm-tag.sku {
+                    background: #EFF6FF;
+                    color: #1E6BFF;
+                }
+                .emm-tag.shop {
+                    background: #F5F3FF;
+                    color: #7C3AED;
+                }
+                .emm-batch-pill {
+                    display: inline-block;
+                    padding: 3px 8px;
+                    border-radius: 6px;
+                    background: #F1F5F9;
+                    font-family: monospace;
+                    font-weight: 700;
+                    font-size: 12px;
+                    color: #334155;
+                    border: 1px solid #E2E8F0;
+                }
+                .emm-batch-none {
+                    color: #94A3B8;
+                    font-size: 12px;
+                    font-style: italic;
+                }
+                .emm-stock-qty {
+                    font-size: 14px;
+                    color: #334155;
+                }
+                .emm-stock-qty strong {
+                    font-size: 16px;
+                    color: #0F172A;
+                }
+                .emm-date {
+                    font-weight: 600;
+                    color: #334155;
+                }
+
+                .emm-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    padding: 4px 10px;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: 800;
+                    white-space: nowrap;
+                }
+                .badge-critical {
+                    background: #FEF3F2;
+                    color: #B42318;
+                    border: 1px solid #FECDCA;
+                }
+                .badge-critical.pulse {
+                    animation: emmPulse 1.5s infinite;
+                }
+                @keyframes emmPulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.6; }
+                }
+                .badge-warning {
+                    background: #FFF6ED;
+                    color: #C4320A;
+                    border: 1px solid #FEE4E2;
+                }
+                .badge-attention {
+                    background: #FFFAEB;
+                    color: #B54708;
+                    border: 1px solid #FEDF89;
+                }
+                .badge-expired {
+                    background: #FEF2F2;
+                    color: #DC2626;
+                    border: 1px solid #FCA5A5;
+                }
+
+                .emm-action-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    background: #EFF6FF;
+                    color: #1E6BFF;
+                    border: 1px solid #BFDBFE;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.15s;
+                }
+                .emm-action-btn:hover {
+                    background: #1E6BFF;
+                    color: white;
+                }
+
+                .emm-loading, .emm-empty {
+                    padding: 60px 24px;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 12px;
+                    text-align: center;
+                }
+                .emm-loading p {
+                    color: #64748B;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                .emm-empty h4 {
+                    margin: 8px 0 0 0;
+                    font-size: 18px;
+                    font-weight: 800;
+                    color: #0F172A;
+                }
+                .emm-empty p {
+                    margin: 4px 0 0 0;
+                    font-size: 14px;
+                    color: #64748B;
+                }
+                .emm-spinner {
+                    width: 36px;
+                    height: 36px;
+                    border: 3px solid #E2E8F0;
+                    border-top-color: #1E6BFF;
+                    border-radius: 50%;
+                    animation: emmSpin 0.8s linear infinite;
+                }
+                @keyframes emmSpin {
+                    to { transform: rotate(360deg); }
+                }
+
+                .emm-footer {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 16px 28px;
+                    border-top: 1px solid #F1F5F9;
+                    background: #FAFAFC;
+                }
+                .emm-footer-note {
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #64748B;
+                }
+                .emm-btn-secondary {
+                    padding: 8px 20px;
+                    border-radius: 10px;
+                    border: 1px solid #E2E8F0;
+                    background: white;
+                    color: #334155;
+                    font-size: 13px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.15s;
+                }
+                .emm-btn-secondary:hover {
+                    background: #F1F5F9;
                 }
                 .collection-summary-bar { 
                     background: white; 
@@ -614,5 +1278,260 @@ const ActionItem = ({ title, icon: Icon, color, onClick }) => (
         <span>{title}</span>
     </motion.div>
 );
+
+const ExpiryManagementModal = ({ isOpen, onClose, shopId, currentShopName, initialTab = 'expiring' }) => {
+    const navigate = useNavigate();
+    const [tab, setTab] = useState(initialTab); // 'expiring' | 'expired'
+    const [subFilter, setSubFilter] = useState('all'); // 'all', 'critical', 'warning', 'attention'
+    const [search, setSearch] = useState('');
+    const [loading, setLoading] = useState(true);
+    const [data, setData] = useState({ expiringSoon: [], expired: [], summary: {} });
+
+    useEffect(() => {
+        if (isOpen) {
+            setTab(initialTab);
+            setSubFilter('all');
+            setSearch('');
+            loadExpiryData();
+        }
+    }, [isOpen, shopId, initialTab]);
+
+    const loadExpiryData = async () => {
+        setLoading(true);
+        try {
+            const res = await productService.getExpiryAlerts(shopId, 45);
+            setData(res.data?.data || { expiringSoon: [], expired: [], summary: {} });
+        } catch (err) {
+            console.error('Failed to load expiry alerts in modal:', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    if (!isOpen) return null;
+
+    const expiringList = data.expiringSoon || [];
+    const expiredList = data.expired || [];
+
+    const activeList = tab === 'expiring' ? expiringList : expiredList;
+
+    const filteredItems = activeList.filter(item => {
+        if (tab === 'expiring') {
+            if (subFilter === 'critical' && item.urgency !== 'critical') return false;
+            if (subFilter === 'warning' && item.urgency !== 'warning') return false;
+            if (subFilter === 'attention' && item.urgency !== 'attention') return false;
+        }
+        if (search.trim()) {
+            const q = search.toLowerCase();
+            const matchesName = (item.productName || '').toLowerCase().includes(q);
+            const matchesBatch = (item.batchNumber || '').toLowerCase().includes(q);
+            const matchesSku = (item.sku || '').toLowerCase().includes(q);
+            const matchesCategory = (item.category || '').toLowerCase().includes(q);
+            return matchesName || matchesBatch || matchesSku || matchesCategory;
+        }
+        return true;
+    });
+
+    const getDaysBadge = (days, urgency) => {
+        if (urgency === 'expired' || days < 0) {
+            const abs = Math.abs(days);
+            return (
+                <span className="emm-badge badge-expired">
+                    Expired {abs === 0 ? 'today' : `${abs}d ago`}
+                </span>
+            );
+        }
+        if (days === 0) {
+            return <span className="emm-badge badge-critical pulse">Expires Today</span>;
+        }
+        if (days <= 7) {
+            return <span className="emm-badge badge-critical">{days}d left</span>;
+        }
+        if (days <= 15) {
+            return <span className="emm-badge badge-warning">{days}d left</span>;
+        }
+        return <span className="emm-badge badge-attention">{days}d left</span>;
+    };
+
+    return (
+        <div className="emm-backdrop" onClick={onClose}>
+            <div className="emm-container" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="emm-header">
+                    <div className="emm-header-title">
+                        <div className="emm-icon-wrap">
+                            <Clock size={22} color="#1E6BFF" />
+                        </div>
+                        <div>
+                            <h3>Inventory Expiry Management</h3>
+                            <p>
+                                {currentShopName ? `Shop: ${currentShopName} • ` : ''}
+                                {data.summary?.expiringSoonCount || 0} expiring soon • {data.summary?.expiredCount || 0} expired
+                            </p>
+                        </div>
+                    </div>
+                    <button className="emm-close-btn" onClick={onClose} aria-label="Close modal">
+                        <X size={20} />
+                    </button>
+                </div>
+
+                {/* Primary Tabs */}
+                <div className="emm-primary-tabs">
+                    <button 
+                        className={`emm-tab-btn ${tab === 'expiring' ? 'active' : ''}`}
+                        onClick={() => { setTab('expiring'); setSubFilter('all'); }}
+                    >
+                        <AlertTriangle size={16} />
+                        <span>Expiring Soon (45d)</span>
+                        <span className="emm-tab-count">{expiringList.length}</span>
+                    </button>
+                    <button 
+                        className={`emm-tab-btn ${tab === 'expired' ? 'active tab-danger' : ''} ${expiredList.length > 0 && tab !== 'expired' ? 'tab-has-expired' : ''}`}
+                        onClick={() => { setTab('expired'); setSubFilter('all'); }}
+                    >
+                        <XCircle size={16} />
+                        <span>Expired Stock</span>
+                        <span className="emm-tab-count count-danger">{expiredList.length}</span>
+                    </button>
+                </div>
+
+                {/* Subfilter & Search Toolbar */}
+                <div className="emm-toolbar">
+                    {tab === 'expiring' ? (
+                        <div className="emm-subfilters">
+                            <button className={subFilter === 'all' ? 'active' : ''} onClick={() => setSubFilter('all')}>
+                                All ({expiringList.length})
+                            </button>
+                            <button className={`btn-sub-crit ${subFilter === 'critical' ? 'active' : ''}`} onClick={() => setSubFilter('critical')}>
+                                Critical (0–7d) ({expiringList.filter(i => i.urgency === 'critical').length})
+                            </button>
+                            <button className={`btn-sub-warn ${subFilter === 'warning' ? 'active' : ''}`} onClick={() => setSubFilter('warning')}>
+                                Warning (8–15d) ({expiringList.filter(i => i.urgency === 'warning').length})
+                            </button>
+                            <button className={`btn-sub-att ${subFilter === 'attention' ? 'active' : ''}`} onClick={() => setSubFilter('attention')}>
+                                Attention (16–45d) ({expiringList.filter(i => i.urgency === 'attention').length})
+                            </button>
+                        </div>
+                    ) : (
+                        <div style={{ fontSize: '13px', fontWeight: '700', color: '#DC2626' }}>
+                            Items past expiry date ({expiredList.length})
+                        </div>
+                    )}
+                    <div className="emm-search-box">
+                        <Search size={16} color="#94A3B8" />
+                        <input 
+                            type="text" 
+                            placeholder="Search by product, batch or SKU..." 
+                            value={search}
+                            onChange={e => setSearch(e.target.value)}
+                        />
+                        {search && (
+                            <button className="emm-search-clear" onClick={() => setSearch('')}>
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Body Content */}
+                <div className="emm-content">
+                    {loading ? (
+                        <div className="emm-loading">
+                            <div className="emm-spinner"></div>
+                            <p>Loading inventory expiry records...</p>
+                        </div>
+                    ) : filteredItems.length === 0 ? (
+                        <div className="emm-empty">
+                            <CheckCircle2 size={44} color="#10B981" />
+                            <h4>{tab === 'expiring' ? 'No products expiring in this range' : 'No expired stock found'}</h4>
+                            <p>
+                                {tab === 'expiring' 
+                                    ? 'All inventory items are fresh beyond 45 calendar days.' 
+                                    : 'All products in stock are within their valid freshness window.'}
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="emm-table-container">
+                            <table className="emm-table">
+                                <thead>
+                                    <tr>
+                                        <th>Product</th>
+                                        <th>Batch</th>
+                                        <th>Available Stock</th>
+                                        <th>Expiry Date</th>
+                                        <th>Days Left</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredItems.map((item, idx) => {
+                                        const formattedExp = item.expiryDate 
+                                            ? new Date(item.expiryDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                                            : '—';
+                                        return (
+                                            <tr key={`${item.productId}-${item.batchNumber || idx}`} className="emm-row">
+                                                <td>
+                                                    <div className="emm-prod-info">
+                                                        <span className="emm-prod-name">{item.productName}</span>
+                                                        <div className="emm-prod-tags">
+                                                            {item.category && <span className="emm-tag">{item.category}</span>}
+                                                            {item.sku && <span className="emm-tag sku">SKU: {item.sku}</span>}
+                                                            {item.shopName && <span className="emm-tag shop">🏪 {item.shopName}</span>}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    {item.batchNumber ? (
+                                                        <span className="emm-batch-pill">{item.batchNumber}</span>
+                                                    ) : (
+                                                        <span className="emm-batch-none">Standard Stock</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    <span className="emm-stock-qty">
+                                                        <strong>{item.quantity}</strong> {item.unit || 'Piece'}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <span className="emm-date">{formattedExp}</span>
+                                                </td>
+                                                <td>
+                                                    {getDaysBadge(item.daysRemaining, item.urgency)}
+                                                </td>
+                                                <td>
+                                                    <button 
+                                                        className="emm-action-btn"
+                                                        onClick={() => {
+                                                            onClose();
+                                                            navigate(`/shop/${shopId}/inventory?filter=${tab === 'expired' ? 'expired' : 'expiring-soon'}&search=${encodeURIComponent(item.productName)}`);
+                                                        }}
+                                                        title="Inspect in Inventory"
+                                                    >
+                                                        <span>Inspect</span>
+                                                        <ExternalLink size={14} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer */}
+                <div className="emm-footer">
+                    <span className="emm-footer-note">
+                        Showing {filteredItems.length} of {activeList.length} {tab === 'expiring' ? 'expiring' : 'expired'} records
+                    </span>
+                    <button className="emm-btn-secondary" onClick={onClose}>
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export default Dashboard;

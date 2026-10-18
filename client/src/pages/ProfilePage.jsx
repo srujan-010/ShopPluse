@@ -25,7 +25,8 @@ import {
     Check,
     AlertTriangle,
     ShieldAlert,
-    Save
+    Save,
+    Printer
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -34,6 +35,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { authService, shopService, supportService } from '../services/api';
 import { db } from '../services/offlineDB';
+import PrintFormatSelector from '../components/PrintFormatSelector';
 
 const ProfilePage = () => {
     const { user, logout, setUser } = useAuth();
@@ -86,7 +88,8 @@ const ProfilePage = () => {
         location: '',
         contactNumber: '',
         fertilizerLicense: '',
-        logo: ''
+        logo: '',
+        defaultPrintFormat: 'full_a4'
     });
 
     // Local Preferences: Notifications
@@ -189,7 +192,8 @@ const ProfilePage = () => {
                 location: target.location || '',
                 contactNumber: target.contactNumber || '',
                 fertilizerLicense: target.fertilizerLicense || '',
-                logo: target.logo || ''
+                logo: target.logo || '',
+                defaultPrintFormat: target.defaultPrintFormat || 'full_a4'
             });
         }
     };
@@ -452,6 +456,7 @@ const ProfilePage = () => {
             items: [
                 { icon: <CreditCard size={20} />, label: 'Subscription Plan', value: 'License, Billing Dates', color: '#ea580c', action: () => setActiveModal('subscription') },
                 { icon: <Globe size={20} />, label: 'Business Profile', value: 'GST, License, Logo', color: '#2563eb', action: () => { setActiveModal('business'); fetchShopsList(); } },
+                { icon: <Printer size={20} />, label: 'Bill Print Settings', value: 'A4, Half-A4, Thermal 58/80mm', color: '#0284c7', action: () => { setActiveModal('bill_print'); fetchShopsList(); } },
             ]
         },
         {
@@ -597,6 +602,7 @@ const ProfilePage = () => {
                                     {activeModal === 'privacy' && 'Data & Privacy'}
                                     {activeModal === 'subscription' && 'Subscription Plan'}
                                     {activeModal === 'business' && 'Business Profile'}
+                                    {activeModal === 'bill_print' && 'Bill Print Settings'}
                                     {activeModal === 'notifications' && 'Notifications'}
                                     {activeModal === 'app' && 'App Settings'}
                                     {activeModal === 'support' && 'Support & Feedback'}
@@ -837,7 +843,7 @@ const ProfilePage = () => {
                                                 <div className="db-count-card"><strong>{dbCounts.sales}</strong><span>Sales</span></div>
                                                 <div className="db-count-card"><strong>{dbCounts.khata}</strong><span>Khata</span></div>
                                                 <div className="db-count-card"><strong>{dbCounts.purchases}</strong><span>Purchases</span></div>
-                                                <div className="db-count-card"><strong>{dbCounts.governmentSales}</strong><span>Gov Sales</span></div>
+                                                <div className="db-count-card"><strong>{dbCounts.governmentSales}</strong><span>GST Sales</span></div>
                                             </div>
 
                                             <div style={{ display: 'flex', gap: '12px' }}>
@@ -1022,10 +1028,72 @@ const ProfilePage = () => {
                                                     />
                                                 </div>
 
+                                                <div className="input-group-v2">
+                                                    <label>Default Bill Print Format</label>
+                                                    <PrintFormatSelector 
+                                                        value={shopForm.defaultPrintFormat || 'full_a4'}
+                                                        onChange={(newFormat) => setShopForm({ ...shopForm, defaultPrintFormat: newFormat })}
+                                                        mode="select"
+                                                        showPrinterTip={false}
+                                                    />
+                                                </div>
+
                                                 <div className="modal-footer-v2">
                                                     <button type="button" className="btn-secondary-outline" onClick={() => setActiveModal(null)}>Cancel</button>
                                                     <button type="submit" disabled={isLoading} className="btn-primary-premium">
                                                         <Save size={16} /> Save Shop Profile
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* BILL PRINT SETTINGS */}
+                                {activeModal === 'bill_print' && (
+                                    <div className="sub-sections">
+                                        <div className="input-group-v2">
+                                            <label>Select Business Shop</label>
+                                            <select 
+                                                value={selectedShopId}
+                                                onChange={(e) => handleSelectShopForEdit(e.target.value)}
+                                                className="input-control"
+                                            >
+                                                {shops.map((s) => (
+                                                    <option key={s._id} value={s._id}>
+                                                        {s.name} (Current: {s.defaultPrintFormat || 'full_a4'})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {selectedShopId && (
+                                            <form onSubmit={handleSaveShopDetails} className="form-layout" style={{ marginTop: '1rem' }}>
+                                                <div style={{ marginBottom: '8px' }}>
+                                                    <label style={{ fontSize: '13px', fontWeight: 700, color: '#071b44', display: 'block', marginBottom: '4px' }}>
+                                                        Select Default Print Format for {shopForm.name || 'Selected Shop'}
+                                                    </label>
+                                                    <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 14px' }}>
+                                                        This default format is saved per shop and automatically applies when viewing bills, downloading PDFs, or printing across any browser or device.
+                                                    </p>
+                                                    <PrintFormatSelector 
+                                                        value={shopForm.defaultPrintFormat || 'full_a4'}
+                                                        onChange={(newFormat) => setShopForm({ ...shopForm, defaultPrintFormat: newFormat })}
+                                                        savedDefault={shops.find(s => s._id === selectedShopId)?.defaultPrintFormat || 'full_a4'}
+                                                        shopId={selectedShopId}
+                                                        onShopUpdate={(updatedShop) => {
+                                                            setShops(prev => prev.map(s => s._id === updatedShop._id ? updatedShop : s));
+                                                            setShopForm(prev => ({ ...prev, defaultPrintFormat: updatedShop.defaultPrintFormat }));
+                                                        }}
+                                                        mode="cards"
+                                                        showPrinterTip={true}
+                                                    />
+                                                </div>
+
+                                                <div className="modal-footer-v2" style={{ marginTop: '1.25rem' }}>
+                                                    <button type="button" className="btn-secondary-outline" onClick={() => setActiveModal(null)}>Cancel</button>
+                                                    <button type="submit" disabled={isLoading} className="btn-primary-premium">
+                                                        <Save size={16} /> Save Print Preference
                                                     </button>
                                                 </div>
                                             </form>
@@ -1160,7 +1228,7 @@ const ProfilePage = () => {
                                             >
                                                 <option value="Standard">Standard Invoice</option>
                                                 <option value="Thermal">Thermal Receipt</option>
-                                                <option value="Detailed">Detailed Gov Ledger Invoice</option>
+                                                <option value="Detailed">Detailed GST Ledger Invoice</option>
                                             </select>
                                         </div>
 
@@ -1284,15 +1352,11 @@ const ProfilePage = () => {
                 .profile-container { 
                     display: flex; 
                     flex-direction: column; 
-                    gap: 2rem; 
-                    padding: 24px 20px 140px 20px; 
+                    gap: 1.5rem; 
+                    padding: 10px 10px 80px 10px; 
                     max-width: 800px;
                     margin: 0 auto;
-                    min-height: 100%;
-                    overflow-y: auto;
-                    scrollbar-width: none;
                 }
-                .profile-container::-webkit-scrollbar { display: none; }
                 
                 .profile-header { display: flex; justify-content: space-between; align-items: center; }
                 .profile-header h1 { font-size: 1.5rem; font-weight: 800; margin: 0; }

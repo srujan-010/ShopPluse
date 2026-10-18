@@ -1,9 +1,9 @@
 import axios from 'axios';
-import { offlineDB } from './offlineDB';
+import { offlineDB } from './offlineDB.js';
 
 const getBaseUrl = () => {
     // 1. Check for environment variable
-    if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
     
     // 2. Default to Render for production if on netlify
     if (typeof window !== 'undefined' && window.location.hostname.includes('netlify.app')) {
@@ -22,7 +22,8 @@ const api = axios.create({
     baseURL: BASE_URL, 
     headers: {
         'Content-Type': 'application/json'
-    }
+    },
+    validateStatus: (status) => (status >= 200 && status < 300) || status === 304
 });
 
 // Helper to get full API URL for redirects
@@ -39,6 +40,13 @@ api.interceptors.request.use((config) => {
         config.headers.Authorization = `Bearer ${token}`;
     }
     
+    // For transactional and reporting endpoints, always request fresh data from server
+    const url = config.url || '';
+    if (url.includes('/api/sales') || url.includes('/api/gov-sales') || url.includes('/api/shops')) {
+        config.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+        config.headers['Pragma'] = 'no-cache';
+    }
+
     // Automatically generate idempotency key for state-changing requests (POST, PUT, DELETE)
     if (config.method && ['post', 'put', 'delete'].includes(config.method.toLowerCase())) {
         if (!config.headers['X-Idempotency-Key']) {
@@ -66,7 +74,15 @@ api.interceptors.response.use(
         // Cache successful GET requests
         if (response.config.method === 'get') {
             try {
-                await offlineDB.saveQueryCache(response.config.url, response.data);
+                // If 304 Not Modified or empty data, recover cached payload
+                if (response.status === 304 || !response.data || (typeof response.data === 'object' && Object.keys(response.data).length === 0)) {
+                    const cached = await offlineDB.getQueryCache(response.config.url);
+                    if (cached) {
+                        response.data = cached;
+                    }
+                } else {
+                    await offlineDB.saveQueryCache(response.config.url, response.data);
+                }
                 
                 const url = response.config.url || '';
                 
@@ -394,12 +410,24 @@ api.interceptors.response.use(
                     // 3. SALES MUTATIONS
                     else if (url.includes('/api/sales')) {
                         if (method === 'post') {
+                            const calculatedTotal = (parsedData.items || []).reduce((sum, item) => sum + (Number(item.price || item.pricePerBaseUnit || 0) * Number(item.soldQtyEntered || item.quantity || 1)), 0);
+                            const discount = Number(parsedData.discountAmount || parsedData.discountValue || 0);
+                            const finalTotal = parsedData.totalAmount !== undefined ? Number(parsedData.totalAmount) : Math.max(0, calculatedTotal - discount);
                             const newSale = {
                                 ...parsedData,
                                 _id: tempId,
+                                totalAmount: finalTotal,
                                 invoiceNumber: parsedData.invoiceNumber || `INV-TEMP-${Math.floor(100000 + Math.random() * 900000)}`,
                                 date: parsedData.date || new Date().toISOString(),
-                                updatedAt: new Date().toISOString()
+                                updatedAt: new Date().toISOString(),
+                                items: (parsedData.items || []).map(item => ({
+                                    ...item,
+                                    productName: item.productName || item.name || 'Product',
+                                    soldQtyEntered: item.soldQtyEntered || item.quantity || 1,
+                                    soldUnit: item.soldUnit || item.unit || 'Piece',
+                                    pricePerBaseUnit: item.pricePerBaseUnit || item.price || 0,
+                                    totalPrice: item.totalPrice || ((item.price || item.pricePerBaseUnit || 0) * (item.soldQtyEntered || item.quantity || 1))
+                                }))
                             };
                             
                             // Process stock deduction for cart items
@@ -526,7 +554,7 @@ api.interceptors.response.use(
                                             previousStock: prevStock,
                                             newStock: product.quantity,
                                             referenceId: newGovSale.invoiceNumber,
-                                            notes: `Sold via Government POS offline`,
+                                            notes: `Sold via GST POS offline`,
                                             shop: parsedData.shop,
                                             createdAt: new Date().toISOString()
                                         });
@@ -829,9 +857,9 @@ export const productService = {
             return { data: cached || { success: true, data: [] }, status: 200, fromCache: true };
         }
     },
-    getInventoryHistory: async (id) => {
+    getInventoryHistory: async (id, params = {}) => {
         try {
-            return await api.get(`/api/products/${id}/inventory-history`);
+            return await api.get(`/api/products/${id}/inventory-history`, { params });
         } catch (err) {
             console.warn('productService.getInventoryHistory failed, using IndexedDB fallback:', err);
             const history = await offlineDB.getInventoryHistoryByProduct(id);
@@ -845,13 +873,131 @@ export const productService = {
             console.error('productService.restock failed:', err);
             throw err;
         }
+    },
+    getExpiryAlerts: async (shopId, days = 45) => {
+        try {
+            return await api.get(`/api/products/expiry-alerts${shopId ? `?shop=${shopId}&days=${days}` : `?days=${days}`}`);
+        } catch (err) {
+            console.warn('productService.getExpiryAlerts failed, calculating from IndexedDB fallback:', err);
+            const products = await offlineDB.getProducts(shopId);
+            
+            const now = new Date();
+            const baseMidnight = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+            const msPerDay = 24 * 60 * 60 * 1000;
+            
+            const expiringSoon = [];
+            const expired = [];
+            
+            (products || []).forEach(p => {
+                const pShopId = p.shop?._id ? p.shop._id.toString() : (p.shop ? p.shop.toString() : null);
+                if (shopId && pShopId && pShopId !== shopId.toString()) return;
+                
+                const shopName = p.shop?.name || p.shopName || '';
+                const hasBatches = Array.isArray(p.batches) && p.batches.length > 0;
+                
+                if (hasBatches) {
+                    p.batches.forEach(batch => {
+                        const batchQty = Number(batch.quantity || 0);
+                        if (batchQty <= 0 || !batch.expiryDate) return;
+                        
+                        const target = new Date(batch.expiryDate);
+                        if (isNaN(target.getTime())) return;
+                        const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+                        const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+                        
+                        const urgency = diffDays < 0 ? 'expired' : diffDays <= 7 ? 'critical' : diffDays <= 15 ? 'warning' : diffDays <= 45 ? 'attention' : 'fresh';
+                        
+                        const itemData = {
+                            productId: p._id,
+                            productName: p.name,
+                            category: p.category || '',
+                            brand: p.brand || '',
+                            sku: p.sku || '',
+                            barcode: p.barcode || '',
+                            batchNumber: batch.batchNumber || null,
+                            quantity: batchQty,
+                            unit: p.unit || 'Piece',
+                            expiryDate: batch.expiryDate,
+                            daysRemaining: diffDays,
+                            urgency,
+                            isBatch: true,
+                            shopId: pShopId,
+                            shopName
+                        };
+                        
+                        if (diffDays < 0) expired.push(itemData);
+                        else if (diffDays <= days) expiringSoon.push(itemData);
+                    });
+                } else {
+                    const prodQty = Number(p.quantity || 0);
+                    if (prodQty <= 0 || !p.expiryDate) return;
+                    
+                    const target = new Date(p.expiryDate);
+                    if (isNaN(target.getTime())) return;
+                    const targetMidnight = Date.UTC(target.getFullYear(), target.getMonth(), target.getDate());
+                    const diffDays = Math.round((targetMidnight - baseMidnight) / msPerDay);
+                    
+                    const urgency = diffDays < 0 ? 'expired' : diffDays <= 7 ? 'critical' : diffDays <= 15 ? 'warning' : diffDays <= 45 ? 'attention' : 'fresh';
+                    
+                    const itemData = {
+                        productId: p._id,
+                        productName: p.name,
+                        category: p.category || '',
+                        brand: p.brand || '',
+                        sku: p.sku || '',
+                        barcode: p.barcode || '',
+                        batchNumber: p.batchNumber || null,
+                        quantity: prodQty,
+                        unit: p.unit || 'Piece',
+                        expiryDate: p.expiryDate,
+                        daysRemaining: diffDays,
+                        urgency,
+                        isBatch: false,
+                        shopId: pShopId,
+                        shopName
+                    };
+                    
+                    if (diffDays < 0) expired.push(itemData);
+                    else if (diffDays <= days) expiringSoon.push(itemData);
+                }
+            });
+            
+            expiringSoon.sort((a, b) => a.daysRemaining - b.daysRemaining);
+            expired.sort((a, b) => b.daysRemaining - a.daysRemaining);
+            
+            let nearestExpiryDays = null;
+            let nearestExpiryDate = null;
+            let urgency = 'none';
+            if (expiringSoon.length > 0) {
+                nearestExpiryDays = expiringSoon[0].daysRemaining;
+                nearestExpiryDate = expiringSoon[0].expiryDate;
+                urgency = nearestExpiryDays <= 7 ? 'critical' : nearestExpiryDays <= 15 ? 'warning' : 'attention';
+            }
+            
+            const result = {
+                summary: {
+                    expiringSoonCount: expiringSoon.length,
+                    expiredCount: expired.length,
+                    nearestExpiryDays,
+                    nearestExpiryDate,
+                    urgency,
+                    thresholdDays: days
+                },
+                expiringSoon,
+                expired
+            };
+            
+            return { data: { success: true, data: result }, status: 200, fromCache: true };
+        }
     }
 };
 
 export const saleService = {
     getAll: async (shopId) => {
         try {
-            return await api.get(`/api/sales${shopId ? `?shop=${shopId}` : ''}`);
+            return await api.get(`/api/sales${shopId ? `?shop=${shopId}` : ''}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
         } catch (err) {
             console.warn('saleService.getAll failed, using IndexedDB fallback:', err);
             const sales = await offlineDB.getSales(shopId);
@@ -860,6 +1006,10 @@ export const saleService = {
     },
     getSale: async (id) => {
         try {
+            if (!id || (typeof id === 'string' && id.startsWith('temp_'))) {
+                const local = await offlineDB.getSale(id);
+                return { data: { success: true, data: local }, status: 200, fromCache: true };
+            }
             return await api.get(`/api/sales/${id}`);
         } catch (err) {
             console.warn('saleService.getSale failed, using IndexedDB fallback:', err);
@@ -877,7 +1027,9 @@ export const saleService = {
     },
     getShopStats: async (shopId) => {
         try {
-            return await api.get(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+            return await api.get(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
         } catch (err) {
             console.warn('saleService.getShopStats failed, using IndexedDB fallback:', err);
             const cached = await offlineDB.getQueryCache(`/api/sales/stats${shopId ? `?shop=${shopId}` : ''}`);
@@ -1000,13 +1152,23 @@ export const purchaseService = {
             console.error('purchaseService.addPayment failed:', err);
             throw err;
         }
+    },
+    getSupplierStatement: async (params) => {
+        try {
+            return await api.get('/api/purchases/supplier-statement', { params });
+        } catch (err) {
+            console.error('purchaseService.getSupplierStatement failed:', err);
+            throw err;
+        }
     }
 };
 
 export const govSaleService = {
     getAll: async (shopId) => {
         try {
-            return await api.get(`/api/gov-sales${shopId ? `?shop=${shopId}` : ''}`);
+            return await api.get(`/api/gov-sales${shopId ? `?shop=${shopId}` : ''}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
         } catch (err) {
             console.warn('govSaleService.getAll failed, using IndexedDB fallback:', err);
             const govSales = await offlineDB.getGovSales(shopId);
@@ -1024,7 +1186,9 @@ export const govSaleService = {
     },
     getStats: async (shopId) => {
         try {
-            return await api.get(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`);
+            return await api.get(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`, {
+                headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            });
         } catch (err) {
             console.warn('govSaleService.getStats failed, using IndexedDB fallback:', err);
             const cached = await offlineDB.getQueryCache(`/api/gov-sales/stats${shopId ? `?shop=${shopId}` : ''}`);
@@ -1038,6 +1202,12 @@ export const govSaleService = {
             console.error('govSaleService.create failed:', err);
             throw err;
         }
+    },
+    getDiscrepancies: async (shopId) => {
+        return await api.get(`/api/gov-sales/discrepancies${shopId ? `?shop=${shopId}` : ''}`);
+    },
+    correctHistorical: async (data, shopId) => {
+        return await api.post(`/api/gov-sales/correct-historical${shopId ? `?shop=${shopId}` : ''}`, data);
     }
 };
 

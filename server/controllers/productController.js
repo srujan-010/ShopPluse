@@ -1,6 +1,7 @@
 const Product = require('../models/Product');
 const RestockHistory = require('../models/RestockHistory');
 const InventoryHistory = require('../models/InventoryHistory');
+const { processExpiryAlerts } = require('../utils/expiryHelper');
 
 // @desc    Get all products for owner (optionally filter by shop)
 // @route   GET /api/products
@@ -24,6 +25,21 @@ exports.getProducts = async (req, res) => {
 exports.createProduct = async (req, res) => {
     try {
         req.body.owner = req.user.id;
+        if (req.body.gstRate !== undefined) {
+            req.body.gstRate = Math.max(0, Math.min(100, Number(req.body.gstRate) || 0));
+            req.body.gst = req.body.gstRate;
+        } else if (req.body.gst !== undefined) {
+            req.body.gst = Math.max(0, Math.min(100, Number(req.body.gst) || 0));
+            req.body.gstRate = req.body.gst;
+        }
+        if (req.body.isGstApplicable !== undefined) {
+            req.body.isGstApplicable = Boolean(req.body.isGstApplicable);
+        } else if (req.body.gstRate !== undefined || req.body.gst !== undefined) {
+            req.body.isGstApplicable = (req.body.gstRate || req.body.gst || 0) > 0;
+        }
+        if (req.body.gstPricingMode) {
+            req.body.gstPricingMode = req.body.gstPricingMode === 'exclusive' ? 'exclusive' : 'inclusive';
+        }
         const product = await Product.create(req.body);
         
         if (product.quantity > 0) {
@@ -130,6 +146,22 @@ exports.updateProduct = async (req, res) => {
 
         const oldQuantity = product.quantity;
 
+        if (req.body.gstRate !== undefined) {
+            req.body.gstRate = Math.max(0, Math.min(100, Number(req.body.gstRate) || 0));
+            req.body.gst = req.body.gstRate;
+        } else if (req.body.gst !== undefined) {
+            req.body.gst = Math.max(0, Math.min(100, Number(req.body.gst) || 0));
+            req.body.gstRate = req.body.gst;
+        }
+        if (req.body.isGstApplicable !== undefined) {
+            req.body.isGstApplicable = Boolean(req.body.isGstApplicable);
+        } else if (req.body.gstRate !== undefined || req.body.gst !== undefined) {
+            req.body.isGstApplicable = (req.body.gstRate || req.body.gst || 0) > 0;
+        }
+        if (req.body.gstPricingMode) {
+            req.body.gstPricingMode = req.body.gstPricingMode === 'exclusive' ? 'exclusive' : 'inclusive';
+        }
+
         product = await Product.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
             runValidators: true
@@ -200,16 +232,44 @@ exports.deleteProduct = async (req, res) => {
 // @access  Private
 exports.getProductInventoryHistory = async (req, res) => {
     try {
-        const history = await InventoryHistory.find({
-            productId: req.params.id,
-            owner: req.user.id
-        }).sort('-createdAt');
+        const product = await Product.findById(req.params.id);
+        if (!product) {
+            return res.status(404).json({ success: false, message: 'Product not found' });
+        }
+
+        const query = {
+            productId: req.params.id
+        };
+
+        if (req.query.shop) {
+            query.shop = req.query.shop;
+        } else if (product.shop) {
+            query.shop = product.shop;
+        }
+
+        if (req.query.startDate || req.query.endDate) {
+            query.createdAt = {};
+            if (req.query.startDate) {
+                const s = new Date(req.query.startDate);
+                s.setHours(0, 0, 0, 0);
+                query.createdAt.$gte = s;
+            }
+            if (req.query.endDate) {
+                const e = new Date(req.query.endDate);
+                e.setHours(23, 59, 59, 999);
+                query.createdAt.$lte = e;
+            }
+        }
+
+        const history = await InventoryHistory.find(query).sort('-createdAt');
 
         res.status(200).json({ success: true, data: history });
     } catch (error) {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+
 
 // @desc    Get restock history for a product
 // @route   GET /api/products/:id/restock-history
@@ -342,3 +402,42 @@ exports.restockProduct = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Get expiry alerts (expiring within X days + expired stock)
+// @route   GET /api/products/expiry-alerts
+// @access  Private
+exports.getExpiryAlerts = async (req, res) => {
+    try {
+        let query = { owner: req.user.id };
+        if (req.query.shop) {
+            query.shop = req.query.shop;
+        }
+
+        const days = parseInt(req.query.days, 10) || 45;
+        const clientDate = req.query.clientDate ? new Date(req.query.clientDate) : new Date();
+
+        // Query only products that have an expiryDate or have batches
+        const candidateQuery = {
+            ...query,
+            $or: [
+                { expiryDate: { $exists: true, $ne: null } },
+                { 'batches.0': { $exists: true } }
+            ]
+        };
+
+        const products = await Product.find(candidateQuery)
+            .select('name category brand sku barcode quantity unit expiryDate batchNumber batches shop')
+            .populate('shop', 'name');
+
+        const result = processExpiryAlerts(products, {
+            maxDays: days,
+            baseDate: clientDate,
+            shopId: req.query.shop
+        });
+
+        res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
+    }
+};
+
