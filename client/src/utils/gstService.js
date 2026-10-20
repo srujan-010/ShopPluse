@@ -116,6 +116,7 @@ export const calculateLineItemGst = ({
 export const resolveBillTaxDetails = (bill, type = 'SALE', shop = null, products = []) => {
     if (!bill) {
         return {
+            isGovBill: false,
             isTaxableInvoice: false,
             hasIgst: false,
             subtotal: 0,
@@ -126,6 +127,7 @@ export const resolveBillTaxDetails = (bill, type = 'SALE', shop = null, products
             sgstTotal: 0,
             igstTotal: 0,
             grandTotal: 0,
+            items: [],
             effectiveItems: []
         };
     }
@@ -286,9 +288,10 @@ export const resolveBillTaxDetails = (bill, type = 'SALE', shop = null, products
             ? Number(bill.sgstTotal) 
             : parseFloat((totalGst - cgstTotal).toFixed(2)));
 
+    const subtotal = (bill.subtotal !== undefined && Number(bill.subtotal) > 0)
+        ? Number(bill.subtotal)
+        : (aggSubtotal > 0 ? aggSubtotal : (grandTotalFromDoc > 0 ? (grandTotalFromDoc + discount) : aggLineTotal));
     const grandTotal = grandTotalFromDoc > 0 ? grandTotalFromDoc : Math.max(0, aggLineTotal - discount);
-    const subtotal = grandTotal + discount;
-
     return {
         isGovBill,
         isTaxableInvoice,
@@ -305,8 +308,46 @@ export const resolveBillTaxDetails = (bill, type = 'SALE', shop = null, products
     };
 };
 
+/**
+ * Extract and validate the government/special selling price for a product.
+ * Returns the positive number (> 0) if valid, or null if 0, null, undefined, empty, missing, or non-positive.
+ * 
+ * @param {Object} product
+ * @returns {number|null}
+ */
+export const getProductGovPrice = (product) => {
+    if (!product || typeof product !== 'object') return null;
+    const raw = product.governmentPrice !== undefined && product.governmentPrice !== null && product.governmentPrice !== ''
+        ? product.governmentPrice
+        : (product.govPrice !== undefined && product.govPrice !== null && product.govPrice !== '' ? product.govPrice : null);
+
+    if (raw === null || raw === undefined || raw === '') return null;
+    const num = Number(raw);
+    return !isNaN(num) && num > 0 ? num : null;
+};
+
+/**
+ * Determine whether a product is eligible for the current POS sale mode.
+ * - In GST Sale (Special Price) mode: only products with a valid government price > 0 are eligible (regardless of category).
+ * - In Regular Retail Sale mode: all products remain eligible according to standard retail rules.
+ * 
+ * @param {Object} product
+ * @param {boolean} isGovSaleMode
+ * @returns {boolean}
+ */
+export const isProductEligibleForSaleMode = (product, isGovSaleMode = false) => {
+    if (!product) return false;
+    if (isGovSaleMode) {
+        return getProductGovPrice(product) !== null;
+    }
+    return true;
+};
+
 export default {
     fmtCur,
     calculateLineItemGst,
-    resolveBillTaxDetails
+    resolveBillTaxDetails,
+    getProductGovPrice,
+    isProductEligibleForSaleMode
 };
+

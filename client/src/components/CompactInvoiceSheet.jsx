@@ -13,6 +13,54 @@ const fmt = (val) => {
 };
 
 /**
+ * Retrieve registered fertilizer licences for a fertilizer shop
+ */
+export const getShopFertilizerLicenses = (shop) => {
+    if (!shop) return [];
+    const shopType = (shop.type || '').toLowerCase();
+    const isFertilizer = shopType === 'fertilizers' || shopType.includes('fertilizer');
+    if (!isFertilizer) return [];
+
+    let licenses = [];
+    if (Array.isArray(shop.fertilizerLicenses) && shop.fertilizerLicenses.length > 0) {
+        licenses = shop.fertilizerLicenses
+            .filter(l => l && l.licenseType && l.licenseNumber && String(l.licenseNumber).trim().length > 0)
+            .map(l => ({
+                type: String(l.licenseType).trim().toUpperCase(),
+                number: String(l.licenseNumber).trim()
+            }));
+    } else if (shop.fertilizerLicense && typeof shop.fertilizerLicense === 'string' && shop.fertilizerLicense.trim()) {
+        const str = shop.fertilizerLicense.trim();
+        let type = 'LAID';
+        if (str.startsWith('LAFD')) type = 'LAFD';
+        else if (str.startsWith('LASD')) type = 'LASD';
+        licenses = [{ type, number: str }];
+    }
+
+    const allowed = ['LAID', 'LAFD', 'LASD'];
+    const valid = licenses.filter(l => allowed.includes(l.type));
+    const seen = new Set();
+    const unique = [];
+    for (const l of valid) {
+        if (!seen.has(l.type)) {
+            seen.add(l.type);
+            unique.push(l);
+        }
+    }
+    return unique;
+};
+
+/**
+ * Format registered fertilizer licences into compact header string
+ * e.g. "Lic No.: LCFRD122022547GDCD | Lic No.: LCID0820260041GDC"
+ */
+export const formatFertilizerLicensesText = (shop) => {
+    const licenses = getShopFertilizerLicenses(shop);
+    if (!licenses || licenses.length === 0) return '';
+    return licenses.map(l => `Lic No.: ${l.number}`).join(' | ');
+};
+
+/**
  * --------------------------------------------------------------------------
  * 1. Half-A4 Compact Bill Slot Component
  * --------------------------------------------------------------------------
@@ -38,7 +86,17 @@ export const CompactInvoiceSlot = ({
         );
     }
 
-    const effectiveShop = (bill.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
+    const fertilizerLicText = formatFertilizerLicensesText(effectiveShop);
     const invoiceNum = bill.invoiceNumber || (bill._id ? bill._id.slice(-6).toUpperCase() : 'N/A');
     const billDate = bill.date ? new Date(bill.date) : new Date();
     const dateFormatted = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -60,7 +118,7 @@ export const CompactInvoiceSlot = ({
         sgstTotal,
         igstTotal,
         grandTotal,
-        items: displayItems
+        items: displayItems = []
     } = taxDetails;
 
     return (
@@ -76,6 +134,11 @@ export const CompactInvoiceSlot = ({
                     <p className="cis-shop-contact">
                         Phone: {effectiveShop?.contactNumber || 'XXXXXXXXXX'}  |  GSTIN: {effectiveShop?.gstNumber || 'N/A'}
                     </p>
+                    {fertilizerLicText && (
+                        <p className="cis-shop-licenses">
+                            {fertilizerLicText}
+                        </p>
+                    )}
                 </div>
                 {onRemove && (
                     <button 
@@ -277,6 +340,22 @@ export const CompactInvoiceSlot = ({
                 </div>
             </div>
 
+            {/* Professional Signature Section */}
+            <div className="cis-signatures-wrap">
+                <div className="cis-sig-col left">
+                    <span className="cis-sig-heading">Buyer's Signature</span>
+                    <div className="cis-sig-space" />
+                    <div className="cis-sig-line" />
+                    <span className="cis-sig-role">Customer / Buyer</span>
+                </div>
+                <div className="cis-sig-col right">
+                    <span className="cis-sig-for-shop">For {effectiveShop?.name || 'ShopPulse Business'}</span>
+                    <div className="cis-sig-space" />
+                    <div className="cis-sig-line" />
+                    <span className="cis-sig-role auth">Authorized Signatory</span>
+                </div>
+            </div>
+
             {/* Slot Footer */}
             <div className="cis-footer">
                 <div className="cis-footer-divider" />
@@ -300,7 +379,17 @@ export const FullA4Invoice = ({
 }) => {
     if (!bill) return null;
 
-    const effectiveShop = (bill.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
+    const fertilizerLicText = formatFertilizerLicensesText(effectiveShop);
     const invoiceNum = bill.invoiceNumber || (bill._id ? bill._id.slice(-6).toUpperCase() : 'N/A');
     const billDate = bill.date ? new Date(bill.date) : new Date();
     const dateFormatted = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -322,7 +411,7 @@ export const FullA4Invoice = ({
         sgstTotal,
         igstTotal,
         grandTotal,
-        items: displayItems
+        items: displayItems = []
     } = taxDetails;
 
     return (
@@ -339,6 +428,11 @@ export const FullA4Invoice = ({
                         Phone: {effectiveShop?.contactNumber || 'XXXXXXXXXX'} &nbsp;|&nbsp; GSTIN: {effectiveShop?.gstNumber || 'N/A'}
                         {effectiveShop?.email && <span> &nbsp;|&nbsp; Email: {effectiveShop.email}</span>}
                     </p>
+                    {fertilizerLicText && (
+                        <p className="full-a4-shop-licenses">
+                            {fertilizerLicText}
+                        </p>
+                    )}
                 </div>
                 <div className="full-a4-badge-box">
                     <span className="full-a4-title-tag">
@@ -531,6 +625,22 @@ export const FullA4Invoice = ({
                 </div>
             </div>
 
+            {/* Professional Signature Section */}
+            <div className="full-a4-signatures-wrap">
+                <div className="full-a4-sig-col left">
+                    <span className="full-a4-sig-heading">Buyer's Signature</span>
+                    <div className="full-a4-sig-space" />
+                    <div className="full-a4-sig-line" />
+                    <span className="full-a4-sig-role">Customer / Buyer</span>
+                </div>
+                <div className="full-a4-sig-col right">
+                    <span className="full-a4-sig-for-shop">For {effectiveShop?.name || 'ShopPulse Business'}</span>
+                    <div className="full-a4-sig-space" />
+                    <div className="full-a4-sig-line" />
+                    <span className="full-a4-sig-role auth">Authorized Signatory</span>
+                </div>
+            </div>
+
             {/* Page Footer */}
             <div className="full-a4-footer">
                 <div className="full-a4-footer-line" />
@@ -556,7 +666,17 @@ export const Thermal58Receipt = ({
 }) => {
     if (!bill) return null;
 
-    const effectiveShop = (bill.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
+    const fertilizerLicText = formatFertilizerLicensesText(effectiveShop);
     const invoiceNum = bill.invoiceNumber || (bill._id ? bill._id.slice(-6).toUpperCase() : 'N/A');
     const billDate = bill.date ? new Date(bill.date) : new Date();
     const dateFormatted = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -578,7 +698,7 @@ export const Thermal58Receipt = ({
         sgstTotal,
         igstTotal,
         grandTotal,
-        items: displayItems
+        items: displayItems = []
     } = taxDetails;
 
     return (
@@ -589,6 +709,11 @@ export const Thermal58Receipt = ({
                 {effectiveShop?.location && <div className="tr-shop-line">{effectiveShop.location}</div>}
                 {effectiveShop?.contactNumber && <div className="tr-shop-line">Ph: {effectiveShop.contactNumber}</div>}
                 {effectiveShop?.gstNumber && <div className="tr-shop-line">GSTIN: {effectiveShop.gstNumber}</div>}
+                {fertilizerLicText && (
+                    <div className="tr-shop-line tr-shop-licenses">
+                        {fertilizerLicText}
+                    </div>
+                )}
             </div>
 
             <div className="tr-dashed-divider" />
@@ -726,7 +851,17 @@ export const Thermal80Receipt = ({
 }) => {
     if (!bill) return null;
 
-    const effectiveShop = (bill.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
+    const fertilizerLicText = formatFertilizerLicensesText(effectiveShop);
     const invoiceNum = bill.invoiceNumber || (bill._id ? bill._id.slice(-6).toUpperCase() : 'N/A');
     const billDate = bill.date ? new Date(bill.date) : new Date();
     const dateFormatted = billDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -748,7 +883,7 @@ export const Thermal80Receipt = ({
         sgstTotal,
         igstTotal,
         grandTotal,
-        items: displayItems
+        items: displayItems = []
     } = taxDetails;
 
     return (
@@ -761,6 +896,11 @@ export const Thermal80Receipt = ({
                     Ph: {effectiveShop?.contactNumber || 'XXXXXXXXXX'}
                     {effectiveShop?.gstNumber && ` | GSTIN: ${effectiveShop.gstNumber}`}
                 </div>
+                {fertilizerLicText && (
+                    <div className="tr-shop-line-80 tr-shop-licenses-80">
+                        {fertilizerLicText}
+                    </div>
+                )}
             </div>
 
             <div className="tr-dashed-divider" />

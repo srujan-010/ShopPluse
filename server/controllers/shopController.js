@@ -59,12 +59,55 @@ exports.getShops = async (req, res) => {
     }
 };
 
+// Helper to validate fertilizer licenses array
+const validateAndFormatFertilizerLicenses = (licenses) => {
+    if (!Array.isArray(licenses)) {
+        throw new Error('Fertilizer licences must be an array');
+    }
+
+    const allowedTypes = ['LAID', 'LAFD', 'LASD'];
+    const seenTypes = new Set();
+    const cleanLicenses = [];
+
+    for (const lic of licenses) {
+        if (!lic || typeof lic !== 'object') {
+            throw new Error('Invalid licence record');
+        }
+        const lType = (lic.licenseType || '').trim().toUpperCase();
+        const lNum = (lic.licenseNumber || '').trim();
+
+        if (!allowedTypes.includes(lType)) {
+            throw new Error(`Invalid licence type: ${lType}. Must be LAID, LAFD, or LASD.`);
+        }
+
+        if (!lNum) {
+            throw new Error(`Licence number is mandatory for ${lType}`);
+        }
+
+        if (seenTypes.has(lType)) {
+            throw new Error(`Duplicate licence type: ${lType}. Each licence type can be registered only once per shop.`);
+        }
+
+        seenTypes.add(lType);
+        cleanLicenses.push({ licenseType: lType, licenseNumber: lNum });
+    }
+
+    return cleanLicenses;
+};
+
 // @desc    Create new shop
 // @route   POST /api/shops
 // @access  Private
 exports.createShop = async (req, res) => {
     try {
         req.body.owner = req.user.id;
+        if (req.body.fertilizerLicenses !== undefined) {
+            const cleanLicenses = validateAndFormatFertilizerLicenses(req.body.fertilizerLicenses);
+            req.body.fertilizerLicenses = cleanLicenses;
+            req.body.fertilizerLicense = cleanLicenses.length > 0
+                ? cleanLicenses.map(l => `${l.licenseType}: ${l.licenseNumber}`).join(', ')
+                : '';
+        }
         const shop = await Shop.create(req.body);
         res.status(201).json({ success: true, data: shop });
     } catch (error) {
@@ -86,6 +129,14 @@ exports.updateShop = async (req, res) => {
         // Make sure user is owner
         if (shop.owner.toString() !== req.user.id) {
             return res.status(401).json({ success: false, message: 'Not authorized' });
+        }
+
+        if (req.body.fertilizerLicenses !== undefined) {
+            const cleanLicenses = validateAndFormatFertilizerLicenses(req.body.fertilizerLicenses);
+            req.body.fertilizerLicenses = cleanLicenses;
+            req.body.fertilizerLicense = cleanLicenses.length > 0
+                ? cleanLicenses.map(l => `${l.licenseType}: ${l.licenseNumber}`).join(', ')
+                : '';
         }
 
         shop = await Shop.findByIdAndUpdate(req.params.id, req.body, {

@@ -13,7 +13,49 @@ exports.getProducts = async (req, res) => {
             query.shop = req.query.shop;
         }
         const products = await Product.find(query).populate('shop', 'name');
-        res.status(200).json({ success: true, data: products });
+
+        // Backward compatibility: Hydrate entryType, payment info, and initialPurchaseId from linked Purchase
+        const productIds = products.map(p => p._id);
+        let purchaseMap = {};
+        if (productIds.length > 0) {
+            const Purchase = require('../models/Purchase');
+            const linkedPurchases = await Purchase.find({
+                linkedProductId: { $in: productIds }
+            }).sort({ createdAt: 1 });
+
+            linkedPurchases.forEach(pur => {
+                const pId = pur.linkedProductId ? pur.linkedProductId.toString() : '';
+                if (pId && !purchaseMap[pId]) {
+                    purchaseMap[pId] = pur;
+                }
+            });
+        }
+
+        const enrichedProducts = products.map(prod => {
+            const pObj = prod.toObject();
+            const linked = purchaseMap[prod._id.toString()];
+            if (linked) {
+                // If product is legacy (doesn't have initialPurchaseId) or entryType was defaulted to 'Purchase',
+                // adopt the actual saved entryType from the linked purchase record!
+                if (!prod.initialPurchaseId || pObj.entryType === 'Purchase') {
+                    if (linked.entryType) pObj.entryType = linked.entryType;
+                }
+                if (!pObj.billNo) pObj.billNo = linked.billNo || '';
+                if (!pObj.supplierPhone) pObj.supplierPhone = linked.supplierPhone || '';
+                if (!pObj.purchaseDate) pObj.purchaseDate = linked.date;
+                if (!prod.initialPurchaseId || !pObj.paymentMethod) pObj.paymentMethod = linked.paymentMethod || 'Cash';
+                if (!prod.initialPurchaseId || !pObj.paymentStatus) pObj.paymentStatus = linked.paymentStatus || 'Paid';
+                if (!prod.initialPurchaseId || pObj.amountPaid === undefined || pObj.amountPaid === 0) pObj.amountPaid = linked.paidAmount || 0;
+                if (!prod.initialPurchaseId || pObj.isFullPaid === undefined || pObj.isFullPaid === false) {
+                    const totalCost = (pObj.quantity || 0) * (pObj.buyPrice || 0);
+                    pObj.isFullPaid = linked.entryType === 'Opening Stock' || linked.paymentStatus === 'Paid' || (linked.paidAmount >= totalCost && totalCost > 0);
+                }
+                if (!pObj.initialPurchaseId) pObj.initialPurchaseId = linked._id;
+            }
+            return pObj;
+        });
+
+        res.status(200).json({ success: true, data: enrichedProducts });
     } catch (error) {
         res.status(400).json({ success: false, message: error.message });
     }
@@ -40,40 +82,77 @@ exports.createProduct = async (req, res) => {
         if (req.body.gstPricingMode) {
             req.body.gstPricingMode = req.body.gstPricingMode === 'exclusive' ? 'exclusive' : 'inclusive';
         }
+
+        const entryType = req.body.entryType || 'Purchase';
+        const costPrice = parseFloat(req.body.buyPrice || 0);
+        const quantity = parseFloat(req.body.quantity || 0);
+        const totalAmount = parseFloat((quantity * costPrice).toFixed(2));
+        const paymentMethod = req.body.paymentMethod || 'Cash';
+        const billNo = req.body.billNo || `BILL-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const supplierName = req.body.supplier || 'Unknown Supplier';
+        const supplierPhone = req.body.supplierPhone || '';
+        const purchaseDate = req.body.purchaseDate ? new Date(req.body.purchaseDate) : new Date();
+
+        let isFullPaid = Boolean(req.body.isFullPaid);
+        let amountPaid = parseFloat(req.body.amountPaid || 0);
+        let remainingDue = 0;
+        let paymentStatus = 'Paid';
+
+        if (entryType === 'Opening Stock') {
+            // Opening Stock initializes stock without creating an incorrect supplier payable
+            remainingDue = 0;
+            amountPaid = isFullPaid || amountPaid > 0 ? (amountPaid || totalAmount) : 0;
+            paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
+            isFullPaid = true;
+        } else {
+            if (isFullPaid) {
+                amountPaid = totalAmount;
+                remainingDue = 0;
+                paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
+            } else {
+                if (amountPaid >= totalAmount && totalAmount > 0) {
+                    isFullPaid = true;
+                    paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
+                    remainingDue = 0;
+                } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                    isFullPaid = false;
+                    paymentStatus = 'Partial Paid';
+                    remainingDue = Math.max(0, parseFloat((totalAmount - amountPaid).toFixed(2)));
+                } else {
+                    isFullPaid = false;
+                    amountPaid = 0;
+                    remainingDue = totalAmount;
+                    paymentStatus = req.body.supplier ? 'Pending' : 'Direct Entry';
+                }
+            }
+        }
+
+        req.body.entryType = entryType;
+        req.body.paymentMethod = paymentMethod;
+        req.body.paymentStatus = paymentStatus;
+        req.body.amountPaid = amountPaid;
+        req.body.isFullPaid = isFullPaid;
+        req.body.billNo = billNo;
+        req.body.supplierPhone = supplierPhone;
+        req.body.purchaseDate = purchaseDate;
+
         const product = await Product.create(req.body);
         
         if (product.quantity > 0) {
             const Purchase = require('../models/Purchase');
-            const billNo = req.body.billNo || `BILL-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-            const supplierName = req.body.supplier || 'Unknown Supplier';
-            const costPrice = parseFloat(req.body.buyPrice || 0);
-            const totalAmount = product.quantity * costPrice;
-            const amountPaid = parseFloat(req.body.amountPaid || 0);
-            const remainingDue = Math.max(0, totalAmount - amountPaid);
-
-            let paymentStatus = 'Paid';
-            if (!req.body.supplier) {
-                paymentStatus = 'Direct Entry';
-            } else if (amountPaid >= totalAmount) {
-                paymentStatus = 'Paid';
-            } else if (amountPaid > 0 && amountPaid < totalAmount) {
-                paymentStatus = 'Partial Paid';
-            } else {
-                paymentStatus = 'Pending';
-            }
 
             const paymentHistory = amountPaid > 0 ? [{
                 amount: amountPaid,
-                mode: req.body.paymentMethod || 'Cash',
-                note: 'Initial payment',
-                paidAt: req.body.purchaseDate || new Date()
+                mode: paymentMethod,
+                note: entryType === 'Opening Stock' ? 'Opening stock balance' : 'Initial payment',
+                paidAt: purchaseDate
             }] : [];
 
-            await Purchase.create({
+            const purchase = await Purchase.create({
                 shop: product.shop,
                 billNo,
                 supplierName,
-                supplierPhone: req.body.supplierPhone || '',
+                supplierPhone,
                 items: [{
                     product: product._id,
                     productName: product.name,
@@ -85,17 +164,20 @@ exports.createProduct = async (req, res) => {
                 totalAmount,
                 totalItems: 1,
                 paymentStatus,
-                paymentMethod: req.body.paymentMethod || 'Cash',
+                paymentMethod,
                 paidAmount: amountPaid,
                 dueAmount: remainingDue,
                 paymentHistory,
-                entryType: req.body.entryType || 'Purchase',
+                entryType,
                 notes: req.body.notes || '',
                 linkedProductId: product._id,
                 addedBy: req.user.id,
                 owner: req.user.id,
-                date: req.body.purchaseDate || new Date()
+                date: purchaseDate
             });
+
+            product.initialPurchaseId = purchase._id;
+            await product.save();
 
             await RestockHistory.create({
                 product: product._id,
@@ -107,17 +189,18 @@ exports.createProduct = async (req, res) => {
                 owner: product.owner
             });
 
+            const actionType = entryType === 'Adjustment' ? 'STOCK_ADJUSTED' : (entryType === 'Return Stock' ? 'STOCK_RETURNED' : 'STOCK_ADDED');
             await InventoryHistory.create({
                 productId: product._id,
                 productName: product.name,
-                actionType: 'STOCK_ADDED',
+                actionType,
                 quantity: product.quantity,
                 unit: product.unit || 'Piece',
                 previousStock: 0,
                 newStock: product.quantity,
                 source: supplierName,
                 referenceId: billNo,
-                notes: `Initial stock addition${req.body.entryType ? ` via ${req.body.entryType}` : ''}`,
+                notes: `Initial stock addition via ${entryType}`,
                 shop: product.shop,
                 owner: req.user.id
             });
@@ -162,10 +245,121 @@ exports.updateProduct = async (req, res) => {
             req.body.gstPricingMode = req.body.gstPricingMode === 'exclusive' ? 'exclusive' : 'inclusive';
         }
 
+        const entryType = req.body.entryType !== undefined ? req.body.entryType : (product.entryType || 'Purchase');
+        const costPrice = req.body.buyPrice !== undefined ? parseFloat(req.body.buyPrice || 0) : product.buyPrice;
+        const newQuantity = req.body.quantity !== undefined ? parseFloat(req.body.quantity || 0) : product.quantity;
+        const totalAmount = parseFloat((newQuantity * costPrice).toFixed(2));
+        const paymentMethod = req.body.paymentMethod || product.paymentMethod || 'Cash';
+        const billNo = req.body.billNo !== undefined ? req.body.billNo : product.billNo;
+        const supplierName = req.body.supplier !== undefined ? req.body.supplier : product.supplier;
+        const supplierPhone = req.body.supplierPhone !== undefined ? req.body.supplierPhone : product.supplierPhone;
+        const purchaseDate = req.body.purchaseDate ? new Date(req.body.purchaseDate) : (product.purchaseDate || new Date());
+
+        let isFullPaid = req.body.isFullPaid !== undefined ? Boolean(req.body.isFullPaid) : Boolean(product.isFullPaid);
+        let amountPaid = req.body.amountPaid !== undefined ? parseFloat(req.body.amountPaid || 0) : (product.amountPaid || 0);
+        let remainingDue = 0;
+        let paymentStatus = 'Paid';
+
+        if (entryType === 'Opening Stock') {
+            remainingDue = 0;
+            amountPaid = isFullPaid || amountPaid > 0 ? (amountPaid || totalAmount) : 0;
+            paymentStatus = supplierName ? 'Paid' : 'Direct Entry';
+            isFullPaid = true;
+        } else {
+            if (isFullPaid) {
+                amountPaid = totalAmount;
+                remainingDue = 0;
+                paymentStatus = supplierName ? 'Paid' : 'Direct Entry';
+            } else {
+                if (amountPaid >= totalAmount && totalAmount > 0) {
+                    isFullPaid = true;
+                    paymentStatus = supplierName ? 'Paid' : 'Direct Entry';
+                    remainingDue = 0;
+                } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                    isFullPaid = false;
+                    paymentStatus = 'Partial Paid';
+                    remainingDue = Math.max(0, parseFloat((totalAmount - amountPaid).toFixed(2)));
+                } else {
+                    isFullPaid = false;
+                    amountPaid = 0;
+                    remainingDue = totalAmount;
+                    paymentStatus = supplierName ? 'Pending' : 'Direct Entry';
+                }
+            }
+        }
+
+        req.body.entryType = entryType;
+        req.body.paymentMethod = paymentMethod;
+        req.body.paymentStatus = paymentStatus;
+        req.body.amountPaid = amountPaid;
+        req.body.isFullPaid = isFullPaid;
+        if (billNo !== undefined) req.body.billNo = billNo;
+        if (supplierPhone !== undefined) req.body.supplierPhone = supplierPhone;
+        req.body.purchaseDate = purchaseDate;
+
         product = await Product.findByIdAndUpdate(req.params.id, req.body, {
             new: true,
             runValidators: true
         });
+
+        // Synchronize linked Purchase without creating duplicates
+        const Purchase = require('../models/Purchase');
+        let linkedPurchase = null;
+        if (product.initialPurchaseId) {
+            linkedPurchase = await Purchase.findById(product.initialPurchaseId);
+        }
+        if (!linkedPurchase) {
+            linkedPurchase = await Purchase.findOne({ linkedProductId: product._id });
+        }
+
+        if (linkedPurchase) {
+            linkedPurchase.entryType = entryType;
+            if (billNo) linkedPurchase.billNo = billNo;
+            if (supplierName) linkedPurchase.supplierName = supplierName;
+            if (supplierPhone !== undefined) linkedPurchase.supplierPhone = supplierPhone;
+            linkedPurchase.paymentMethod = paymentMethod;
+            linkedPurchase.paymentStatus = paymentStatus;
+            linkedPurchase.totalAmount = totalAmount;
+            linkedPurchase.paidAmount = amountPaid;
+            linkedPurchase.dueAmount = remainingDue;
+            linkedPurchase.date = purchaseDate;
+            if (req.body.notes !== undefined) linkedPurchase.notes = req.body.notes;
+
+            if (linkedPurchase.items && linkedPurchase.items.length > 0) {
+                const pItem = linkedPurchase.items.find(it => it.product && it.product.toString() === product._id.toString()) || linkedPurchase.items[0];
+                pItem.productName = product.name;
+                pItem.quantity = product.quantity;
+                pItem.unit = product.unit || 'Piece';
+                pItem.purchaseRate = costPrice;
+                pItem.itemTotal = totalAmount;
+            }
+
+            // In-place update of paymentHistory to prevent duplicate records
+            if (amountPaid > 0) {
+                if (linkedPurchase.paymentHistory && linkedPurchase.paymentHistory.length > 0) {
+                    linkedPurchase.paymentHistory[0].amount = amountPaid;
+                    linkedPurchase.paymentHistory[0].mode = paymentMethod;
+                    linkedPurchase.paymentHistory[0].paidAt = purchaseDate;
+                    linkedPurchase.paymentHistory[0].note = entryType === 'Opening Stock' ? 'Opening stock balance' : 'Initial payment';
+                } else {
+                    linkedPurchase.paymentHistory = [{
+                        amount: amountPaid,
+                        mode: paymentMethod,
+                        note: entryType === 'Opening Stock' ? 'Opening stock balance' : 'Initial payment',
+                        paidAt: purchaseDate
+                    }];
+                }
+            } else {
+                linkedPurchase.paymentHistory = [];
+            }
+
+            await linkedPurchase.save();
+
+            if (!product.initialPurchaseId) {
+                product.initialPurchaseId = linkedPurchase._id;
+                await product.save();
+            }
+        }
 
         if (product.quantity !== oldQuantity) {
             const difference = product.quantity - oldQuantity;
@@ -323,24 +517,41 @@ exports.restockProduct = async (req, res) => {
         const billNo = req.body.billNo || `BILL-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
         const supplierName = req.body.supplier || 'Unknown Supplier';
         const totalAmount = quantityAdded * costPrice;
-        const amountPaid = parseFloat(req.body.amountPaid || 0);
-        const remainingDue = Math.max(0, totalAmount - amountPaid);
-
+        const entryType = req.body.entryType || 'Purchase';
+        const paymentMethod = req.body.paymentMethod || 'Cash';
+        const isFullPaid = Boolean(req.body.isFullPaid);
+        let amountPaid = parseFloat(req.body.amountPaid || 0);
+        let remainingDue = 0;
         let paymentStatus = 'Paid';
-        if (!req.body.supplier) {
-            paymentStatus = 'Direct Entry';
-        } else if (amountPaid >= totalAmount) {
-            paymentStatus = 'Paid';
-        } else if (amountPaid > 0 && amountPaid < totalAmount) {
-            paymentStatus = 'Partial Paid';
+
+        if (entryType === 'Opening Stock') {
+            remainingDue = 0;
+            amountPaid = isFullPaid || amountPaid > 0 ? (amountPaid || totalAmount) : 0;
+            paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
         } else {
-            paymentStatus = 'Pending';
+            if (isFullPaid) {
+                amountPaid = totalAmount;
+                remainingDue = 0;
+                paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
+            } else {
+                if (amountPaid >= totalAmount && totalAmount > 0) {
+                    paymentStatus = req.body.supplier ? 'Paid' : 'Direct Entry';
+                    remainingDue = 0;
+                } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                    paymentStatus = 'Partial Paid';
+                    remainingDue = Math.max(0, parseFloat((totalAmount - amountPaid).toFixed(2)));
+                } else {
+                    amountPaid = 0;
+                    remainingDue = totalAmount;
+                    paymentStatus = req.body.supplier ? 'Pending' : 'Direct Entry';
+                }
+            }
         }
 
         const paymentHistory = amountPaid > 0 ? [{
             amount: amountPaid,
-            mode: req.body.paymentMethod || 'Cash',
-            note: 'Initial payment',
+            mode: paymentMethod,
+            note: entryType === 'Opening Stock' ? 'Opening stock balance' : 'Initial payment',
             paidAt: req.body.purchaseDate || new Date()
         }] : [];
 
@@ -360,11 +571,11 @@ exports.restockProduct = async (req, res) => {
             totalAmount,
             totalItems: 1,
             paymentStatus,
-            paymentMethod: req.body.paymentMethod || 'Cash',
+            paymentMethod,
             paidAmount: amountPaid,
             dueAmount: remainingDue,
             paymentHistory,
-            entryType: req.body.entryType || 'Purchase',
+            entryType,
             notes: req.body.notes || '',
             linkedProductId: product._id,
             addedBy: req.user.id,

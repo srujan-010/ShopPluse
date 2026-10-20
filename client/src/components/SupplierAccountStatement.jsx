@@ -1139,8 +1139,8 @@ export const SupplierAccountStatement = ({
                                                 <td>
                                                     <span style={{ 
                                                         display: 'inline-block', 
-                                                        background: row.credit.paymentMethod === 'Bank Transfer' ? '#EFF6FF' : (row.credit.paymentMethod === 'Online' || row.credit.paymentMethod === 'UPI' || row.credit.paymentMethod === 'Online / UPI') ? '#F5F3FF' : '#ECFDF5', 
-                                                        color: row.credit.paymentMethod === 'Bank Transfer' ? '#1D4ED8' : (row.credit.paymentMethod === 'Online' || row.credit.paymentMethod === 'UPI' || row.credit.paymentMethod === 'Online / UPI') ? '#6D28D9' : '#059669', 
+                                                        background: (row.credit.paymentMethod === 'Bank Transfer' || row.credit.paymentMethod === 'Bank') ? '#EFF6FF' : (row.credit.paymentMethod === 'Online' || row.credit.paymentMethod === 'UPI' || row.credit.paymentMethod === 'Online / UPI') ? '#F5F3FF' : '#ECFDF5', 
+                                                        color: (row.credit.paymentMethod === 'Bank Transfer' || row.credit.paymentMethod === 'Bank') ? '#1D4ED8' : (row.credit.paymentMethod === 'Online' || row.credit.paymentMethod === 'UPI' || row.credit.paymentMethod === 'Online / UPI') ? '#6D28D9' : '#059669', 
                                                         padding: '3px 8px', 
                                                         borderRadius: '6px', 
                                                         fontSize: '11px', 

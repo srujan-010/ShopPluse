@@ -104,6 +104,43 @@ const productSchema = new mongoose.Schema({
         }
     }],
     supplier: String,
+    supplierPhone: {
+        type: String,
+        trim: true
+    },
+    billNo: {
+        type: String,
+        trim: true
+    },
+    purchaseDate: Date,
+    entryType: {
+        type: String,
+        enum: ['Purchase', 'Opening Stock', 'Adjustment', 'Return Stock'],
+        default: 'Purchase'
+    },
+    paymentMethod: {
+        type: String,
+        enum: ['Cash', 'Online', 'Credit', 'None', 'Bank', 'UPI', 'Bank Transfer'],
+        default: 'Cash'
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Paid', 'Pending', 'Partial Paid', 'Direct Entry'],
+        default: 'Paid'
+    },
+    amountPaid: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    isFullPaid: {
+        type: Boolean,
+        default: false
+    },
+    initialPurchaseId: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Purchase'
+    },
     notes: String,
     shop: {
         type: mongoose.Schema.ObjectId,

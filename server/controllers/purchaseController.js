@@ -50,8 +50,10 @@ exports.createPurchase = async (req, res) => {
     session.startTransaction();
 
     try {
-        const { shop, billNo, supplierName, items, totalAmount, totalItems, paymentStatus, paymentMethod, dueAmount, date } = req.body;
+        const { shop, billNo, supplierName, items, totalAmount, totalItems, paymentStatus, paymentMethod, dueAmount, paidAmount, entryType, date } = req.body;
         const ownerId = req.user.id;
+        const finalEntryType = entryType || 'Purchase';
+        const finalDue = finalEntryType === 'Opening Stock' ? 0 : (dueAmount !== undefined ? dueAmount : 0);
 
         // 1. Create the purchase record
         const purchase = new Purchase({
@@ -61,9 +63,11 @@ exports.createPurchase = async (req, res) => {
             items,
             totalAmount,
             totalItems,
-            paymentStatus,
-            paymentMethod,
-            dueAmount: dueAmount || 0,
+            paymentStatus: finalEntryType === 'Opening Stock' ? (supplierName ? 'Paid' : 'Direct Entry') : (paymentStatus || 'Paid'),
+            paymentMethod: paymentMethod || 'Cash',
+            paidAmount: paidAmount || (finalEntryType === 'Opening Stock' ? totalAmount : 0),
+            dueAmount: finalDue,
+            entryType: finalEntryType,
             date: date || new Date(),
             owner: ownerId,
             addedBy: ownerId
@@ -174,6 +178,15 @@ exports.addPurchasePayment = async (req, res) => {
 
         await purchase.save();
 
+        if (purchase.linkedProductId) {
+            const Product = require('../models/Product');
+            await Product.findByIdAndUpdate(purchase.linkedProductId, {
+                amountPaid: purchase.paidAmount,
+                paymentStatus: purchase.paymentStatus,
+                isFullPaid: purchase.paymentStatus === 'Paid'
+            });
+        }
+
         res.status(200).json({ success: true, data: purchase });
     } catch (error) {
         res.status(400).json({ success: false, message: error.message });
@@ -249,6 +262,11 @@ exports.getSupplierStatement = async (req, res) => {
         const credits = [];  // Payments in period
 
         for (const p of allPurchases) {
+            // Opening Stock initializes stock without creating an incorrect supplier payable
+            if (p.entryType === 'Opening Stock') {
+                continue;
+            }
+
             const pDate = new Date(p.date || p.createdAt);
 
             // Purchase entry

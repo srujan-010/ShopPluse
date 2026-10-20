@@ -27,7 +27,10 @@ import {
     FileText,
     Receipt as ReceiptIcon,
     ChevronRight,
-    ShieldCheck
+    ShieldCheck,
+    MessageCircle,
+    Download,
+    ArrowLeft
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { productService, saleService, shopService, khataService, govSaleService } from '../services/api';
@@ -35,6 +38,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { EmptyState, Skeleton, PageHeader, SearchableSelect, MessageModal } from '../components/PremiumUI';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { invoiceService } from '../utils/invoiceService';
+import { getProductGovPrice, isProductEligibleForSaleMode } from '../utils/gstService';
 import { offlineDB } from '../services/offlineDB';
 import { useSync } from '../context/SyncContext';
 import { useToast } from '../context/ToastContext';
@@ -55,7 +59,7 @@ const POSPage = () => {
     const [customerName, setCustomerName] = useState('');
     const [customerMobile, setCustomerMobile] = useState('');
     const [customerAadhaar, setCustomerAadhaar] = useState('');
-    const [saleMode, setSaleMode] = useState('government');
+    const [saleMode, setSaleMode] = useState('retail');
     const [khataCustomers, setKhataCustomers] = useState([]);
     const [orderSuccess, setOrderSuccess] = useState(false);
     const [lastCreatedSale, setLastCreatedSale] = useState(null);
@@ -63,22 +67,30 @@ const POSPage = () => {
     const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024);
     const [alertConfig, setAlertConfig] = useState({ open: false, title: '', message: '', type: 'info' });
 
+    // WhatsApp Bill Sharing states
+    const [shareMobile, setShareMobile] = useState('');
+    const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
+    const [shareError, setShareError] = useState('');
+    const [shareGuidance, setShareGuidance] = useState('');
+
     // Discount & Partial Payment states
     const [discountType, setDiscountType] = useState('none');
     const [discountValue, setDiscountValue] = useState('');
     const [paidAmount, setPaidAmount] = useState('');
     const [isItemListExpanded, setIsItemListExpanded] = useState(true);
 
-    const isFertilizerShop = shop?.type === 'Fertilizers';
-    const isGovSale = Boolean(isFertilizerShop && saleMode === 'government');
+    const isFertilizerShop = Boolean(
+        shop?.type === 'Fertilizers' || 
+        (shop?.type && shop.type.toLowerCase() === 'fertilizers') || 
+        shop?.fertilizerLicense
+    );
+    const isGovSale = Boolean(saleMode === 'government');
 
     useEffect(() => {
-        if (shop?.type === 'Fertilizers') {
-            setSaleMode('government');
-        } else if (shop) {
+        if (shop && !isFertilizerShop && saleMode === 'government') {
             setSaleMode('retail');
         }
-    }, [shop?.type]);
+    }, [shop, isFertilizerShop, saleMode]);
 
     const rawSubtotal = useMemo(() => {
         return parseFloat(cart.reduce((s, i) => s + ((Number(i.price) || 0) * (Number(i.quantity) || 0)), 0).toFixed(2));
@@ -352,14 +364,35 @@ const POSPage = () => {
         }
     };
 
-    const categories = ['All', ...new Set(products.map(p => p.category).filter(Boolean))];
+    // Products eligible for the active sale mode (in GST Sale mode, strictly products with governmentPrice > 0)
+    const modeEligibleProducts = useMemo(() => {
+        return products.filter(p => isProductEligibleForSaleMode(p, isGovSale));
+    }, [products, isGovSale]);
 
-    const filteredProducts = products.filter(p => {
-        const matchesSearch = (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) || 
-                            (p.barcode || '').includes(searchTerm);
-        const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-        return matchesSearch && matchesCategory;
-    });
+    // Categories derived exclusively from eligible products in this mode
+    const categories = useMemo(() => {
+        return ['All', ...new Set(modeEligibleProducts.map(p => p.category).filter(Boolean))];
+    }, [modeEligibleProducts]);
+
+    // Reset selectedCategory if current selection is not present in active mode
+    useEffect(() => {
+        if (selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
+            setSelectedCategory('All');
+        }
+    }, [categories, selectedCategory]);
+
+    // Filtered products for UI grid, search, and category selection
+    const filteredProducts = useMemo(() => {
+        const cleanSearch = (searchTerm || '').trim().toLowerCase();
+        return modeEligibleProducts.filter(p => {
+            const matchesSearch = !cleanSearch || 
+                                (p.name || '').toLowerCase().includes(cleanSearch) || 
+                                (p.barcode || '').toLowerCase().includes(cleanSearch) ||
+                                (p.sku || '').toLowerCase().includes(cleanSearch);
+            const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
+            return matchesSearch && matchesCategory;
+        });
+    }, [modeEligibleProducts, searchTerm, selectedCategory]);
 
     const quickChips = {
         'KG': [
@@ -403,11 +436,11 @@ const POSPage = () => {
 
     const handleProductClick = (product) => {
         if (product.quantity <= 0) return;
-        if (isGovSale && (product.governmentPrice === undefined || product.governmentPrice === null || Number(product.governmentPrice) <= 0)) {
+        if (isGovSale && !isProductEligibleForSaleMode(product, true)) {
             setAlertConfig({
                 open: true,
                 title: 'Missing GST Ledger Price',
-                message: `"${product.name}" does not have a configured GST Ledger Price (current: ₹${product.governmentPrice || 0}). GST sales require a configured GST ledger rate. Please edit this product in Inventory to set a valid GST Ledger Price before adding it to a GST sale.`,
+                message: `"${product.name}" does not have a configured GST Ledger Price. GST sales require a valid Government / Special Price greater than ₹0. Please edit this product in Inventory to set a valid price before adding it to a GST sale.`,
                 type: 'error'
             });
             return;
@@ -422,17 +455,18 @@ const POSPage = () => {
         const cartKey = `${product._id}-${unit}`;
         const m = multiplier || 1;
 
-        if (isGovSale && (product.governmentPrice === undefined || product.governmentPrice === null || Number(product.governmentPrice) <= 0)) {
+        if (isGovSale && !isProductEligibleForSaleMode(product, true)) {
             setAlertConfig({
                 open: true,
                 title: 'Missing GST Ledger Price',
-                message: `Cannot add "${product.name}" to a GST sale: Missing configured GST Ledger Price. Please update this product in Inventory first.`,
+                message: `Cannot add "${product.name}" to a GST sale: Missing configured Government / Special Price greater than ₹0. Please update this product in Inventory first.`,
                 type: 'error'
             });
             return;
         }
 
-        const activeBasePrice = isGovSale ? Number(product.governmentPrice) : Number(product.sellPrice);
+        const govPrice = getProductGovPrice(product);
+        const activeBasePrice = isGovSale ? govPrice : Number(product.sellPrice);
         const priceForUnit = activeBasePrice * m;
 
         setCart(prev => {
@@ -457,7 +491,7 @@ const POSPage = () => {
                 brand: product.brand,
                 category: product.category,
                 productType: product.productType,
-                governmentPrice: Number(product.governmentPrice || 0),
+                governmentPrice: isGovSale ? govPrice : Number(product.governmentPrice || 0),
                 isGstApplicable: product.isGstApplicable !== undefined ? Boolean(product.isGstApplicable) : (Number(product.gst) > 0),
                 gstRate: product.gstRate !== undefined ? Number(product.gstRate) : Number(product.gst || 0),
                 gstPricingMode: product.gstPricingMode || 'inclusive'
@@ -516,12 +550,13 @@ const POSPage = () => {
             // Verify all items have valid positive government price
             for (const it of cart) {
                 const productObj = products.find(p => p._id === it.product);
-                if (!productObj?.governmentPrice || Number(productObj.governmentPrice) <= 0) {
-                    showToast(`Cannot complete GST sale: "${it.productName}" lacks a valid GST Ledger Price.`, 'error');
+                const govPrice = getProductGovPrice(productObj) || (Number(it.governmentPrice) > 0 ? Number(it.governmentPrice) : null);
+                if (!govPrice || govPrice <= 0) {
+                    showToast(`Cannot complete GST sale: "${it.productName}" lacks a valid Government Price.`, 'error');
                     setAlertConfig({
                         open: true,
                         title: 'Missing GST Ledger Price',
-                        message: `Product "${it.productName}" does not have a configured GST Ledger Price. Please update this product in Inventory before completing this GST sale.`,
+                        message: `Product "${it.productName}" does not have a configured Government Price greater than ₹0. Please update this product in Inventory before completing this GST sale.`,
                         type: 'error'
                     });
                     return;
@@ -564,7 +599,7 @@ const POSPage = () => {
                     customerAadhaar: customerAadhaar || '',
                     items: taxCalculation.itemsWithTax.map(item => {
                         const productObj = products.find(p => p._id === item.product);
-                        const govPrice = Number(productObj?.governmentPrice);
+                        const govPrice = getProductGovPrice(productObj) || Number(item.governmentPrice || item.basePrice || 0);
                         return {
                             product: item.product,
                             productName: item.productName,
@@ -643,6 +678,10 @@ const POSPage = () => {
                 }
             }
             setLastCreatedSale(createdSale);
+            const initialSharePhone = (customerMobile || createdSale?.customerMobile || '').replace(/\D/g, '').slice(-10);
+            setShareMobile(initialSharePhone);
+            setShareError('');
+            setShareGuidance('');
             setOrderSuccess(true);
             setCart([]);
             setIsCartDrawerOpen(false);
@@ -665,6 +704,84 @@ const POSPage = () => {
             showToast(err.response?.data?.message || 'Checkout failed', 'error');
         } finally {
             setIsCheckingOut(false);
+        }
+    };
+
+    const handleShareWhatsApp = async () => {
+        if (isSharingWhatsApp) return;
+        setShareError('');
+        setShareGuidance('');
+
+        const targetId = lastCreatedSale?._id;
+        if (!targetId) {
+            setShareError('No completed transaction found to share.');
+            showToast('No completed transaction found to share.', 'error');
+            return;
+        }
+
+        const rawMobile = (shareMobile || lastCreatedSale?.customerMobile || customerMobile || '').trim();
+        const digits = rawMobile.replace(/\D/g, '');
+
+        let normalizedMobile = '';
+        if (digits.length === 10) {
+            normalizedMobile = `91${digits}`;
+        } else if (digits.length === 12 && digits.startsWith('91')) {
+            normalizedMobile = digits;
+        } else if (digits.length === 11 && digits.startsWith('0')) {
+            normalizedMobile = `91${digits.slice(1)}`;
+        } else {
+            setShareError('Please enter a valid 10-digit mobile number.');
+            return;
+        }
+
+        setIsSharingWhatsApp(true);
+        try {
+            // 1. Retrieve the successfully saved sale using its transaction ID
+            let finalizedSale = lastCreatedSale;
+            try {
+                const res = isGovSale 
+                    ? await govSaleService.getSale(targetId) 
+                    : await saleService.getSale(targetId);
+                if (res?.data?.data) {
+                    finalizedSale = res.data.data;
+                    setLastCreatedSale(finalizedSale);
+                }
+            } catch (fetchErr) {
+                console.warn('Could not re-fetch sale by ID, using lastCreatedSale state:', fetchErr);
+            }
+
+            // 2. Retrieve the permanent invoice number from the saved transaction
+            const invoiceNum = finalizedSale?.invoiceNumber;
+            if (!invoiceNum || String(invoiceNum).startsWith('INV-TEMP') || String(invoiceNum).startsWith('TEMP')) {
+                setShareError('Cannot share bill: Permanent invoice number is not available yet. Please ensure the transaction has synced with the server.');
+                showToast('Cannot share bill: Permanent invoice number is not available yet.', 'error');
+                setIsSharingWhatsApp(false);
+                return;
+            }
+
+            // 3. Share the finalized invoice PDF using retailer's saved default bill format
+            const activeFormat = shop?.defaultPrintFormat || 'full_a4';
+            const billType = isGovSale ? 'GOV_SALE' : 'SALE';
+
+            const result = await invoiceService.shareInvoice(finalizedSale, shop, billType, {
+                products,
+                format: activeFormat,
+                mobile: normalizedMobile
+            });
+
+            if (result?.method === 'native') {
+                showToast('Invoice shared successfully via WhatsApp!', 'success');
+            } else if (result?.method === 'link_with_pdf') {
+                setShareGuidance(`Invoice #${invoiceNum} downloaded. WhatsApp opened — please attach the downloaded bill to send it.`);
+                showToast(`Invoice #${invoiceNum} downloaded! Attach it in the opened WhatsApp chat.`, 'info');
+            }
+        } catch (err) {
+            console.error('WhatsApp share error:', err);
+            const msg = err.message || 'Failed to prepare PDF for WhatsApp. Please use Download PDF.';
+            setShareError(msg);
+            showToast(msg, 'error');
+        } finally {
+            setIsSharingWhatsApp(false);
         }
     };
 
@@ -698,80 +815,49 @@ const POSPage = () => {
                 )}
 
                 {isFertilizerShop && (
-                    <div style={{
-                        display: 'flex',
-                        gap: '8px',
-                        padding: '12px 24px 0 24px',
-                        background: '#FFFFFF'
-                    }}>
+                    <div className="pos-mode-toggle-belt">
                         <button
                             type="button"
+                            className={`pos-mode-btn ${!isGovSale ? 'active-retail' : ''}`}
+                            onClick={() => {
+                                if (saleMode !== 'retail') {
+                                    if (cart.length > 0) {
+                                        if (window.confirm('Switching to Regular Retail Sale mode will reset your current cart. Continue?')) {
+                                            setCart([]);
+                                            setSaleMode('retail');
+                                            setSelectedCategory('All');
+                                        }
+                                    } else {
+                                        setSaleMode('retail');
+                                        setSelectedCategory('All');
+                                    }
+                                }
+                            }}
+                        >
+                            <ShoppingBag size={16} color={!isGovSale ? '#1E40AF' : '#94A3B8'} />
+                            <span>Regular Retail Sale (Selling Price)</span>
+                        </button>
+
+                        <button
+                            type="button"
+                            className={`pos-mode-btn ${isGovSale ? 'active-gov' : ''}`}
                             onClick={() => {
                                 if (saleMode !== 'government') {
                                     if (cart.length > 0) {
                                         if (window.confirm('Switching to GST Sale mode will reset your current cart. Continue?')) {
                                             setCart([]);
                                             setSaleMode('government');
+                                            setSelectedCategory('All');
                                         }
                                     } else {
                                         setSaleMode('government');
+                                        setSelectedCategory('All');
                                     }
                                 }
                             }}
-                            style={{
-                                flex: 1,
-                                padding: '10px 16px',
-                                borderRadius: '12px',
-                                border: isGovSale ? '2px solid #059669' : '1.5px solid #E2E8F0',
-                                background: isGovSale ? '#ECFDF5' : '#FFFFFF',
-                                color: isGovSale ? '#065F46' : '#64748B',
-                                fontWeight: '800',
-                                fontSize: '13px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '8px',
-                                transition: 'all 0.2s ease'
-                            }}
                         >
-                            <ShieldCheck size={16} color={isGovSale ? '#059669' : '#94A3B8'} />
+                            <ShieldCheck size={16} color={isGovSale ? '#065F46' : '#94A3B8'} />
                             <span>GST Sale (Special Price)</span>
-                        </button>
-
-                        <button
-                            type="button"
-                            onClick={() => {
-                                if (saleMode !== 'retail') {
-                                    if (cart.length > 0) {
-                                        if (window.confirm('Switching to Retail Sale mode will reset your current cart. Continue?')) {
-                                            setCart([]);
-                                            setSaleMode('retail');
-                                        }
-                                    } else {
-                                        setSaleMode('retail');
-                                    }
-                                }
-                            }}
-                            style={{
-                                flex: 1,
-                                padding: '10px 16px',
-                                borderRadius: '12px',
-                                border: !isGovSale ? '2px solid #1E6BFF' : '1.5px solid #E2E8F0',
-                                background: !isGovSale ? '#EFF6FF' : '#FFFFFF',
-                                color: !isGovSale ? '#1E40AF' : '#64748B',
-                                fontWeight: '800',
-                                fontSize: '13px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '8px',
-                                transition: 'all 0.2s ease'
-                            }}
-                        >
-                            <ShoppingBag size={16} color={!isGovSale ? '#1E6BFF' : '#94A3B8'} />
-                            <span>Regular Retail Sale (Selling Price)</span>
                         </button>
                     </div>
                 )}
@@ -832,11 +918,7 @@ const POSPage = () => {
                                     <div className="pcv2-footer">
                                         <div className="pcv2-price">
                                             {isGovSale ? (
-                                                product.governmentPrice && Number(product.governmentPrice) > 0 ? (
-                                                    <span>₹{product.governmentPrice} <small style={{ fontSize: '10px', color: '#059669', fontWeight: '800' }}>GST</small></span>
-                                                ) : (
-                                                    <span style={{ color: '#DC2626', fontSize: '11px', fontWeight: '800' }}>No GST Price</span>
-                                                )
+                                                <span>₹{getProductGovPrice(product)} <small style={{ fontSize: '10px', color: '#059669', fontWeight: '800' }}>GST</small></span>
                                             ) : (
                                                 <span>₹{product.sellPrice}</span>
                                             )}
@@ -871,9 +953,9 @@ const POSPage = () => {
                             ) : (
                                 <EmptyState 
                                     icon={ShoppingBag}
-                                    title={searchTerm ? "No products found" : "Your catalog is empty"}
-                                    description={searchTerm ? `We couldn't find anything matching "${searchTerm}".` : "Add products to your inventory to start selling."}
-                                    actionLabel={searchTerm ? "Clear Search" : "Add Products"}
+                                    title={searchTerm ? "No products found" : (isGovSale && products.length > 0 ? "No products with Government Price" : "Your catalog is empty")}
+                                    description={searchTerm ? `We couldn't find anything matching "${searchTerm}".` : (isGovSale && products.length > 0 ? "Only products with a configured Government / Special Price greater than ₹0 are shown in GST Sale mode. Configure government prices in Inventory to display them here." : "Add products to your inventory to start selling.")}
+                                    actionLabel={searchTerm ? "Clear Search" : (isGovSale && products.length > 0 ? "Go to Inventory" : "Add Products")}
                                     onAction={searchTerm ? () => setSearchTerm('') : () => navigate(`/shop/${shopId}/inventory`)}
                                 />
                             )}
@@ -882,14 +964,39 @@ const POSPage = () => {
                 </div>
             </div>
 
-            {/* Zomato-style Floating Cart Bar */}
+            {/* Responsive Floating Cart Summary Bar */}
             {cart.length > 0 && (
-                <div className="mobile-pos-bar-v2 zomato-cart-bar" onClick={() => setIsCartDrawerOpen(true)}>
+                <div 
+                    className="mobile-pos-bar-v2 zomato-cart-bar" 
+                    onClick={() => setIsCartDrawerOpen(true)}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Open cart and checkout"
+                >
                     <div className="mpbv2-left">
-                        <div className="mpbv2-count">{distinctProductsCount} {distinctProductsCount === 1 ? 'PRODUCT' : 'PRODUCTS'} ({totalQuantityCount} TOTAL)</div>
-                        <div className="mpbv2-total">₹{finalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</div>
+                        <div className="mpbv2-count">
+                            <span className="mpbv2-count-badge">{distinctProductsCount}</span>
+                            <span className="mpbv2-count-label">
+                                {distinctProductsCount === 1 ? 'item' : 'items'}
+                                <span className="mpbv2-count-qty"> • {totalQuantityCount} qty</span>
+                            </span>
+                        </div>
+                        <div className="mpbv2-total">
+                            ₹{finalAmount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                        </div>
                     </div>
-                    <button type="button" className="mpbv2-btn">Complete Transaction <ArrowRight size={18} /></button>
+                    <button 
+                        type="button" 
+                        className="mpbv2-btn"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setIsCartDrawerOpen(true);
+                        }}
+                    >
+                        <span className="mpbv2-btn-desktop">Complete Transaction</span>
+                        <span className="mpbv2-btn-mobile">View Cart / Checkout</span>
+                        <ArrowRight size={18} />
+                    </button>
                 </div>
             )}
 
@@ -935,7 +1042,7 @@ const POSPage = () => {
                                 </div>
                                 <div className="sell-banner-v2">
                                     <span>Total Amount</span>
-                                    <strong>₹{(calculateConversion(sellQty, sellUnit, sellingProduct.unit).multiplier * (isGovSale ? Number(sellingProduct.governmentPrice) : Number(sellingProduct.sellPrice)) * parseFloat(sellQty || 0)).toFixed(2)}</strong>
+                                    <strong>₹{(calculateConversion(sellQty, sellUnit, sellingProduct.unit).multiplier * (isGovSale ? (getProductGovPrice(sellingProduct) || 0) : Number(sellingProduct.sellPrice)) * parseFloat(sellQty || 0)).toFixed(2)}</strong>
                                 </div>
                                 <button className="btn-add-cart-v2" onClick={() => {
                                     if (parseFloat(sellQty) <= 0 || isNaN(parseFloat(sellQty))) {
@@ -976,6 +1083,15 @@ const POSPage = () => {
                                     <h3>Complete Transaction</h3>
                                     <p>{shop?.name ? `Checkout for ${shop.name}` : 'Order Summary & Payment'}</p>
                                 </div>
+                                <button 
+                                    type="button"
+                                    className="btn-cdv2-close" 
+                                    onClick={() => { if (!isCheckingOut) setIsCartDrawerOpen(false); }}
+                                    title="Close Checkout"
+                                    aria-label="Close Checkout"
+                                >
+                                    <X size={20} />
+                                </button>
                             </div>
 
                             <div className="cdv2-body">
@@ -1498,29 +1614,95 @@ const POSPage = () => {
             <AnimatePresence>
                 {orderSuccess && (
                     <div className="modal-overlay-v2">
-                        <motion.div initial={{ scale: 0.8 }} animate={{ scale: 1 }} className="success-card-v2">
-                            <div className="s-icon-v2"><CheckCircle size={64} color="#00A86B" /></div>
-                            <h2>Transaction Complete</h2>
-                            <p>Bill recorded and stock updated.</p>
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="success-card-v2">
+                            <div className="s-icon-v2"><CheckCircle size={56} color="#00A86B" /></div>
+                            <div className="s-header-text">
+                                <h2>Transaction Complete</h2>
+                                <p>Bill recorded and stock updated.</p>
+                            </div>
                             
-                            <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
+                            {lastCreatedSale && (
+                                <div className="s-bill-badge">
+                                    <span>Invoice #{lastCreatedSale.invoiceNumber || (lastCreatedSale._id ? lastCreatedSale._id.slice(-6).toUpperCase() : 'BILL')}</span>
+                                    <strong>₹{Number(lastCreatedSale.totalAmount || finalAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                                </div>
+                            )}
+
+                            {/* Direct WhatsApp Share Section */}
+                            <div className="s-share-box">
+                                <label className="s-share-label">Customer Mobile (WhatsApp)</label>
+                                <div className={`s-phone-input-row ${shareError ? 'input-error' : ''}`}>
+                                    <span className="s-phone-code">+91</span>
+                                    <input 
+                                        type="tel"
+                                        placeholder="10-digit mobile number"
+                                        value={shareMobile}
+                                        onChange={(e) => {
+                                            setShareError('');
+                                            setShareGuidance('');
+                                            setShareMobile(e.target.value.replace(/\D/g, '').slice(0, 10));
+                                        }}
+                                        maxLength={10}
+                                    />
+                                    {shareMobile.length === 10 && (
+                                        <CheckCircle size={16} color="#059669" />
+                                    )}
+                                </div>
+                                {shareError && <div className="s-error-msg">{shareError}</div>}
+                                {shareGuidance && (
+                                    <div className="s-guidance-msg">
+                                        <Info size={14} color="#1E40AF" />
+                                        <span>{shareGuidance}</span>
+                                    </div>
+                                )}
+
                                 <button 
-                                    className="ips-btn ips-wa" 
-                                    style={{ flex: 1, background: '#25D366', color: 'white', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.shareInvoice(lastCreatedSale, shop, isGovSale ? 'GOV_SALE' : 'SALE', { products, format: shop?.defaultPrintFormat || 'full_a4' })}
+                                    type="button"
+                                    className="btn-share-wa"
+                                    disabled={isSharingWhatsApp}
+                                    onClick={handleShareWhatsApp}
                                 >
-                                    Share
-                                </button>
-                                <button 
-                                    className="ips-btn ips-pdf" 
-                                    style={{ flex: 1, background: '#F2F4F7', color: '#101828', border: 'none', height: '44px', borderRadius: '12px', fontWeight: '800', cursor: 'pointer' }}
-                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, isGovSale ? 'GOV_SALE' : 'SALE', { products, format: shop?.defaultPrintFormat || 'full_a4' })}
-                                >
-                                    Download PDF
+                                    {isSharingWhatsApp ? (
+                                        <>
+                                            <div className="spinner-mini" style={{ width: '16px', height: '16px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }}></div>
+                                            <span>Preparing Bill...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <MessageCircle size={18} />
+                                            <span>Share Bill on WhatsApp</span>
+                                        </>
+                                    )}
                                 </button>
                             </div>
 
-                            <button className="btn-s-done-v2" onClick={() => { setOrderSuccess(false); setLastCreatedSale(null); setIsAddingNewKhata(false); setCustomerName(''); setCustomerMobile(''); setCustomerAadhaar(''); }}>New Sale</button>
+                            <div className="s-secondary-actions">
+                                <button 
+                                    type="button"
+                                    className="btn-s-secondary" 
+                                    onClick={() => lastCreatedSale && invoiceService.downloadInvoice(lastCreatedSale, shop, isGovSale ? 'GOV_SALE' : 'SALE', { products, format: shop?.defaultPrintFormat || 'full_a4' })}
+                                >
+                                    <Download size={16} />
+                                    <span>Download PDF</span>
+                                </button>
+                                <button 
+                                    type="button"
+                                    className="btn-s-secondary done-btn" 
+                                    onClick={() => { 
+                                        setOrderSuccess(false); 
+                                        setLastCreatedSale(null); 
+                                        setIsAddingNewKhata(false); 
+                                        setCustomerName(''); 
+                                        setCustomerMobile(''); 
+                                        setCustomerAadhaar(''); 
+                                        setShareMobile('');
+                                        setShareError('');
+                                        setShareGuidance('');
+                                    }}
+                                >
+                                    <span>New Sale</span>
+                                </button>
+                            </div>
                         </motion.div>
                     </div>
                 )}
@@ -1533,9 +1715,59 @@ const POSPage = () => {
                 .spinner-mini {
                     animation: spin 0.6s linear infinite;
                 }
-                .premium-pos-v2 { display: flex; height: calc(100vh - 72px); background: #F6F8FC; overflow: hidden; }
-                .pos-catalog-shell { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+                .premium-pos-v2 { 
+                    display: flex; 
+                    flex-direction: column; 
+                    height: 100%; 
+                    min-height: 0; 
+                    flex: 1; 
+                    background: #F6F8FC; 
+                    overflow: hidden; 
+                    position: relative; 
+                }
+                .pos-catalog-shell { 
+                    flex: 1; 
+                    display: flex; 
+                    flex-direction: column; 
+                    overflow: hidden; 
+                    min-height: 0; 
+                    container-type: inline-size;
+                    container-name: posCatalog;
+                }
                 
+                .pos-mode-toggle-belt {
+                    display: flex;
+                    gap: 10px;
+                    padding: 12px 24px 0 24px;
+                    background: #FFFFFF;
+                }
+                .pos-mode-btn {
+                    flex: 1;
+                    padding: 10px 16px;
+                    border-radius: 12px;
+                    border: 1.5px solid #E2E8F0;
+                    background: #FFFFFF;
+                    color: #64748B;
+                    font-weight: 800;
+                    font-size: 13px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                    transition: all 0.2s ease;
+                }
+                .pos-mode-btn.active-retail {
+                    border: 2px solid #1E6BFF;
+                    background: #EFF6FF;
+                    color: #1E40AF;
+                }
+                .pos-mode-btn.active-gov {
+                    border: 2px solid #059669;
+                    background: #ECFDF5;
+                    color: #065F46;
+                }
+
                 .pos-header-v2 { padding: 24px 24px 0 24px; }
                 .pos-header-text h1 { font-size: 34px; font-weight: 800; color: #101828; margin: 0; }
                 .pos-header-text p { font-size: 15px; color: #667085; font-weight: 600; margin-top: 4px; }
@@ -1548,7 +1780,49 @@ const POSPage = () => {
                 .cat-pill-v2 { padding: 10px 18px; background: white; border: 1.5px solid #F2F4F7; border-radius: 12px; font-weight: 800; font-size: 13px; color: #667085; cursor: pointer; white-space: nowrap; }
                 .cat-pill-v2.active { background: #071B44; color: white; border-color: #071B44; }
 
-                .pos-grid-v2 { flex: 1; overflow-y: auto; padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 18px; align-content: flex-start; }
+                /* 5 Products Per Row on Desktop and Laptop Screens */
+                .pos-grid-v2 { 
+                    flex: 1; 
+                    min-height: 0; 
+                    overflow-y: auto; 
+                    padding: 20px 24px 110px 24px; 
+                    display: grid; 
+                    grid-template-columns: repeat(5, minmax(0, 1fr)); 
+                    gap: 18px; 
+                    align-content: flex-start; 
+                    -webkit-overflow-scrolling: touch;
+                }
+
+                /* Container Queries: Dynamically calculate columns based on remaining product panel width */
+                @container posCatalog (min-width: 1080px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(5, minmax(0, 1fr));
+                    }
+                }
+                @container posCatalog (min-width: 840px) and (max-width: 1079px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(4, minmax(0, 1fr));
+                        gap: 14px;
+                    }
+                }
+                @container posCatalog (min-width: 600px) and (max-width: 839px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                        gap: 12px;
+                    }
+                }
+                @container posCatalog (max-width: 599px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                        gap: 10px;
+                    }
+                }
+                @container posCatalog (max-width: 350px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(1, minmax(0, 1fr));
+                    }
+                }
+
                 .pos-card-v2 { background: white; padding: 20px; border-radius: 28px; border: 1px solid #F2F4F7; display: flex; flex-direction: column; gap: 12px; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 12px rgba(0,0,0,0.02); }
                 .pos-card-v2:hover { transform: translateY(-4px); box-shadow: 0 15px 30px rgba(0,0,0,0.06); border-color: #1E6BFF; }
                 .pos-card-v2.out-of-stock { opacity: 0.5; cursor: not-allowed; }
@@ -1615,13 +1889,87 @@ const POSPage = () => {
                 .sell-banner-v2 strong { font-size: 22px; font-weight: 900; }
                 .btn-add-cart-v2 { position: sticky; bottom: 0; width: 100%; height: 56px; background: #1E6BFF; color: white; border: none; border-radius: 16px; font-weight: 900; font-size: 16px; cursor: pointer; box-shadow: 0 -12px 24px white; z-index: 10; margin-top: auto; }
 
-                /* Zomato Cart Bar */
-                .mobile-pos-bar-v2 { position: fixed; bottom: 100px; left: 20px; right: 20px; height: 74px; background: #071B44; color: white; border-radius: 22px; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; z-index: 1001; }
-                .mobile-pos-bar-v2.zomato-cart-bar { left: 50%; right: auto; transform: translateX(-50%); max-width: 600px; width: calc(100% - 40px); box-shadow: 0 15px 40px rgba(7,27,68,0.3); transition: 0.3s; cursor: pointer; }
-                .mobile-pos-bar-v2.zomato-cart-bar:hover { transform: translateX(-50%) translateY(-5px); box-shadow: 0 20px 50px rgba(7,27,68,0.4); }
-                .mpbv2-count { font-size: 11px; font-weight: 800; color: #98A2B3; letter-spacing: 1px; }
-                .mpbv2-total { font-size: 22px; font-weight: 900; line-height: 1.1; }
-                .mpbv2-btn { background: #1E6BFF; color: white; border: none; padding: 10px 20px; border-radius: 14px; font-weight: 800; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+                /* Floating Cart Summary Bar */
+                .mobile-pos-bar-v2 { 
+                    position: fixed; 
+                    bottom: 24px; 
+                    left: 50%; 
+                    transform: translateX(-50%); 
+                    max-width: 580px; 
+                    width: calc(100% - 40px); 
+                    height: 62px; 
+                    background: #071B44; 
+                    color: white; 
+                    border-radius: 18px; 
+                    padding: 0 18px; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: space-between; 
+                    z-index: 1001; 
+                    box-shadow: 0 12px 36px rgba(7, 27, 68, 0.28); 
+                    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); 
+                    cursor: pointer; 
+                    box-sizing: border-box;
+                }
+                .mobile-pos-bar-v2:hover { 
+                    transform: translateX(-50%) translateY(-2px); 
+                    box-shadow: 0 16px 42px rgba(7, 27, 68, 0.38); 
+                }
+                .mpbv2-left {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                    min-width: 0;
+                }
+                .mpbv2-count { 
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    font-size: 11px; 
+                    font-weight: 700; 
+                    color: #94A3B8; 
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px; 
+                }
+                .mpbv2-count-badge {
+                    background: #1E6BFF;
+                    color: white;
+                    padding: 1px 7px;
+                    border-radius: 10px;
+                    font-size: 11px;
+                    font-weight: 800;
+                }
+                .mpbv2-total { 
+                    font-size: 20px; 
+                    font-weight: 900; 
+                    line-height: 1.1; 
+                    color: #FFFFFF;
+                    font-variant-numeric: tabular-nums;
+                }
+                .mpbv2-btn { 
+                    background: #1E6BFF; 
+                    color: white; 
+                    border: none; 
+                    padding: 9px 18px; 
+                    border-radius: 12px; 
+                    font-weight: 800; 
+                    font-size: 14px;
+                    display: flex; 
+                    align-items: center; 
+                    gap: 8px; 
+                    cursor: pointer; 
+                    transition: 0.15s;
+                    flex-shrink: 0;
+                }
+                .mpbv2-btn:hover {
+                    background: #185adb;
+                }
+                .mpbv2-btn-desktop {
+                    display: inline;
+                }
+                .mpbv2-btn-mobile {
+                    display: none;
+                }
                 
                 .modal-overlay-v2 { position: fixed; inset: 0; z-index: 7000; display: flex; align-items: flex-end; justify-content: center; }
                 .m-backdrop-v2 { position: absolute; inset: 0; background: rgba(7, 27, 68, 0.4); backdrop-filter: blur(8px); }
@@ -2194,28 +2542,288 @@ const POSPage = () => {
                 .btn-final-v2 { width: 100%; height: 56px; background: #071B44; color: white; border: none; border-radius: 16px; font-size: 18px; font-weight: 900; cursor: pointer; transition: 0.2s; }
                 .btn-final-v2:active { transform: scale(0.98); background: #0a255a; }
 
-                .success-card-v2 { background: white; padding: 40px; border-radius: 40px; text-align: center; max-width: 400px; display: flex; flex-direction: column; gap: 24px; align-items: center; }
-                .s-icon-v2 { width: 100px; height: 100px; background: #F0FDF4; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-                .btn-s-done-v2 { width: 100%; height: 60px; background: #071B44; color: white; border: none; border-radius: 18px; font-weight: 800; font-size: 18px; }
+                /* WhatsApp Transaction Complete Success Card */
+                .success-card-v2 { 
+                    background: white; 
+                    padding: 28px 22px; 
+                    border-radius: 28px; 
+                    text-align: center; 
+                    max-width: 440px; 
+                    width: calc(100% - 32px); 
+                    display: flex; 
+                    flex-direction: column; 
+                    gap: 14px; 
+                    align-items: center; 
+                    box-shadow: 0 20px 60px rgba(7, 27, 68, 0.25);
+                    box-sizing: border-box;
+                }
+                .s-icon-v2 { 
+                    width: 72px; 
+                    height: 72px; 
+                    background: #F0FDF4; 
+                    border-radius: 50%; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                }
+                .s-header-text h2 {
+                    font-size: 21px;
+                    font-weight: 800;
+                    color: #101828;
+                    margin: 0;
+                }
+                .s-header-text p {
+                    font-size: 13px;
+                    color: #667085;
+                    font-weight: 600;
+                    margin: 4px 0 0 0;
+                }
+                .s-bill-badge {
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 12px;
+                    padding: 8px 14px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .s-bill-badge span {
+                    font-size: 12.5px;
+                    font-weight: 700;
+                    color: #475569;
+                }
+                .s-bill-badge strong {
+                    font-size: 16px;
+                    font-weight: 900;
+                    color: #071B44;
+                }
+                .s-share-box {
+                    width: 100%;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    background: #F9FAFB;
+                    border: 1px solid #EAECF0;
+                    border-radius: 16px;
+                    padding: 12px;
+                    box-sizing: border-box;
+                    text-align: left;
+                }
+                .s-share-label {
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #475467;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+                .s-phone-input-row {
+                    display: flex;
+                    align-items: center;
+                    background: white;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 12px;
+                    padding: 0 12px;
+                    height: 42px;
+                    gap: 8px;
+                    transition: 0.2s;
+                }
+                .s-phone-input-row:focus-within {
+                    border-color: #25D366;
+                    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.15);
+                }
+                .s-phone-input-row.input-error {
+                    border-color: #EF4444;
+                    background: #FEF2F2;
+                }
+                .s-phone-code {
+                    font-size: 14px;
+                    font-weight: 800;
+                    color: #101828;
+                    user-select: none;
+                }
+                .s-phone-input-row input {
+                    border: none;
+                    outline: none;
+                    background: transparent;
+                    flex: 1;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #101828;
+                }
+                .s-error-msg {
+                    font-size: 12px;
+                    color: #DC2626;
+                    font-weight: 700;
+                }
+                .s-guidance-msg {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 6px;
+                    background: #EFF6FF;
+                    border: 1px solid #BFDBFE;
+                    color: #1E40AF;
+                    font-size: 11.5px;
+                    font-weight: 600;
+                    padding: 8px 10px;
+                    border-radius: 10px;
+                    line-height: 1.35;
+                }
+                .btn-share-wa {
+                    width: 100%;
+                    height: 44px;
+                    background: #25D366;
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 14px;
+                    font-weight: 800;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                    transition: all 0.2s ease;
+                    box-shadow: 0 4px 14px rgba(37, 211, 102, 0.35);
+                }
+                .btn-share-wa:hover:not(:disabled) {
+                    background: #20bd5a;
+                    transform: translateY(-1px);
+                    box-shadow: 0 6px 18px rgba(37, 211, 102, 0.45);
+                }
+                .btn-share-wa:disabled {
+                    opacity: 0.7;
+                    cursor: not-allowed;
+                }
+                .s-secondary-actions {
+                    display: flex;
+                    gap: 10px;
+                    width: 100%;
+                }
+                .btn-s-secondary {
+                    flex: 1;
+                    height: 42px;
+                    background: #F2F4F7;
+                    color: #101828;
+                    border: 1px solid #EAECF0;
+                    border-radius: 12px;
+                    font-weight: 800;
+                    font-size: 13px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 6px;
+                    transition: 0.15s;
+                }
+                .btn-s-secondary:hover {
+                    background: #E4E7EC;
+                }
+                .btn-s-secondary.done-btn {
+                    background: #071B44;
+                    color: white;
+                    border: none;
+                }
+                .btn-s-secondary.done-btn:hover {
+                    background: #0d2864;
+                }
 
-                /* Mobile Optimization - Ultra Compact ERP UI */
+                .btn-cdv2-close {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    border: 1px solid #EAECF0;
+                    background: #F9FAFB;
+                    color: #667085;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    transition: 0.15s;
+                }
+                .btn-cdv2-close:hover {
+                    background: #FEE2E2;
+                    color: #EF4444;
+                    border-color: #FCA5A5;
+                }
+
+                /* 14-inch Laptops and Medium Screens (1366x768, 1280x720, height <= 800px) */
+                @media (max-width: 1400px), (max-height: 800px) {
+                    .pos-header-v2 { padding: 14px 20px 0 20px; }
+                    .pos-header-text h1 { font-size: 26px; }
+                    .pos-mode-toggle-belt { padding: 8px 20px 0 20px; gap: 8px; }
+                    .pos-mode-btn { padding: 8px 12px; font-size: 12px; border-radius: 10px; }
+
+                    .pos-search-belt-v2 { padding: 10px 20px; gap: 8px; margin-top: 8px; }
+                    .search-pill-v2 { height: 44px; padding: 0 14px; border-radius: 14px; }
+                    .search-pill-v2 input { font-size: 15px; }
+                    .cat-pill-v2 { padding: 6px 14px; font-size: 12px; }
+
+                    .pos-grid-v2 { 
+                        padding: 14px 20px 85px 20px; 
+                        gap: 14px; 
+                        grid-template-columns: repeat(5, minmax(0, 1fr));
+                    }
+                    .pos-card-v2 { padding: 14px; border-radius: 20px; gap: 8px; }
+                    .pcv2-info h3 { font-size: 16px; }
+                    .pcv2-price { font-size: 18px; }
+
+                    .mobile-pos-bar-v2 {
+                        bottom: 14px;
+                        height: 52px;
+                        max-width: 500px;
+                        padding: 0 14px;
+                        border-radius: 14px;
+                    }
+                    .mpbv2-count { font-size: 10.5px; }
+                    .mpbv2-total { font-size: 18px; }
+                    .mpbv2-btn { padding: 7px 14px; font-size: 13px; height: 36px; border-radius: 10px; }
+                }
+
+                /* Medium Screens (1080px to 841px): 4 Columns */
+                @media (max-width: 1080px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(4, minmax(0, 1fr));
+                        gap: 14px;
+                    }
+                }
+
+                /* Tablets (840px to 769px): 3 Columns */
+                @media (max-width: 840px) {
+                    .pos-grid-v2 {
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                        gap: 12px;
+                    }
+                }
+
+                /* Mobile Phones and Small Tablets */
                 @media (max-width: 768px) {
-                    .premium-pos-v2 { height: calc(100vh - 56px); }
-                    .pos-header-v2 { padding: 16px 16px 0 16px; }
-                    .pos-header-text h1 { font-size: 24px; }
-                    .pos-header-text p { font-size: 13px; margin-top: 2px; }
+                    .premium-pos-v2 { height: 100%; }
+                    .pos-header-v2 { padding: 12px 14px 0 14px; }
+                    .pos-header-text h1 { font-size: 22px; }
+                    .pos-header-text p { font-size: 12px; }
 
-                    .pos-search-belt-v2 { padding: 12px 16px; gap: 10px; margin-top: 8px; }
-                    .search-pill-v2 { height: 44px; padding: 0 12px; border-radius: 14px; gap: 8px; }
+                    .pos-mode-toggle-belt { padding: 6px 14px 0 14px; gap: 6px; }
+                    .pos-mode-btn { padding: 8px 10px; font-size: 11.5px; border-radius: 10px; }
+                    .pos-mode-btn span { line-height: 1.2; }
+
+                    .pos-search-belt-v2 { padding: 8px 14px; gap: 8px; margin-top: 6px; }
+                    .search-pill-v2 { height: 42px; padding: 0 12px; border-radius: 12px; gap: 8px; }
                     .search-pill-v2 input { font-size: 14px; }
                     .search-pill-v2 svg { width: 18px; height: 18px; }
 
-                    .cat-pill-v2 { padding: 8px 14px; font-size: 12px; border-radius: 10px; }
+                    .cat-scroller-v2 { gap: 6px; }
+                    .cat-pill-v2 { padding: 6px 12px; font-size: 11.5px; border-radius: 8px; }
 
-                    .pos-grid-v2 { padding: 12px 16px 100px 16px; gap: 12px; grid-template-columns: repeat(2, 1fr); }
-                    .pos-card-v2 { padding: 12px; border-radius: 16px; gap: 8px; }
-                    .pcv2-badge { font-size: 9px; padding: 2px 8px; }
-                    .pcv2-info h3 { font-size: 14px; }
+                    .pos-grid-v2 { 
+                        padding: 10px 12px 80px 12px; 
+                        gap: 10px; 
+                        grid-template-columns: repeat(2, 1fr); 
+                    }
+                    .pos-card-v2 { padding: 12px; border-radius: 16px; gap: 6px; }
+                    .pcv2-badge { font-size: 9px; padding: 2px 6px; }
+                    .pcv2-info h3 { font-size: 13.5px; }
                     .pcv2-stock { font-size: 11px; }
                     .pcv2-price { font-size: 16px; }
                     .pcv2-add-btn { width: 32px; height: 32px; border-radius: 8px; }
@@ -2223,35 +2831,56 @@ const POSPage = () => {
                     .pcv2-qty-controls button { width: 26px; height: 26px; border-radius: 6px; }
                     .pcv2-qty-controls span { font-size: 13px; min-width: 16px; }
 
-                    .mobile-pos-bar-v2 { height: 60px; bottom: 70px; border-radius: 16px; padding: 0 16px; }
-                    .mpbv2-count { font-size: 10px; }
-                    .mpbv2-total { font-size: 18px; }
-                    .mpbv2-btn { padding: 8px 16px; border-radius: 10px; font-size: 14px; }
+                    /* Compact Mobile Bottom Summary Bar */
+                    .mobile-pos-bar-v2 { 
+                        left: 10px;
+                        right: 10px;
+                        width: calc(100% - 20px);
+                        max-width: none;
+                        transform: none;
+                        bottom: max(10px, env(safe-area-inset-bottom, 10px)); 
+                        height: 52px; 
+                        border-radius: 14px; 
+                        padding: 0 12px;
+                        box-shadow: 0 8px 24px rgba(7, 27, 68, 0.35);
+                    }
+                    .mobile-pos-bar-v2:hover {
+                        transform: none;
+                    }
+                    .mpbv2-count-qty { display: none; }
+                    .mpbv2-count { font-size: 10.5px; }
+                    .mpbv2-total { font-size: 17px; }
+                    .mpbv2-btn { padding: 6px 12px; font-size: 12px; border-radius: 10px; height: 36px; }
+                    .mpbv2-btn-desktop { display: none; }
+                    .mpbv2-btn-mobile { display: inline; }
 
                     .checkout-drawer-v2 { 
                         width: 100%; 
                         max-width: 100%; 
-                        height: 92dvh; 
+                        height: 90dvh; 
+                        max-height: 90dvh;
                         top: auto; 
                         bottom: 0; 
-                        border-radius: 28px 28px 0 0; 
-                        box-shadow: 0 -10px 40px rgba(0,0,0,0.15);
+                        border-radius: 24px 24px 0 0; 
+                        box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.2);
                         transform: translateY(0);
                         padding-bottom: var(--keyboard-height);
                         transition: padding-bottom 0.15s ease-out;
                     }
                     .cdv2-header { 
-                        padding: 14px 18px; 
-                        height: 56px; 
+                        padding: 12px 16px; 
+                        height: 52px; 
                         border-bottom: 1px solid #EAECF0; 
                         position: sticky; 
                         top: 0; 
                         background: white; 
                         z-index: 20; 
-                        border-radius: 28px 28px 0 0; 
+                        border-radius: 24px 24px 0 0; 
                     }
-                    .btn-cdv2-back { width: 36px; height: 36px; border-radius: 10px; }
-                    .cdv2-body { padding: 14px 16px; gap: 14px; min-height: 0; overflow-y: auto; }
+                    .btn-cdv2-back { width: 34px; height: 34px; border-radius: 8px; }
+                    .cdv2-header-text h3 { font-size: 17px; }
+                    .cdv2-header-text p { font-size: 11px; }
+                    .cdv2-body { padding: 12px 14px; gap: 12px; min-height: 0; overflow-y: auto; }
                     
                     .ps-cart-items-scrollable { max-height: 180px; gap: 6px; }
                     .ps-cart-item-row { padding: 8px 10px; }
@@ -2262,18 +2891,18 @@ const POSPage = () => {
                     .ps-item-stepper button { width: 20px; height: 20px; }
                     .ps-item-stepper-qty { font-size: 10px; padding: 0 3px; }
 
-                    .checkout-card { border-radius: 16px; padding: 14px; gap: 10px; }
-                    .final-total-card { border-radius: 16px; padding: 14px; }
+                    .checkout-card { border-radius: 14px; padding: 12px; gap: 8px; }
+                    .final-total-card { border-radius: 14px; padding: 12px; }
 
-                    .pm-grid-v2 { gap: 8px; }
-                    .pm-grid-v2 button { height: 64px; border-radius: 14px; }
+                    .pm-grid-v2 { gap: 6px; }
+                    .pm-grid-v2 button { height: 58px; border-radius: 12px; }
                     .pm-grid-v2 button span { font-size: 11px; }
 
-                    .cust-input-v2 { height: 48px; border-radius: 14px; padding: 0 12px; }
-                    .cust-input-v2 input { font-size: 14px; }
+                    .cust-input-v2 { height: 46px; border-radius: 12px; padding: 0 12px; }
+                    .cust-input-v2 input { font-size: 13.5px; }
 
-                    .cdv2-footer { padding: 12px 16px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
-                    .btn-final-v2 { height: 50px; border-radius: 14px; font-size: 16px; }
+                    .cdv2-footer { padding: 10px 14px; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+                    .btn-final-v2 { height: 48px; border-radius: 12px; font-size: 15px; }
                     
                     .khata-picker-sheet { 
                         height: 90dvh; 
@@ -2281,13 +2910,19 @@ const POSPage = () => {
                         transition: padding-bottom 0.15s ease-out;
                     }
 
-                    .m-sheet-v2 { border-radius: 24px 24px 0 0; padding-bottom: var(--keyboard-height); }
-                    .m-header-v2 { padding: 12px 16px; }
-                    .mh-text-v2 h2 { font-size: 18px; }
-                    .m-scroll-v2 { padding: 16px; }
-                    .qp-input-v2 button { width: 36px; height: 36px; border-radius: 10px; }
-                    .qp-input-v2 input { font-size: 20px; width: 60px; }
-                    .btn-add-cart-v2 { height: 50px; border-radius: 14px; }
+                    .m-sheet-v2 { border-radius: 22px 22px 0 0; padding-bottom: var(--keyboard-height); }
+                    .m-header-v2 { padding: 12px 14px; }
+                    .mh-text-v2 h2 { font-size: 17px; }
+                    .m-scroll-v2 { padding: 14px; }
+                    .qp-input-v2 button { width: 34px; height: 34px; border-radius: 10px; }
+                    .qp-input-v2 input { font-size: 18px; width: 55px; }
+                    .btn-add-cart-v2 { height: 48px; border-radius: 12px; }
+                }
+
+                @media (max-width: 375px) {
+                    .mpbv2-btn { padding: 5px 8px; font-size: 11px; gap: 4px; }
+                    .mpbv2-total { font-size: 15px; }
+                    .mpbv2-count { font-size: 9.5px; }
                 }
             `}</style>
             <MessageModal 

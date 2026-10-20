@@ -204,60 +204,86 @@ api.interceptors.response.use(
                     // 1. PRODUCTS MUTATIONS
                     if (url.includes('/api/products')) {
                         if (method === 'post') {
+                            const entryType = parsedData.entryType || 'Purchase';
+                            const costPrice = Number(parsedData.buyPrice || 0);
+                            const qty = Number(parsedData.quantity || 0);
+                            const totalAmount = parseFloat((qty * costPrice).toFixed(2));
+                            const isFullPaid = Boolean(parsedData.isFullPaid);
+                            let amountPaid = Number(parsedData.amountPaid || 0);
+                            let dueAmount = 0;
+                            let paymentStatus = 'Paid';
+
+                            if (entryType === 'Opening Stock') {
+                                dueAmount = 0;
+                                amountPaid = isFullPaid || amountPaid > 0 ? (amountPaid || totalAmount) : 0;
+                                paymentStatus = parsedData.supplier ? 'Paid' : 'Direct Entry';
+                            } else {
+                                if (isFullPaid) {
+                                    amountPaid = totalAmount;
+                                    dueAmount = 0;
+                                    paymentStatus = parsedData.supplier ? 'Paid' : 'Direct Entry';
+                                } else {
+                                    if (amountPaid >= totalAmount && totalAmount > 0) {
+                                        dueAmount = 0;
+                                        paymentStatus = parsedData.supplier ? 'Paid' : 'Direct Entry';
+                                    } else if (amountPaid > 0 && amountPaid < totalAmount) {
+                                        dueAmount = Math.max(0, parseFloat((totalAmount - amountPaid).toFixed(2)));
+                                        paymentStatus = 'Partial Paid';
+                                    } else {
+                                        amountPaid = 0;
+                                        dueAmount = totalAmount;
+                                        paymentStatus = parsedData.supplier ? 'Pending' : 'Direct Entry';
+                                    }
+                                }
+                            }
+
                             const newProduct = { 
                                 ...parsedData, 
                                 _id: tempId, 
-                                quantity: Number(parsedData.quantity || 0),
-                                buyPrice: Number(parsedData.buyPrice || 0),
+                                quantity: qty,
+                                buyPrice: costPrice,
                                 sellPrice: Number(parsedData.sellPrice || 0),
                                 governmentPrice: Number(parsedData.governmentPrice || 0),
                                 lowStockLimit: Number(parsedData.lowStockLimit || 0),
                                 gst: Number(parsedData.gst || 0),
                                 sku: parsedData.sku || '',
+                                entryType,
+                                paymentMethod: parsedData.paymentMethod || 'Cash',
+                                paymentStatus,
+                                amountPaid,
+                                isFullPaid: entryType === 'Opening Stock' ? true : isFullPaid,
+                                billNo: parsedData.billNo || `BILL-TEMP-${Date.now()}`,
+                                supplierPhone: parsedData.supplierPhone || '',
+                                purchaseDate: parsedData.purchaseDate || new Date().toISOString(),
                                 updatedAt: new Date().toISOString() 
                             };
                             await offlineDB.saveProduct(newProduct);
                             
                             // Create a default 'STOCK_ADDED' audit entry in 'inventoryHistory' table
+                            const actionType = entryType === 'Adjustment' ? 'STOCK_ADJUSTED' : (entryType === 'Return Stock' ? 'STOCK_RETURNED' : 'STOCK_ADDED');
                             await offlineDB.saveInventoryHistory({
                                 _id: 'temp_hist_' + Date.now(),
                                 productId: tempId,
                                 productName: newProduct.name,
-                                actionType: 'STOCK_ADDED',
+                                actionType,
                                 quantity: newProduct.quantity,
                                 unit: newProduct.unit || 'Pieces',
                                 previousStock: 0,
                                 newStock: newProduct.quantity,
-                                notes: parsedData.notes || 'Initial stock addition',
+                                notes: parsedData.notes || `Initial stock addition via ${entryType}`,
                                 shop: newProduct.shop,
                                 createdAt: parsedData.purchaseDate || new Date().toISOString()
                             });
 
                             if (newProduct.quantity > 0) {
-                                const costPrice = Number(newProduct.buyPrice || 0);
-                                const totalAmount = newProduct.quantity * costPrice;
-                                const amountPaid = Number(parsedData.amountPaid || 0);
-                                const dueAmount = Math.max(0, totalAmount - amountPaid);
-                                const billNo = parsedData.billNo || `BILL-TEMP-${Date.now()}`;
                                 const supplierName = parsedData.supplier || 'Unknown Supplier';
-
-                                let paymentStatus = 'Paid';
-                                if (!parsedData.supplier) {
-                                    paymentStatus = 'Direct Entry';
-                                } else if (amountPaid >= totalAmount) {
-                                    paymentStatus = 'Paid';
-                                } else if (amountPaid > 0 && amountPaid < totalAmount) {
-                                    paymentStatus = 'Partial Paid';
-                                } else {
-                                    paymentStatus = 'Pending';
-                                }
 
                                 const purchaseDoc = {
                                     _id: 'temp_pur_' + Date.now(),
                                     shop: newProduct.shop,
-                                    billNo,
+                                    billNo: newProduct.billNo,
                                     supplierName,
-                                    supplierPhone: parsedData.supplierPhone || '',
+                                    supplierPhone: newProduct.supplierPhone,
                                     items: [{
                                         product: tempId,
                                         productName: newProduct.name,
@@ -272,6 +298,7 @@ api.interceptors.response.use(
                                     paymentMethod: parsedData.paymentMethod || 'Cash',
                                     paidAmount: amountPaid,
                                     dueAmount,
+                                    entryType,
                                     notes: parsedData.notes || '',
                                     linkedProductId: tempId,
                                     date: parsedData.purchaseDate || new Date().toISOString(),
@@ -305,6 +332,27 @@ api.interceptors.response.use(
                                 updatedAt: new Date().toISOString() 
                             };
                             await offlineDB.saveProduct(updatedProduct);
+
+                            // Sync linked purchase in offline DB if exists
+                            if (updatedProduct.shop) {
+                                const purchases = await offlineDB.getPurchases(updatedProduct.shop) || [];
+                                const linked = purchases.find(p => p.linkedProductId === id);
+                                if (linked) {
+                                    if (parsedData.entryType) linked.entryType = parsedData.entryType;
+                                    if (parsedData.billNo) linked.billNo = parsedData.billNo;
+                                    if (parsedData.supplier) linked.supplierName = parsedData.supplier;
+                                    if (parsedData.supplierPhone) linked.supplierPhone = parsedData.supplierPhone;
+                                    if (parsedData.paymentMethod) linked.paymentMethod = parsedData.paymentMethod;
+                                    if (parsedData.amountPaid !== undefined) linked.paidAmount = Number(parsedData.amountPaid || 0);
+                                    if (linked.entryType === 'Opening Stock') {
+                                        linked.dueAmount = 0;
+                                        linked.paymentStatus = linked.supplierName ? 'Paid' : 'Direct Entry';
+                                    }
+                                    linked.updatedAt = new Date().toISOString();
+                                    await offlineDB.savePurchase(linked);
+                                }
+                            }
+
                             mockResponseData.data = updatedProduct;
                         } else if (method === 'delete') {
                             const id = url.split('/').pop();
@@ -661,6 +709,19 @@ api.interceptors.response.use(
 
                             await offlineDB.savePurchase(newPurchase);
                             mockResponseData.data = newPurchase;
+                        }
+                    }
+
+                    else if (url.includes('/api/shops')) {
+                        if (method === 'put') {
+                            const shopId = url.split('/').pop().split('?')[0];
+                            const existingShops = await offlineDB.getShops();
+                            const existing = existingShops.find(s => s._id === shopId);
+                            if (existing) {
+                                const updated = { ...existing, ...parsedData, updatedAt: new Date().toISOString() };
+                                await offlineDB.saveShop(updated);
+                                mockResponseData.data = updated;
+                            }
                         }
                     }
 

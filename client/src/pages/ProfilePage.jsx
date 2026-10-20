@@ -26,7 +26,8 @@ import {
     AlertTriangle,
     ShieldAlert,
     Save,
-    Printer
+    Printer,
+    Plus
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -88,6 +89,7 @@ const ProfilePage = () => {
         location: '',
         contactNumber: '',
         fertilizerLicense: '',
+        fertilizerLicenses: [],
         logo: '',
         defaultPrintFormat: 'full_a4'
     });
@@ -185,6 +187,20 @@ const ProfilePage = () => {
         setSelectedShopId(shopId);
         const target = list.find(s => s._id === shopId);
         if (target) {
+            let licList = [];
+            if (Array.isArray(target.fertilizerLicenses) && target.fertilizerLicenses.length > 0) {
+                licList = target.fertilizerLicenses.map(l => ({
+                    licenseType: l.licenseType || 'LAID',
+                    licenseNumber: l.licenseNumber || ''
+                }));
+            } else if (target.fertilizerLicense && typeof target.fertilizerLicense === 'string' && target.fertilizerLicense.trim()) {
+                const legacyStr = target.fertilizerLicense.trim();
+                let type = 'LAID';
+                if (legacyStr.startsWith('LAFD')) type = 'LAFD';
+                else if (legacyStr.startsWith('LASD')) type = 'LASD';
+                licList = [{ licenseType: type, licenseNumber: legacyStr }];
+            }
+
             setShopForm({
                 name: target.name || '',
                 ownerName: target.ownerName || '',
@@ -192,10 +208,44 @@ const ProfilePage = () => {
                 location: target.location || '',
                 contactNumber: target.contactNumber || '',
                 fertilizerLicense: target.fertilizerLicense || '',
+                fertilizerLicenses: licList,
                 logo: target.logo || '',
                 defaultPrintFormat: target.defaultPrintFormat || 'full_a4'
             });
         }
+    };
+
+    const handleAddFertilizerLicense = () => {
+        const currentTypes = (shopForm.fertilizerLicenses || []).map(l => l.licenseType);
+        const availableTypes = ['LAID', 'LAFD', 'LASD'].filter(t => !currentTypes.includes(t));
+        if (availableTypes.length === 0) {
+            showToast('All 3 licence types (LAID, LAFD, LASD) are already added', 'info');
+            return;
+        }
+        setShopForm(prev => ({
+            ...prev,
+            fertilizerLicenses: [
+                ...(prev.fertilizerLicenses || []),
+                { licenseType: availableTypes[0], licenseNumber: '' }
+            ]
+        }));
+    };
+
+    const handleUpdateFertilizerLicense = (index, field, value) => {
+        setShopForm(prev => {
+            const updated = [...(prev.fertilizerLicenses || [])];
+            if (updated[index]) {
+                updated[index] = { ...updated[index], [field]: value };
+            }
+            return { ...prev, fertilizerLicenses: updated };
+        });
+    };
+
+    const handleRemoveFertilizerLicense = (index) => {
+        setShopForm(prev => ({
+            ...prev,
+            fertilizerLicenses: (prev.fertilizerLicenses || []).filter((_, i) => i !== index)
+        }));
     };
 
     const loadLocalDbCounts = async () => {
@@ -366,6 +416,37 @@ const ProfilePage = () => {
     const handleSaveShopDetails = async (e) => {
         e.preventDefault();
         if (isLoading || !selectedShopId) return;
+
+        // Validation for fertilizer shops
+        const currentShop = shops.find(s => s._id === selectedShopId);
+        const isFertilizer = Boolean(
+            currentShop?.type === 'Fertilizers' ||
+            (currentShop?.type && currentShop.type.toLowerCase().includes('fertilizer'))
+        );
+
+        if (isFertilizer && shopForm.fertilizerLicenses && shopForm.fertilizerLicenses.length > 0) {
+            const seenTypes = new Set();
+            for (let i = 0; i < shopForm.fertilizerLicenses.length; i++) {
+                const lic = shopForm.fertilizerLicenses[i];
+                const type = (lic.licenseType || '').trim().toUpperCase();
+                const num = (lic.licenseNumber || '').trim();
+
+                if (!type) {
+                    showToast(`Please select a valid licence type for row #${i + 1}`, 'error');
+                    return;
+                }
+                if (!num) {
+                    showToast(`Licence number is mandatory for ${type}`, 'error');
+                    return;
+                }
+                if (seenTypes.has(type)) {
+                    showToast(`Duplicate licence type: ${type}. Each licence type can only be added once.`, 'error');
+                    return;
+                }
+                seenTypes.add(type);
+            }
+        }
+
         setIsLoading(true);
         try {
             const res = await shopService.update(selectedShopId, shopForm);
@@ -996,15 +1077,90 @@ const ProfilePage = () => {
                                                     />
                                                 </div>
 
-                                                <div className="input-group-v2">
-                                                    <label>Fertilizer License Number</label>
-                                                    <input 
-                                                        type="text" 
-                                                        value={shopForm.fertilizerLicense} 
-                                                        onChange={(e) => setShopForm({ ...shopForm, fertilizerLicense: e.target.value })}
-                                                        className="input-control" 
-                                                    />
-                                                </div>
+                                                {/* Fertilizer Licences Section - Only for Fertilizer Shops */}
+                                                {(() => {
+                                                    const curShop = shops.find(s => s._id === selectedShopId);
+                                                    const isFertilizer = Boolean(
+                                                        curShop?.type === 'Fertilizers' ||
+                                                        (curShop?.type && curShop.type.toLowerCase().includes('fertilizer'))
+                                                    );
+
+                                                    if (!isFertilizer) return null;
+
+                                                    return (
+                                                        <div className="fertilizer-licenses-section">
+                                                            <div className="fl-header-row">
+                                                                <div>
+                                                                    <h4 className="fl-title">Fertilizer Licences</h4>
+                                                                    <p className="fl-desc">Register statutory licences (LAID, LAFD, LASD) to display on customer bills.</p>
+                                                                </div>
+                                                                {(!shopForm.fertilizerLicenses || shopForm.fertilizerLicenses.length < 3) && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={handleAddFertilizerLicense}
+                                                                        className="fl-add-btn"
+                                                                    >
+                                                                        <Plus size={14} /> Add Licence
+                                                                    </button>
+                                                                )}
+                                                            </div>
+
+                                                            {(!shopForm.fertilizerLicenses || shopForm.fertilizerLicenses.length === 0) ? (
+                                                                <div className="fl-empty-notice">
+                                                                    <span>No fertilizer licences registered yet. Click <strong>+ Add Licence</strong> to register LAID, LAFD, or LASD.</span>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="fl-list">
+                                                                    {shopForm.fertilizerLicenses.map((lic, idx) => {
+                                                                        const otherTypes = shopForm.fertilizerLicenses
+                                                                            .filter((_, i) => i !== idx)
+                                                                            .map(l => l.licenseType);
+
+                                                                        return (
+                                                                            <div key={idx} className="fl-item-card">
+                                                                                <div className="fl-field-type">
+                                                                                    <label>Licence Type</label>
+                                                                                    <select
+                                                                                        value={lic.licenseType}
+                                                                                        onChange={(e) => handleUpdateFertilizerLicense(idx, 'licenseType', e.target.value)}
+                                                                                        className="input-control fl-type-select"
+                                                                                    >
+                                                                                        {['LAID', 'LAFD', 'LASD'].map(t => (
+                                                                                            <option key={t} value={t} disabled={otherTypes.includes(t)}>
+                                                                                                {t} {otherTypes.includes(t) ? '(Added)' : ''}
+                                                                                            </option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                </div>
+
+                                                                                <div className="fl-field-num">
+                                                                                    <label>Licence Number *</label>
+                                                                                    <input
+                                                                                        type="text"
+                                                                                        placeholder={`e.g. ${lic.licenseType}/12345`}
+                                                                                        value={lic.licenseNumber}
+                                                                                        onChange={(e) => handleUpdateFertilizerLicense(idx, 'licenseNumber', e.target.value)}
+                                                                                        className="input-control fl-num-input"
+                                                                                        required
+                                                                                    />
+                                                                                </div>
+
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => handleRemoveFertilizerLicense(idx)}
+                                                                                    className="fl-remove-btn"
+                                                                                    title="Remove licence"
+                                                                                >
+                                                                                    <Trash2 size={16} />
+                                                                                </button>
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
 
                                                 <div className="input-group-v2">
                                                     <label>Business Address</label>
@@ -1932,6 +2088,142 @@ const ProfilePage = () => {
                     }
                 }
                 
+                /* Fertilizer Licences Section */
+                .fertilizer-licenses-section {
+                    background: #f8fafc;
+                    border: 1.5px solid #e2e8f0;
+                    border-radius: 16px;
+                    padding: 16px;
+                    margin: 10px 0;
+                }
+                .fl-header-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    gap: 12px;
+                    margin-bottom: 12px;
+                }
+                .fl-title {
+                    font-size: 0.95rem;
+                    font-weight: 800;
+                    color: #0f172a;
+                    margin: 0 0 2px 0;
+                }
+                .fl-desc {
+                    font-size: 0.78rem;
+                    color: #64748b;
+                    margin: 0;
+                }
+                .fl-add-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 5px;
+                    background: #eff6ff;
+                    color: #2563eb;
+                    border: 1px solid #bfdbfe;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    font-size: 0.8rem;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    white-space: nowrap;
+                }
+                .fl-add-btn:hover {
+                    background: #2563eb;
+                    color: #ffffff;
+                }
+                .fl-empty-notice {
+                    background: #ffffff;
+                    border: 1.5px dashed #cbd5e1;
+                    border-radius: 10px;
+                    padding: 14px;
+                    text-align: center;
+                    font-size: 0.82rem;
+                    color: #64748b;
+                }
+                .fl-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .fl-item-card {
+                    display: flex;
+                    align-items: flex-end;
+                    gap: 10px;
+                    background: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 10px 12px;
+                }
+                .fl-field-type {
+                    width: 110px;
+                    flex-shrink: 0;
+                }
+                .fl-field-type label,
+                .fl-field-num label {
+                    display: block;
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    color: #475569;
+                    margin-bottom: 4px;
+                }
+                .fl-field-num {
+                    flex: 1;
+                }
+                .fl-remove-btn {
+                    background: #fef2f2;
+                    border: 1px solid #fee2e2;
+                    color: #ef4444;
+                    width: 38px;
+                    height: 38px;
+                    border-radius: 8px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    flex-shrink: 0;
+                    transition: all 0.2s;
+                }
+                .fl-remove-btn:hover {
+                    background: #ef4444;
+                    color: #ffffff;
+                }
+                :global(body.dark-mode) .fertilizer-licenses-section {
+                    background: #1e293b;
+                    border-color: #334155;
+                }
+                :global(body.dark-mode) .fl-title {
+                    color: #f8fafc;
+                }
+                :global(body.dark-mode) .fl-desc {
+                    color: #94a3b8;
+                }
+                :global(body.dark-mode) .fl-empty-notice {
+                    background: #0f172a;
+                    border-color: #334155;
+                    color: #94a3b8;
+                }
+                :global(body.dark-mode) .fl-item-card {
+                    background: #0f172a;
+                    border-color: #334155;
+                }
+                :global(body.dark-mode) .fl-field-type label,
+                :global(body.dark-mode) .fl-field-num label {
+                    color: #cbd5e1;
+                }
+                @media (max-width: 480px) {
+                    .fl-item-card {
+                        flex-wrap: wrap;
+                    }
+                    .fl-field-type {
+                        width: 100%;
+                    }
+                    .fl-field-num {
+                        width: calc(100% - 50px);
+                    }
+                }
+
                 .animate-spin {
                     animation: spin 1s linear infinite;
                 }

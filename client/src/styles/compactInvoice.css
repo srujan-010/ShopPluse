@@ -92,6 +92,14 @@
     font-weight: 600;
 }
 
+.full-a4-shop-licenses {
+    font-size: 10px;
+    font-weight: 700;
+    color: #071b44;
+    margin: 3px 0 0;
+    letter-spacing: 0.2px;
+}
+
 .full-a4-badge-box {
     text-align: right;
     display: flex;
@@ -310,6 +318,71 @@
     font-weight: 800;
 }
 
+/* Professional Signature Section (Full A4) */
+.full-a4-signatures-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: auto;
+    margin-bottom: 12px;
+    padding: 30px 10px 0;
+}
+
+.full-a4-sig-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 250px;
+    text-align: center;
+}
+
+.full-a4-sig-heading {
+    font-size: 11px;
+    font-weight: 700;
+    color: #071b44;
+    min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.35;
+}
+
+.full-a4-sig-for-shop {
+    font-size: 11px;
+    font-weight: 700;
+    color: #071b44;
+    white-space: normal;
+    word-break: break-word;
+    min-height: 32px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.35;
+    max-width: 100%;
+}
+
+.full-a4-sig-space {
+    height: 55px;
+}
+
+.full-a4-sig-line {
+    border-top: 1.2px solid #94a3b8;
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+.full-a4-sig-role {
+    font-size: 9.5px;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.full-a4-sig-role.auth {
+    font-size: 9.5px;
+    color: #071b44;
+    font-weight: 700;
+}
+
 .full-a4-footer {
     margin-top: 14px;
 }
@@ -412,6 +485,14 @@
     color: #64748b;
     margin: 2px 0 0;
     font-weight: 600;
+}
+
+.cis-shop-licenses {
+    font-size: 9px;
+    font-weight: 700;
+    color: #071b44;
+    margin: 2px 0 0;
+    letter-spacing: 0.1px;
 }
 
 .cis-remove-bill-btn {
@@ -592,6 +673,71 @@
     font-weight: 800;
 }
 
+/* Professional Signature Section (Half-A4) */
+.cis-signatures-wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: auto;
+    margin-bottom: 3px;
+    padding: 12px 6px 0;
+}
+
+.cis-sig-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 180px;
+    text-align: center;
+}
+
+.cis-sig-heading {
+    font-size: 9px;
+    font-weight: 700;
+    color: #071b44;
+    min-height: 24px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.25;
+}
+
+.cis-sig-for-shop {
+    font-size: 9px;
+    font-weight: 700;
+    color: #071b44;
+    white-space: normal;
+    word-break: break-word;
+    min-height: 24px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    line-height: 1.25;
+    max-width: 100%;
+}
+
+.cis-sig-space {
+    height: 32px;
+}
+
+.cis-sig-line {
+    border-top: 1px solid #94a3b8;
+    width: 100%;
+    margin-bottom: 2px;
+}
+
+.cis-sig-role {
+    font-size: 8px;
+    color: #64748b;
+    font-weight: 600;
+}
+
+.cis-sig-role.auth {
+    font-size: 8px;
+    color: #071b44;
+    font-weight: 700;
+}
+
 .cis-footer {
     text-align: center;
     margin-top: 6px;
@@ -755,6 +901,16 @@
     line-height: 1.25;
 }
 
+.tr-shop-licenses {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: #000000;
+    margin-top: 2px;
+    word-break: break-word;
+    white-space: normal;
+    line-height: 1.25;
+}
+
 .tr-dashed-divider {
     border-top: 1px dashed #000000;
     margin: 6px 0;
@@ -891,6 +1047,16 @@
 .tr-shop-line-80 {
     font-size: 10.5px;
     color: #333333;
+}
+
+.tr-shop-licenses-80 {
+    font-size: 10px;
+    font-weight: 700;
+    color: #000000;
+    margin-top: 2px;
+    word-break: break-word;
+    white-space: normal;
+    line-height: 1.25;
 }
 
 .tr-meta-grid-80 {

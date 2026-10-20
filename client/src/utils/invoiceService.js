@@ -18,6 +18,54 @@ const fmtCur = (val) => {
 };
 
 /**
+ * Retrieve registered fertilizer licences for a fertilizer shop
+ */
+export const getShopFertilizerLicenses = (shop) => {
+    if (!shop) return [];
+    const shopType = (shop.type || '').toLowerCase();
+    const isFertilizer = shopType === 'fertilizers' || shopType.includes('fertilizer');
+    if (!isFertilizer) return [];
+
+    let licenses = [];
+    if (Array.isArray(shop.fertilizerLicenses) && shop.fertilizerLicenses.length > 0) {
+        licenses = shop.fertilizerLicenses
+            .filter(l => l && l.licenseType && l.licenseNumber && String(l.licenseNumber).trim().length > 0)
+            .map(l => ({
+                type: String(l.licenseType).trim().toUpperCase(),
+                number: String(l.licenseNumber).trim()
+            }));
+    } else if (shop.fertilizerLicense && typeof shop.fertilizerLicense === 'string' && shop.fertilizerLicense.trim()) {
+        const str = shop.fertilizerLicense.trim();
+        let type = 'LAID';
+        if (str.startsWith('LAFD')) type = 'LAFD';
+        else if (str.startsWith('LASD')) type = 'LASD';
+        licenses = [{ type, number: str }];
+    }
+
+    const allowed = ['LAID', 'LAFD', 'LASD'];
+    const valid = licenses.filter(l => allowed.includes(l.type));
+    const seen = new Set();
+    const unique = [];
+    for (const l of valid) {
+        if (!seen.has(l.type)) {
+            seen.add(l.type);
+            unique.push(l);
+        }
+    }
+    return unique;
+};
+
+/**
+ * Format registered fertilizer licences into compact header string
+ * e.g. "Lic No.: LCFRD122022547GDCD | Lic No.: LCID0820260041GDC"
+ */
+export const formatFertilizerLicensesText = (shop) => {
+    const licenses = getShopFertilizerLicenses(shop);
+    if (!licenses || licenses.length === 0) return '';
+    return licenses.map(l => `Lic No.: ${l.number}`).join(' | ');
+};
+
+/**
  * Draw Middle Cut Line Divider between Slot 1 and Slot 2
  */
 const drawCutLine = (doc) => {
@@ -61,7 +109,16 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(...PRIMARY_COLOR);
-    const effectiveShop = (bill?.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill?.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
     const shopName = (effectiveShop?.name || 'ShopPulse Business').toUpperCase();
     doc.text(shopName, centerX, currentY, { align: 'center' });
 
@@ -75,6 +132,15 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     currentY += 3.2;
     const contactGst = `Phone: ${effectiveShop?.contactNumber || 'XXXXXXXXXX'}  |  GSTIN: ${effectiveShop?.gstNumber || 'N/A'}`;
     doc.text(contactGst, centerX, currentY, { align: 'center' });
+
+    const licText = formatFertilizerLicensesText(effectiveShop);
+    if (licText) {
+        currentY += 2.8;
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(6.2);
+        doc.setTextColor(...PRIMARY_COLOR);
+        doc.text(licText, centerX, currentY, { align: 'center' });
+    }
 
     currentY += 2.8;
     doc.setDrawColor(...BORDER_COLOR);
@@ -316,25 +382,85 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     doc.text("GRAND TOTAL:", summaryX - 1, sumY + 0.8);
     doc.text(fmtCur(grandTotal), rightMargin - 1, sumY + 0.8, { align: 'right' });
 
-    // 6. Footer Section
-    let footerY = sumY + 5.5;
+    // 6. Professional Signature Section (Half-A4)
+    // Left: Buyer's Signature, Blank Space, Customer / Buyer
+    // Right: For [Shop Name], Blank Space, Authorized Signatory
+    const sigColWidth = 54;
+    const leftColX1 = leftMargin + 2;
+    const leftColX2 = leftColX1 + sigColWidth;
+    const leftColCenter = (leftColX1 + leftColX2) / 2;
+
+    const rightColX2 = rightMargin - 2;
+    const rightColX1 = rightColX2 - sigColWidth;
+    const rightColCenter = (rightColX1 + rightColX2) / 2;
+
+    // Fixed anchor at bottom of slot, right above footer
+    const footerLineY = slotMaxY - 6.8;
+    const sigLineY = footerLineY - 4.5;
+
+    // Wrap shop name cleanly across lines without ellipses
+    const rawShopName = effectiveShop?.name || 'ShopPulse Business';
+    const forShopText = `For ${rawShopName}`;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.8);
+    doc.setTextColor(...PRIMARY_COLOR);
+    const shopLines = doc.splitTextToSize(forShopText, sigColWidth);
+    const shopLineSpacing = 2.8;
+
+    // Blank signing space (default 9.5mm, adjusted safely if bill has many rows)
+    let blankSpace = 9.5;
+    let topLabelsBottomY = sigLineY - blankSpace;
+    const topShopY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
+    if (sumY + 4.5 > topShopY) {
+        blankSpace = Math.max(sigLineY - (sumY + 4.5 + ((shopLines.length - 1) * shopLineSpacing)), 5.5);
+        topLabelsBottomY = sigLineY - blankSpace;
+    }
+
+    // Left Side: Buyer's Signature
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.8);
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text("Buyer's Signature", leftColCenter, topLabelsBottomY, { align: 'center' });
+
+    // Right Side: For [Shop Name] (multi-line cleanly wrapped)
+    const shopStartY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
+    shopLines.forEach((line, idx) => {
+        doc.text(line, rightColCenter, shopStartY + (idx * shopLineSpacing), { align: 'center' });
+    });
+
+    // Thin signature lines at exact same vertical level
+    doc.setDrawColor(148, 163, 184); // Slate 400 thin signature line
+    doc.setLineWidth(0.25);
+    doc.line(leftColX1, sigLineY, leftColX2, sigLineY);
+    doc.line(rightColX1, sigLineY, rightColX2, sigLineY);
+
+    // Role subtitles at exact same vertical level
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(5.8);
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text("Customer / Buyer", leftColCenter, sigLineY + 2.8, { align: 'center' });
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text("Authorized Signatory", rightColCenter, sigLineY + 2.8, { align: 'center' });
+
+    // 7. Footer Section anchored cleanly below signature section
     doc.setDrawColor(...BORDER_COLOR);
     doc.setLineWidth(0.2);
-    doc.line(leftMargin, footerY, rightMargin, footerY);
+    doc.line(leftMargin, footerLineY, rightMargin, footerLineY);
 
-    footerY += 2.8;
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.5);
+    doc.setFontSize(6.2);
     doc.setTextColor(...PRIMARY_COLOR);
-    doc.text("Thank you for your business!", centerX, footerY, { align: 'center' });
+    doc.text("Thank you for your business!", centerX, footerLineY + 2.5, { align: 'center' });
 
-    footerY += 2.6;
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(5.5);
+    doc.setFontSize(5.2);
     doc.setTextColor(...MUTED_COLOR);
-    doc.text("Generated by ShopPulse POS — A4 Half-Sheet Eco Saver", centerX, footerY, { align: 'center' });
+    doc.text("Generated by ShopPulse POS — A4 Half-Sheet Eco Saver", centerX, footerLineY + 5.0, { align: 'center' });
 
-    return { finalY: footerY, overflow: footerY > slotMaxY };
+    const finalFooterY = footerLineY + 5.5;
+    return { finalY: finalFooterY, overflow: finalFooterY > slotMaxY };
 };
 
 /**
@@ -353,7 +479,16 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(16);
     doc.setTextColor(...PRIMARY_COLOR);
-    const effectiveShop = (bill?.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill?.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
     doc.text((effectiveShop?.name || 'ShopPulse Business').toUpperCase(), centerX, currentY, { align: 'center' });
 
     currentY += 5;
@@ -364,6 +499,15 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
 
     currentY += 4.5;
     doc.text(`Phone: ${effectiveShop?.contactNumber || 'XXXXXXXXXX'}  |  GSTIN: ${effectiveShop?.gstNumber || 'N/A'}`, centerX, currentY, { align: 'center' });
+
+    const fullLicText = formatFertilizerLicensesText(effectiveShop);
+    if (fullLicText) {
+        currentY += 4.2;
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(7.8);
+        doc.setTextColor(...PRIMARY_COLOR);
+        doc.text(fullLicText, centerX, currentY, { align: 'center' });
+    }
 
     currentY += 5;
     doc.setDrawColor(...BORDER_COLOR);
@@ -552,24 +696,102 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
     doc.text("GRAND TOTAL:", summaryX, finalY + 1.5);
     doc.text(fmtCur(grandTotal), rightMargin - 2, finalY + 1.5, { align: 'right' });
 
-    // Footer at bottom
-    doc.setDrawColor(...BORDER_COLOR);
-    doc.line(leftMargin, 268, rightMargin, 268);
+    // Professional Signature Section (Full A4)
+    // Left: Buyer's Signature, Blank Space, Customer / Buyer
+    // Right: For [Shop Name], Blank Space, Authorized Signatory
+    const sigColWidth = 70;
+    const leftColX1 = leftMargin + 4;
+    const leftColX2 = leftColX1 + sigColWidth;
+    const leftColCenter = (leftColX1 + leftColX2) / 2;
+
+    const rightColX2 = rightMargin - 4;
+    const rightColX1 = rightColX2 - sigColWidth;
+    const rightColCenter = (rightColX1 + rightColX2) / 2;
+
+    // Anchor footer cleanly at bottom of full sheet
+    const footerLineY = 272;
+    const sigLineY = footerLineY - 10; // 262mm
+
+    // Wrap shop name cleanly across lines without ellipses
+    const rawShopName = effectiveShop?.name || 'ShopPulse Business';
+    const forShopText = `For ${rawShopName}`;
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
+    doc.setFontSize(9.5);
     doc.setTextColor(...PRIMARY_COLOR);
-    doc.text("Thank you for your business!", centerX, 275, { align: 'center' });
+    const shopLines = doc.splitTextToSize(forShopText, sigColWidth);
+    const shopLineSpacing = 4.2;
+
+    // Blank signing space (generous 18mm, safely adjusted if multi-item table runs long)
+    let blankSpace = 18;
+    let topLabelsBottomY = sigLineY - blankSpace;
+    const topShopY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
+
+    if (finalY + 12 > topShopY) {
+        if (finalY + 36 > 275) {
+            doc.addPage();
+            finalY = 20;
+        } else {
+            blankSpace = Math.max(sigLineY - (finalY + 12 + ((shopLines.length - 1) * shopLineSpacing)), 10);
+            topLabelsBottomY = sigLineY - blankSpace;
+        }
+    }
+
+    // Left Side: Buyer's Signature
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9.5);
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text("Buyer's Signature", leftColCenter, topLabelsBottomY, { align: 'center' });
+
+    // Right Side: For [Shop Name] (multi-line cleanly wrapped)
+    const shopStartY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
+    shopLines.forEach((line, idx) => {
+        doc.text(line, rightColCenter, shopStartY + (idx * shopLineSpacing), { align: 'center' });
+    });
+
+    // Thin signature lines at exact same vertical level
+    doc.setDrawColor(148, 163, 184); // Slate 400 thin signature line
+    doc.setLineWidth(0.3);
+    doc.line(leftColX1, sigLineY, leftColX2, sigLineY);
+    doc.line(rightColX1, sigLineY, rightColX2, sigLineY);
+
+    // Role subtitles at exact same vertical level
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
+    doc.setFontSize(8);
     doc.setTextColor(...MUTED_COLOR);
-    doc.text("Generated by ShopPulse POS — Full A4", centerX, 281, { align: 'center' });
+    doc.text("Customer / Buyer", leftColCenter, sigLineY + 4.5, { align: 'center' });
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text("Authorized Signatory", rightColCenter, sigLineY + 4.5, { align: 'center' });
+
+    // Footer at bottom of sheet
+    doc.setDrawColor(...BORDER_COLOR);
+    doc.setLineWidth(0.2);
+    doc.line(leftMargin, footerLineY, rightMargin, footerLineY);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text("Thank you for your business!", centerX, footerLineY + 5.5, { align: 'center' });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text("Generated by ShopPulse POS — Full A4", centerX, footerLineY + 10.5, { align: 'center' });
 };
 
 /**
  * Render Thermal 58 mm Receipt into custom dimensions PDF
  */
 const renderThermal58PDF = (bill, shop, type = 'SALE', options = {}) => {
-    const effectiveShop = (bill?.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill?.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
     const taxDetails = resolveBillTaxDetails(bill, type, effectiveShop, options?.products || []);
     const { items: displayItems, subtotal, discount, taxableAmount, totalGst, grandTotal, isTaxableInvoice } = taxDetails;
 
@@ -601,6 +823,18 @@ const renderThermal58PDF = (bill, shop, type = 'SALE', options = {}) => {
     if (effectiveShop?.gstNumber) {
         doc.text(`GSTIN: ${effectiveShop.gstNumber}`, center, y, { align: 'center' });
         y += 2.8;
+    }
+
+    const licText58 = formatFertilizerLicensesText(effectiveShop);
+    if (licText58) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(5.8);
+        const licLines = doc.splitTextToSize(licText58, right - left);
+        licLines.forEach(line => {
+            doc.text(line, center, y, { align: 'center' });
+            y += 2.6;
+        });
+        doc.setFont("helvetica", "normal");
     }
 
     doc.setLineDashPattern([1, 1], 0);
@@ -701,7 +935,16 @@ const renderThermal58PDF = (bill, shop, type = 'SALE', options = {}) => {
  * Render Thermal 80 mm Receipt into custom dimensions PDF
  */
 const renderThermal80PDF = (bill, shop, type = 'SALE', options = {}) => {
-    const effectiveShop = (bill?.shop && typeof bill.shop === 'object' && bill.shop.name) ? bill.shop : shop;
+    const effectiveShop = {
+        ...(shop || {}),
+        ...((bill?.shop && typeof bill.shop === 'object') ? bill.shop : {})
+    };
+    if ((!effectiveShop.fertilizerLicenses || effectiveShop.fertilizerLicenses.length === 0) && shop?.fertilizerLicenses) {
+        effectiveShop.fertilizerLicenses = shop.fertilizerLicenses;
+    }
+    if (!effectiveShop.type && shop?.type) {
+        effectiveShop.type = shop.type;
+    }
     const taxDetails = resolveBillTaxDetails(bill, type, effectiveShop, options?.products || []);
     const { items: displayItems, subtotal, discount, taxableAmount, totalGst, cgstTotal, sgstTotal, grandTotal, isTaxableInvoice } = taxDetails;
 
@@ -734,6 +977,18 @@ const renderThermal80PDF = (bill, shop, type = 'SALE', options = {}) => {
     if (contactLine) {
         doc.text(contactLine, center, y, { align: 'center' });
         y += 3.2;
+    }
+
+    const licText80 = formatFertilizerLicensesText(effectiveShop);
+    if (licText80) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(6.8);
+        const licLines = doc.splitTextToSize(licText80, right - left);
+        licLines.forEach(line => {
+            doc.text(line, center, y, { align: 'center' });
+            y += 3.0;
+        });
+        doc.setFont("helvetica", "normal");
     }
 
     doc.setLineDashPattern([1.5, 1.5], 0);
@@ -893,14 +1148,28 @@ export const invoiceService = {
             return doc;
         }
 
-        // FORMAT 2: Half A4 (2 bills per A4 sheet or single bill with cut line)
-        const doc = new jsPDF({ format: 'a4', unit: 'mm' });
-
+        // FORMAT 2: Half A4
         // Case A: Array of bills provided for batch printing
         if (Array.isArray(data)) {
             const bills = data.filter(Boolean);
-            if (bills.length === 0) return doc;
+            if (bills.length === 0) return new jsPDF({ format: 'a4', unit: 'mm' });
 
+            // If only 1 bill in array and no second bill requested, generate single compact half-A4 PDF
+            if (bills.length === 1 && !options.secondBill && !options.forceFullSheet) {
+                const singleBill = bills[0];
+                const items = singleBill?.items || [];
+                if (items.length > 8 || options.forceFullPage) {
+                    const doc = new jsPDF({ format: 'a4', unit: 'mm' });
+                    renderFullPageBill(doc, singleBill, shop, singleBill.type || type, options);
+                    return doc;
+                }
+                const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [148.5, 210] });
+                renderBillSlot(doc, singleBill, shop, singleBill.type || type, 5, 1, options);
+                return doc;
+            }
+
+            // Batch printing 2 bills per A4 sheet with cut line
+            const doc = new jsPDF({ format: 'a4', unit: 'mm' });
             let pageIndex = 0;
             for (let i = 0; i < bills.length; i += 2) {
                 if (pageIndex > 0) doc.addPage();
@@ -909,32 +1178,32 @@ export const invoiceService = {
                 const b1 = bills[i];
                 const b2 = bills[i + 1];
 
-                const b1Items = b1.items || [];
+                const b1Items = b1?.items || [];
                 if (b1Items.length > 8 || options.forceFullPage) {
-                    renderFullPageBill(doc, b1, shop, b1.type || type, options);
+                    renderFullPageBill(doc, b1, shop, b1?.type || type, options);
                     if (b2) {
                         doc.addPage();
-                        const b2Items = b2.items || [];
+                        const b2Items = b2?.items || [];
                         if (b2Items.length > 8 || options.forceFullPage) {
-                            renderFullPageBill(doc, b2, shop, b2.type || type, options);
+                            renderFullPageBill(doc, b2, shop, b2?.type || type, options);
                         } else {
-                            renderBillSlot(doc, b2, shop, b2.type || type, 6, 1, options);
+                            renderBillSlot(doc, b2, shop, b2?.type || type, 6, 1, options);
                             drawCutLine(doc);
                         }
                     }
                     continue;
                 }
 
-                renderBillSlot(doc, b1, shop, b1.type || type, 6, 1, options);
+                renderBillSlot(doc, b1, shop, b1?.type || type, 6, 1, options);
                 drawCutLine(doc);
 
                 if (b2) {
-                    const b2Items = b2.items || [];
+                    const b2Items = b2?.items || [];
                     if (b2Items.length > 8 || options.forceFullPage) {
                         doc.addPage();
-                        renderFullPageBill(doc, b2, shop, b2.type || type, options);
+                        renderFullPageBill(doc, b2, shop, b2?.type || type, options);
                     } else {
-                        renderBillSlot(doc, b2, shop, b2.type || type, 153, 2, options);
+                        renderBillSlot(doc, b2, shop, b2?.type || type, 153, 2, options);
                     }
                 }
             }
@@ -942,36 +1211,40 @@ export const invoiceService = {
             return doc;
         }
 
-        // Case B: options.secondBill provided (2 bills on 1 sheet)
+        // Case B: options.secondBill provided (explicitly 2 bills on 1 sheet with cut line)
         if (options.secondBill) {
+            const doc = new jsPDF({ format: 'a4', unit: 'mm' });
             const b1 = data;
             const b2 = options.secondBill;
-            const b1Items = b1.items || [];
-            const b2Items = b2.items || [];
+            const b1Items = b1?.items || [];
+            const b2Items = b2?.items || [];
 
             if (b1Items.length > 8 || b2Items.length > 8 || options.forceFullPage) {
-                renderFullPageBill(doc, b1, shop, b1.type || type, options);
+                renderFullPageBill(doc, b1, shop, b1?.type || type, options);
                 doc.addPage();
-                renderFullPageBill(doc, b2, shop, b2.type || type, options);
+                renderFullPageBill(doc, b2, shop, b2?.type || type, options);
                 return doc;
             }
 
-            renderBillSlot(doc, b1, shop, b1.type || type, 6, 1, options);
+            renderBillSlot(doc, b1, shop, b1?.type || type, 6, 1, options);
             drawCutLine(doc);
-            renderBillSlot(doc, b2, shop, b2.type || type, 153, 2, options);
+            renderBillSlot(doc, b2, shop, b2?.type || type, 153, 2, options);
             return doc;
         }
 
-        // Case C: Single bill provided
+        // Case C: Single bill provided in Half-A4 format
+        // Generates ONLY the compact half-sheet invoice (210mm x 148.5mm landscape)
+        // Contains ONLY the single occupied half-size invoice area.
+        // Unused second half of A4 is omitted, cut line is removed, no blank pages added.
         const items = data?.items || [];
         if (items.length > 8 || options.forceFullPage) {
+            const doc = new jsPDF({ format: 'a4', unit: 'mm' });
             renderFullPageBill(doc, data, shop, type, options);
             return doc;
         }
 
-        // Standard Single Bill on Half-A4 (Top slot bill, dashed cut line, bottom slot blank)
-        renderBillSlot(doc, data, shop, type, 6, 1, options);
-        drawCutLine(doc);
+        const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [148.5, 210] });
+        renderBillSlot(doc, data, shop, type, 5, 1, options);
         return doc;
     },
 
@@ -982,136 +1255,91 @@ export const invoiceService = {
         const doc = invoiceService.generateInvoicePDF(bills, shop, type, { ...options, format: 'half_a4' });
         const b1 = Array.isArray(bills) ? bills[0] : bills;
         const b2 = Array.isArray(bills) ? bills[1] : options.secondBill;
-        const id1 = b1?._id?.slice(-6).toUpperCase() || '1';
-        const id2 = b2?._id?.slice(-6).toUpperCase() || '2';
+        const id1 = b1?.invoiceNumber || b1?._id?.slice(-6).toUpperCase() || '1';
+        const id2 = b2?.invoiceNumber || b2?._id?.slice(-6).toUpperCase() || '2';
         const fileName = `TwoBills-${id1}-${id2}.pdf`;
         doc.save(fileName);
     },
 
     /**
-     * Share Invoice via WhatsApp (PDF or Link) in specified format
+     * Share Invoice via WhatsApp (PDF or Link) using retailer's saved default bill format
+     * Verifies permanent invoice number, disallows temporary invoice numbers (INV-TEMP-*),
+     * and utilizes Web Share API with file sharing or fallback to PDF download + wa.me chat.
      */
     shareInvoice: async (data, shop, type = 'SALE', options = {}) => {
+        const targetBill = Array.isArray(data) ? data[0] : data;
+        const activeFormat = options?.format || shop?.defaultPrintFormat || 'full_a4';
+        const rawMobile = options?.mobile || options?.phone || targetBill?.customerMobile || '';
+        const digits = String(rawMobile).replace(/\D/g, '');
+        let targetMobile = '';
+        if (digits.length === 10) targetMobile = `91${digits}`;
+        else if (digits.length === 12 && digits.startsWith('91')) targetMobile = digits;
+        else if (digits.length === 11 && digits.startsWith('0')) targetMobile = `91${digits.slice(1)}`;
+        else if (digits.length >= 10 && digits.length <= 15) targetMobile = digits;
+
+        // Verify permanent invoice number - reject temporary or missing invoices
+        const invoiceNum = targetBill?.invoiceNumber;
+        if (!invoiceNum || String(invoiceNum).startsWith('INV-TEMP') || String(invoiceNum).startsWith('TEMP')) {
+            throw new Error('Cannot share bill: Permanent invoice number is not available yet.');
+        }
+
+        const shopName = shop?.name || 'ShopPulse Business';
+        const fileName = `Invoice-${invoiceNum}.pdf`;
+        const politeMessage = `Hello! Thank you for shopping at ${shopName}.\n\nPlease find your bill for Invoice #${invoiceNum}.\n\nThank you for your business!`;
+
         try {
-            const activeFormat = options?.format || shop?.defaultPrintFormat || 'full_a4';
-            const targetBill = Array.isArray(data) ? data[0] : data;
+            // Generate exact finalized invoice PDF using retailer's saved format
             const doc = invoiceService.generateInvoicePDF(data, shop, type, { ...options, format: activeFormat });
-            const billId = targetBill?._id?.slice(-6).toUpperCase() || 'BILL';
-            const fileName = `Invoice-${billId}.pdf`;
             const pdfBlob = doc.output('blob');
             const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
-            // 1. Try Web Share API (Mobile native sharing)
+            // 1. Try Web Share API (Mobile native file sharing)
             if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-                await navigator.share({
-                    files: [pdfFile],
-                    title: `Invoice from ${shop?.name || 'ShopPulse'}`,
-                    text: `Please find the invoice for Bill #${billId}`
-                });
-                return { success: true, method: 'native' };
+                try {
+                    await navigator.share({
+                        files: [pdfFile],
+                        title: `Invoice #${invoiceNum} from ${shopName}`,
+                        text: politeMessage
+                    });
+                    return { success: true, method: 'native', fileName, invoiceNum };
+                } catch (shareErr) {
+                    if (shareErr.name === 'AbortError') {
+                        return { success: false, method: 'cancelled' };
+                    }
+                    console.warn('Native share failed or was cancelled, falling back to download + wa.me', shareErr);
+                }
             }
 
-            // 2. Fallback: Upload and share link (Desktop/Older browsers)
-            const reader = new FileReader();
-            const pdfBase64 = await new Promise((resolve) => {
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(pdfBlob);
-            });
+            // 2. Fallback: Download the exact finalized invoice PDF
+            doc.save(fileName);
 
-            const uploadRes = await api.post('/api/invoices/upload', {
-                pdfBase64,
-                filename: fileName
-            });
-
-            if (uploadRes.data.success) {
-                const publicUrl = uploadRes.data.url;
-                const taxDetails = resolveBillTaxDetails(targetBill, type, shop, options?.products || []);
-                const {
-                    isTaxableInvoice,
-                    hasIgst,
-                    taxableAmount,
-                    totalGst,
-                    cgstTotal,
-                    sgstTotal,
-                    igstTotal,
-                    grandTotal
-                } = taxDetails;
-
-                const taxPart = isTaxableInvoice && totalGst > 0
-                    ? `Taxable Value: ₹${Number(taxableAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A` +
-                      (hasIgst 
-                        ? `IGST: ₹${Number(igstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`
-                        : `CGST: ₹${Number(cgstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A` +
-                          `SGST: ₹${Number(sgstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`) +
-                      `Total GST: ₹${Number(totalGst).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`
-                    : '';
-
-                const waText = encodeURIComponent(
-                    `*${shop?.name || 'ShopPulse Business'}*%0A` +
-                    `Invoice for Bill #${billId}%0A` +
-                    `Payment Mode: ${(targetBill.paymentMethod || 'CASH').toUpperCase()}%0A` +
-                    taxPart +
-                    `Grand Total: ₹${Number(grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A%0A` +
-                    `View Invoice PDF: ${publicUrl}%0A%0A` +
-                    `Generated by ShopPulse.`
-                );
-                window.open(`https://wa.me/?text=${waText}`, '_blank');
-                return { success: true, method: 'link' };
-            }
-
-            throw new Error('Upload failed');
+            // 3. Open WhatsApp directed to customer's mobile number with prefilled message
+            const waText = encodeURIComponent(politeMessage);
+            const waUrl = targetMobile ? `https://wa.me/${targetMobile}?text=${waText}` : `https://wa.me/?text=${waText}`;
+            window.open(waUrl, '_blank');
+            return { success: true, method: 'link_with_pdf', fileName, invoiceNum };
         } catch (err) {
-            console.error('Sharing failed:', err);
-            const targetBill = Array.isArray(data) ? data[0] : data;
-            const billId = targetBill?._id?.slice(-6).toUpperCase() || 'BILL';
-            const taxDetails = resolveBillTaxDetails(targetBill, type, shop, options?.products || []);
-            const {
-                isTaxableInvoice,
-                hasIgst,
-                taxableAmount,
-                totalGst,
-                cgstTotal,
-                sgstTotal,
-                igstTotal,
-                grandTotal
-            } = taxDetails;
-
-            const taxPart = isTaxableInvoice && totalGst > 0
-                ? `Taxable Value: ₹${Number(taxableAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A` +
-                  (hasIgst 
-                    ? `IGST: ₹${Number(igstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`
-                    : `CGST: ₹${Number(cgstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A` +
-                      `SGST: ₹${Number(sgstTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`) +
-                  `Total GST: ₹${Number(totalGst).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A`
-                : '';
-
-            const waText = encodeURIComponent(
-                `*${shop?.name || 'ShopPulse Business'}*%0A` +
-                `Invoice for Bill #${billId}%0A` +
-                `Payment Mode: ${(targetBill?.paymentMethod || 'CASH').toUpperCase()}%0A` +
-                taxPart +
-                `Grand Total: ₹${Number(grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}%0A%0A` +
-                `Thank you for your business!`
-            );
-            window.open(`https://wa.me/?text=${waText}`, '_blank');
-            return { success: false, method: 'text' };
+            console.error('Invoice sharing failed:', err);
+            throw err;
         }
     },
 
     /**
-     * Download Invoice PDF in specified format
+     * Download Invoice PDF in specified or retailer's default format
      */
     downloadInvoice: (data, shop, type = 'SALE', options = {}) => {
         const activeFormat = options?.format || shop?.defaultPrintFormat || 'full_a4';
         const doc = invoiceService.generateInvoicePDF(data, shop, type, { ...options, format: activeFormat });
         let fileName = 'Invoice.pdf';
         if (Array.isArray(data)) {
-            const ids = data.slice(0, 2).map(b => b?._id?.slice(-6).toUpperCase()).join('-');
+            const ids = data.slice(0, 2).map(b => b?.invoiceNumber || b?._id?.slice(-6).toUpperCase()).join('-');
             fileName = `Invoices-${ids}.pdf`;
         } else if (options.secondBill) {
-            const id1 = data?._id?.slice(-6).toUpperCase() || 'A';
-            const id2 = options.secondBill?._id?.slice(-6).toUpperCase() || 'B';
+            const id1 = data?.invoiceNumber || data?._id?.slice(-6).toUpperCase() || 'A';
+            const id2 = options.secondBill?.invoiceNumber || options.secondBill?._id?.slice(-6).toUpperCase() || 'B';
             fileName = `TwoBills-${id1}-${id2}.pdf`;
+        } else if (data?.invoiceNumber) {
+            fileName = `Invoice-${data.invoiceNumber}.pdf`;
         } else if (data?._id) {
             fileName = `Invoice-${data._id.slice(-6).toUpperCase()}.pdf`;
         }

@@ -31,6 +31,18 @@ const shopSchema = new mongoose.Schema({
     },
     gstNumber: String,
     fertilizerLicense: String,
+    fertilizerLicenses: [{
+        licenseType: {
+            type: String,
+            enum: ['LAID', 'LAFD', 'LASD'],
+            required: [true, 'Please provide a valid licence type']
+        },
+        licenseNumber: {
+            type: String,
+            required: [true, 'Please provide a licence number'],
+            trim: true
+        }
+    }],
     email: String,
     footerMessage: {
         type: String,
@@ -66,6 +78,12 @@ const shopSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    }
+});
+
+shopSchema.pre('save', function () {
+    if (this.fertilizerLicenses && this.fertilizerLicenses.length > 0) {
+        this.fertilizerLicense = this.fertilizerLicenses.map(l => `${l.licenseType}: ${l.licenseNumber}`).join(', ');
     }
 });
 

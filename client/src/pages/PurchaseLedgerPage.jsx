@@ -791,6 +791,7 @@ const PurchaseLedgerPage = () => {
                                                 <option value="Cash">Cash</option>
                                                 <option value="Online">Online / UPI</option>
                                                 <option value="Credit">Credit / Khata</option>
+                                                <option value="Bank">Bank</option>
                                             </select>
                                         </div>
                                         <div className="pl-field">

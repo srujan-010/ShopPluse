@@ -259,12 +259,27 @@ const InventoryPage = () => {
         setRestockHistory([]);
         if (product) {
             setCurrentProduct(product);
+            const qty = Number(product.quantity || 0);
+            const bPrice = Number(product.buyPrice || 0);
+            const totalCost = parseFloat((qty * bPrice).toFixed(2));
+            const savedPaid = Number(product.amountPaid || 0);
+
+            // Show Fully Paid only when supported by the persisted payment data
+            let isFull = false;
+            if (product.entryType === 'Opening Stock') {
+                isFull = product.isFullPaid !== undefined ? Boolean(product.isFullPaid) : true;
+            } else if (totalCost > 0) {
+                isFull = (Boolean(product.isFullPaid) || product.paymentStatus === 'Paid') && (savedPaid >= totalCost);
+            } else {
+                isFull = Boolean(product.isFullPaid) || product.paymentStatus === 'Paid';
+            }
+
             setFormData({
                 ...product,
-                buyPrice: Number(product.buyPrice || 0),
+                buyPrice: bPrice,
                 sellPrice: Number(product.sellPrice || 0),
                 governmentPrice: Number(product.governmentPrice || 0),
-                quantity: Number(product.quantity || 0),
+                quantity: qty,
                 lowStockLimit: product.lowStockLimit !== undefined ? Number(product.lowStockLimit) : 0,
                 gst: product.gstRate !== undefined ? Number(product.gstRate) : Number(product.gst || 0),
                 isGstApplicable: product.isGstApplicable !== undefined ? Boolean(product.isGstApplicable) : (Number(product.gst) > 0),
@@ -282,9 +297,9 @@ const InventoryPage = () => {
                 billNo: product.billNo || '',
                 purchaseDate: product.purchaseDate ? getLocalFromDate(product.purchaseDate) : getLocalToday(),
                 paymentMethod: product.paymentMethod || 'Cash',
-                amountPaid: product.amountPaid || '',
+                amountPaid: product.amountPaid !== undefined && product.amountPaid !== '' ? product.amountPaid : (isFull && totalCost > 0 ? totalCost : ''),
                 entryType: product.entryType || 'Purchase',
-                isFullPaid: product.isFullPaid || false
+                isFullPaid: isFull
             });
 
             try {
@@ -1234,12 +1249,24 @@ const InventoryPage = () => {
                                             label="Entry Type"
                                             value={formData.entryType}
                                             options={['Purchase', 'Opening Stock', 'Adjustment', 'Return Stock']}
-                                            onChange={(val) => setFormData({...formData, entryType: val})}
+                                            onChange={(val) => {
+                                                if (val === 'Opening Stock') {
+                                                    const total = parseFloat(((Number(formData.quantity) || 0) * (Number(formData.buyPrice) || 0)).toFixed(2));
+                                                    setFormData({
+                                                        ...formData, 
+                                                        entryType: val,
+                                                        isFullPaid: true,
+                                                        amountPaid: formData.amountPaid || (total > 0 ? total : '')
+                                                    });
+                                                } else {
+                                                    setFormData({...formData, entryType: val});
+                                                }
+                                            }}
                                         />
                                         <CustomSelect 
                                             label="Payment Method"
                                             value={formData.paymentMethod}
-                                            options={['Cash', 'Online', 'Credit']}
+                                            options={['Cash', 'Online', 'Credit', 'Bank']}
                                             onChange={(val) => setFormData({...formData, paymentMethod: val})}
                                         />
                                     </div>

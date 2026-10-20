@@ -33,6 +33,7 @@ const Layout = () => {
     const { logout, user } = useAuth();
     const { isOnline, pendingCount, isSyncing, triggerSync } = useSync();
     const location = useLocation();
+    const isPosPage = Boolean(location.pathname.includes('/pos'));
     const navigate = useNavigate();
     const { shopId } = useParams();
     const [shops, setShops] = useState([]);
@@ -225,7 +226,7 @@ const Layout = () => {
             </header>
 
             {/* Main Premium Canvas */}
-            <main className="premium-canvas">
+            <main className={`premium-canvas ${isPosPage ? 'premium-canvas-pos' : ''}`}>
                 {shopId && currentShop && (
                     <>
                         {isSuspended && (
@@ -253,7 +254,7 @@ const Layout = () => {
                         )}
                     </>
                 )}
-                <div className="canvas-content">
+                <div className={`canvas-content ${isPosPage ? 'canvas-pos-mode' : ''}`}>
                     <Outlet />
                 </div>
             </main>
@@ -309,7 +310,7 @@ const Layout = () => {
             </AnimatePresence>
 
             {/* Premium Floating Bottom Nav */}
-            {!isSidebarOpen && (
+            {!isSidebarOpen && !isPosPage && (
                 <nav className="premium-bottom-nav">
                     <div className="nav-blur-bg"></div>
                     <div className="nav-items-wrapper">
@@ -402,12 +403,25 @@ const Layout = () => {
                     flex-direction: column; 
                     overflow-y: auto;
                 }
+                .premium-canvas.premium-canvas-pos {
+                    overflow: hidden !important;
+                    min-height: 0;
+                }
                 .canvas-content { 
                     flex: 1; 
                     padding: 24px 20px 120px 20px; 
                     max-width: 1440px; 
                     margin: 0 auto; 
                     width: 100%; 
+                }
+                .canvas-content.canvas-pos-mode {
+                    padding: 0 !important;
+                    max-width: 100% !important;
+                    width: 100% !important;
+                    height: 100% !important;
+                    min-height: 0;
+                    display: flex;
+                    flex-direction: column;
                 }
 
                 /* Floating Bottom Nav */
