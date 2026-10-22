@@ -591,10 +591,14 @@ const SalesLogPage = () => {
         const saleToShare = targetSale || selectedSaleForInvoice || selectedSale;
         if (!saleToShare) return;
         const invoiceType = saleToShare.type === 'GOV_SALE' ? 'GOV_SALE' : 'SALE';
-        invoiceService.shareInvoice(saleToShare, shop, invoiceType, { 
+        const opts = { 
             products: shopProducts,
             format: activePrintFormat 
-        });
+        };
+        if (secondSaleForInvoice && activePrintFormat === 'half_a4') {
+            opts.secondBill = secondSaleForInvoice;
+        }
+        invoiceService.shareInvoice(saleToShare, shop, invoiceType, opts);
     };
 
     const handleToggleSelectBill = (id, e) => {
@@ -1457,7 +1461,7 @@ const SalesLogPage = () => {
                             <button 
                                 className="ips-btn ips-print" 
                                 onClick={() => {
-                                    applyPrintPageStyles(activePrintFormat);
+                                    applyPrintPageStyles(activePrintFormat, { hasSecondBill: Boolean(secondSaleForInvoice) });
                                     window.print();
                                 }}
                             >

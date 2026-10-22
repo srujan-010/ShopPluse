@@ -179,10 +179,14 @@ const GovSalesLogPage = () => {
     const handleShareWhatsApp = (targetSale) => {
         const saleToShare = targetSale || selectedSaleForInvoice;
         if (!saleToShare) return;
-        invoiceService.shareInvoice(saleToShare, shop, 'GOV_SALE', { 
+        const opts = { 
             products, 
             format: activePrintFormat 
-        });
+        };
+        if (secondSaleForInvoice && activePrintFormat === 'half_a4') {
+            opts.secondBill = secondSaleForInvoice;
+        }
+        invoiceService.shareInvoice(saleToShare, shop, 'GOV_SALE', opts);
     };
 
     // Resolve tax breakdown accurately for each government sale
@@ -929,7 +933,7 @@ const GovSalesLogPage = () => {
                             <button 
                                 className="ips-btn ips-print" 
                                 onClick={() => {
-                                    applyPrintPageStyles(activePrintFormat);
+                                    applyPrintPageStyles(activePrintFormat, { hasSecondBill: Boolean(secondSaleForInvoice) });
                                     window.print();
                                 }}
                             >

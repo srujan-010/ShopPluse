@@ -30,11 +30,11 @@ export const PRINT_FORMAT_OPTIONS = [
         id: 'half_a4',
         name: 'Half A4',
         paperSize: '210 × 148 mm (Half A4)',
-        shortDesc: 'Compact invoice designed to fit two bills on one A4 sheet, with a clear cutting line.',
-        description: 'Eco-saver layout fitting two compact bills per A4 sheet with a scissor cutting guide. Leaves bottom half blank if single bill.',
-        badge: '2 Bills / Sheet',
+        shortDesc: 'Compact genuine Half A4 invoice (210 × 148 mm), with optional 2-on-1 A4 sheet printing.',
+        description: 'Eco-saver layout rendering a genuine Half A4 invoice. Optionally pair another bill to print 2 bills on one A4 sheet with a scissor cutting guide.',
+        badge: 'Half A4',
         category: 'A4 Paper',
-        printerTip: 'In the browser print dialog, select Paper Size: A4, Orientation: Portrait, Margins: Minimum (6mm).',
+        printerTip: 'In the browser print dialog, select Paper Size: A5 (Landscape) or 210×148mm (Half A4), Margins: Minimum.',
     },
     {
         id: 'thermal_58',
@@ -66,13 +66,17 @@ export const isValidFormat = (formatId) => {
     return PRINT_FORMAT_OPTIONS.some(opt => opt.id === formatId);
 };
 
-export const applyPrintPageStyles = (formatId) => {
+export const applyPrintPageStyles = (formatId, options = {}) => {
     if (typeof document === 'undefined') return;
 
     let pageCss = '';
     switch (formatId) {
         case 'half_a4':
-            pageCss = '@page { size: A4 portrait; margin: 6mm; }';
+            if (options?.hasSecondBill) {
+                pageCss = '@page { size: A4 portrait; margin: 4mm 6mm; }';
+            } else {
+                pageCss = '@page { size: 210mm 148.5mm; margin: 3mm 5mm; }';
+            }
             break;
         case 'thermal_58':
             pageCss = '@page { size: 58mm auto; margin: 2mm 2mm; }';

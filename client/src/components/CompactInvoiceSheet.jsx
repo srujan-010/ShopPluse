@@ -71,7 +71,8 @@ export const CompactInvoiceSlot = ({
     type = 'SALE', 
     products = [],
     slotNumber = 1, 
-    onRemove = null
+    onRemove = null,
+    isSingleHalf = false
 }) => {
     if (!bill) return null;
 
@@ -121,8 +122,13 @@ export const CompactInvoiceSlot = ({
         items: displayItems = []
     } = taxDetails;
 
+    const itemCount = displayItems.length;
+    const densityClass = itemCount > 10 ? 'density-ultra' 
+                       : (itemCount > 6 ? 'density-compact' 
+                       : (itemCount > 3 ? 'density-medium' : 'density-normal'));
+
     return (
-        <div className={`cis-slot-container slot-${slotNumber}`}>
+        <div className={`cis-slot-container slot-${slotNumber} ${densityClass} ${isSingleHalf ? 'cis-single-slot' : ''}`}>
             {/* Top Accent Strip */}
             <div className="cis-accent-bar" />
 
@@ -209,21 +215,21 @@ export const CompactInvoiceSlot = ({
                     <thead>
                         {isTaxableInvoice ? (
                             <tr>
-                                <th style={{ width: '26px', textAlign: 'center' }}>Sl</th>
+                                <th style={{ width: '28px', textAlign: 'center' }}>Sl</th>
                                 <th style={{ textAlign: 'left' }}>Product Description</th>
-                                <th style={{ width: '55px', textAlign: 'center' }}>Qty</th>
-                                <th style={{ width: '60px', textAlign: 'right' }}>{isGovBill ? 'GST Price' : 'Rate'}</th>
-                                <th style={{ width: '68px', textAlign: 'right' }}>Taxable</th>
-                                <th style={{ width: '70px', textAlign: 'right' }}>GST</th>
-                                <th style={{ width: '70px', textAlign: 'right' }}>Amount</th>
+                                <th style={{ width: '68px', textAlign: 'center' }}>Qty</th>
+                                <th style={{ width: '68px', textAlign: 'right' }}>{isGovBill ? 'GST Price' : 'Rate'}</th>
+                                <th style={{ width: '74px', textAlign: 'right' }}>Taxable</th>
+                                <th style={{ width: '76px', textAlign: 'right' }}>GST</th>
+                                <th style={{ width: '76px', textAlign: 'right' }}>Amount</th>
                             </tr>
                         ) : (
                             <tr>
                                 <th style={{ width: '32px', textAlign: 'center' }}>Sl</th>
                                 <th style={{ textAlign: 'left' }}>Product Description</th>
-                                <th style={{ width: '80px', textAlign: 'center' }}>Qty</th>
-                                <th style={{ width: '90px', textAlign: 'right' }}>{isGovBill ? 'GST Price' : 'Rate'}</th>
-                                <th style={{ width: '100px', textAlign: 'right' }}>Amount</th>
+                                <th style={{ width: '85px', textAlign: 'center' }}>Qty</th>
+                                <th style={{ width: '95px', textAlign: 'right' }}>{isGovBill ? 'GST Price' : 'Rate'}</th>
+                                <th style={{ width: '105px', textAlign: 'right' }}>Amount</th>
                             </tr>
                         )}
                     </thead>
@@ -238,45 +244,37 @@ export const CompactInvoiceSlot = ({
                             displayItems.map((item, idx) => {
                                 return isTaxableInvoice ? (
                                     <tr key={idx}>
-                                        <td style={{ textAlign: 'center' }}>{idx + 1}</td>
-                                        <td className="cis-item-name">
+                                        <td style={{ textAlign: 'center', verticalAlign: 'top' }}>{idx + 1}</td>
+                                        <td className="cis-item-name" style={{ verticalAlign: 'top' }}>
                                             <div>{item.productName || 'Item'}</div>
                                             {item.returnedQty > 0 && (
-                                                <div style={{ fontSize: '8.5px', color: '#64748B', fontWeight: '500' }}>
+                                                <div style={{ fontSize: '9px', color: '#64748B', fontWeight: '500', marginTop: '2px' }}>
                                                     Sold: {item.soldQtyEntered || item.quantity} {item.unit} | Returned: {item.returnedQty} {item.unit} (Net: {item.qty} {item.unit})
                                                 </div>
                                             )}
-                                            {item.isTaxable && item.gstRate > 0 && (
-                                                <div style={{ fontSize: '8.5px', color: '#64748B', fontWeight: '500' }}>
-                                                    GST {item.gstRate}% ({item.gstPricingMode === 'exclusive' ? 'Exclusive' : 'Inclusive'})
-                                                    {hasIgst 
-                                                        ? ` • IGST: ${fmt(item.gstAmount)}` 
-                                                        : ` • CGST: ${fmt(item.cgst)} | SGST: ${fmt(item.sgst)}`}
-                                                </div>
-                                            )}
                                         </td>
-                                        <td style={{ textAlign: 'center' }}>{item.qty} {item.unit}</td>
-                                        <td style={{ textAlign: 'right' }}>{fmt(item.appliedRate)}</td>
-                                        <td style={{ textAlign: 'right' }}>{fmt(item.taxableValue)}</td>
-                                        <td style={{ textAlign: 'right', color: item.isTaxable && item.gstRate > 0 ? '#1E6BFF' : '#64748B' }}>
+                                        <td style={{ textAlign: 'center', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{item.qty} {item.unit}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{fmt(item.appliedRate)}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{fmt(item.taxableValue)}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap', color: item.isTaxable && item.gstRate > 0 ? '#1E6BFF' : '#64748B' }}>
                                             {item.isTaxable && item.gstRate > 0 ? `${fmt(item.gstAmount)}` : '₹0.00'}
                                         </td>
-                                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(item.lineTotal)}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 600 }}>{fmt(item.lineTotal)}</td>
                                     </tr>
                                 ) : (
                                     <tr key={idx}>
-                                        <td style={{ textAlign: 'center' }}>{idx + 1}</td>
-                                        <td className="cis-item-name">
+                                        <td style={{ textAlign: 'center', verticalAlign: 'top' }}>{idx + 1}</td>
+                                        <td className="cis-item-name" style={{ verticalAlign: 'top' }}>
                                             <div>{item.productName || 'Item'}</div>
                                             {item.returnedQty > 0 && (
-                                                <div style={{ fontSize: '8.5px', color: '#64748B', fontWeight: '500' }}>
+                                                <div style={{ fontSize: '9px', color: '#64748B', fontWeight: '500', marginTop: '2px' }}>
                                                     Sold: {item.soldQtyEntered || item.quantity} {item.unit} | Returned: {item.returnedQty} {item.unit} (Net: {item.qty} {item.unit})
                                                 </div>
                                             )}
                                         </td>
-                                        <td style={{ textAlign: 'center' }}>{item.qty} {item.unit}</td>
-                                        <td style={{ textAlign: 'right' }}>{fmt(item.appliedRate)}</td>
-                                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(item.lineTotal)}</td>
+                                        <td style={{ textAlign: 'center', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{item.qty} {item.unit}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{fmt(item.appliedRate)}</td>
+                                        <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 600 }}>{fmt(item.lineTotal)}</td>
                                     </tr>
                                 );
                             })
@@ -360,7 +358,7 @@ export const CompactInvoiceSlot = ({
             <div className="cis-footer">
                 <div className="cis-footer-divider" />
                 <div className="cis-footer-msg">Thank you for your business!</div>
-                <div className="cis-footer-brand">Generated by ShopPulse POS — A4 Half-Sheet Eco Saver</div>
+                <div className="cis-footer-brand">Generated by ShopPulse POS — Half A4 Bill</div>
             </div>
         </div>
     );
@@ -530,8 +528,8 @@ export const FullA4Invoice = ({
                         ) : (
                             displayItems.map((item, idx) => (
                                 <tr key={idx}>
-                                    <td style={{ textAlign: 'center' }}>{idx + 1}</td>
-                                    <td className="full-a4-item-desc">
+                                    <td style={{ textAlign: 'center', verticalAlign: 'top' }}>{idx + 1}</td>
+                                    <td className="full-a4-item-desc" style={{ verticalAlign: 'top' }}>
                                         <div className="item-title">{item.productName || 'Item'}</div>
                                         {item.returnedQty > 0 && (
                                             <div className="item-sub">
@@ -547,20 +545,20 @@ export const FullA4Invoice = ({
                                             </div>
                                         )}
                                     </td>
-                                    <td style={{ textAlign: 'center', fontWeight: 600 }}>{item.qty} {item.unit}</td>
-                                    <td style={{ textAlign: 'right' }}>{fmt(item.appliedRate)}</td>
+                                    <td style={{ textAlign: 'center', verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 600 }}>{item.qty} {item.unit}</td>
+                                    <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{fmt(item.appliedRate)}</td>
                                     {isTaxableInvoice && (
                                         <>
-                                            <td style={{ textAlign: 'right' }}>{fmt(item.taxableValue)}</td>
-                                            <td style={{ textAlign: 'center', color: '#1e6bff', fontWeight: 600 }}>
+                                            <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap' }}>{fmt(item.taxableValue)}</td>
+                                            <td style={{ textAlign: 'center', verticalAlign: 'top', whiteSpace: 'nowrap', color: '#1e6bff', fontWeight: 600 }}>
                                                 {item.isTaxable && item.gstRate > 0 ? `${item.gstRate}%` : '0%'}
                                             </td>
-                                            <td style={{ textAlign: 'right', color: item.isTaxable && item.gstRate > 0 ? '#1e6bff' : '#64748b' }}>
+                                            <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap', color: item.isTaxable && item.gstRate > 0 ? '#1e6bff' : '#64748b' }}>
                                                 {item.isTaxable && item.gstRate > 0 ? fmt(item.gstAmount) : '₹0.00'}
                                             </td>
                                         </>
                                     )}
-                                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(item.lineTotal)}</td>
+                                    <td style={{ textAlign: 'right', verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>{fmt(item.lineTotal)}</td>
                                 </tr>
                             ))
                         )}
@@ -613,7 +611,7 @@ export const FullA4Invoice = ({
                                 </>
                             )}
                             <div className="sum-line gst-total-line">
-                                <span>Total Tax (GST):</span>
+                                <span>Total GST:</span>
                                 <span>+ {fmt(totalGst)}</span>
                             </div>
                         </>
@@ -1047,12 +1045,11 @@ export const CompactInvoiceSheet = ({
 }) => {
     // Determine active print format (falls back to shop preference, then full_a4)
     const activeFormat = format || shop?.defaultPrintFormat || 'full_a4';
-    const isLargeBill = (bill1?.items || []).length > 8;
 
-    // Apply dynamic print styles whenever format changes
+    // Apply dynamic print styles whenever format or bill2 changes
     useEffect(() => {
-        applyPrintPageStyles(activeFormat);
-    }, [activeFormat]);
+        applyPrintPageStyles(activeFormat, { hasSecondBill: Boolean(bill2) });
+    }, [activeFormat, bill2]);
 
     // Format 1: Full A4
     if (activeFormat === 'full_a4') {
@@ -1097,31 +1094,24 @@ export const CompactInvoiceSheet = ({
     }
 
     // Format 2: Half A4 (default fallback)
-    return (
-        <div className={`a4-sheet-wrapper format-half_a4 ${isLargeBill ? 'full-page-fallback' : ''}`}>
-            {isLargeBill && (
-                <div className="cis-fallback-alert no-print">
-                    <Sparkles size={16} />
-                    <span>
-                        <strong>Expanded Full A4 Layout:</strong> This invoice contains {bill1?.items?.length} items and automatically expands to a full page to ensure zero clipping.
-                    </span>
-                </div>
-            )}
+    // If bill2 is provided: render 2 bills on one A4 sheet with cutting line
+    if (bill2) {
+        return (
+            <div className="a4-sheet-wrapper format-half_a4 paired-bills">
+                <div className="a4-print-sheet">
+                    {/* Slot 1: Primary Bill */}
+                    <div className="half-a4-slot slot-top">
+                        <CompactInvoiceSlot 
+                            bill={bill1} 
+                            shop={shop} 
+                            type={bill1?.type || 'SALE'} 
+                            products={products}
+                            slotNumber={1}
+                            isSingleHalf={false}
+                        />
+                    </div>
 
-            <div className="a4-print-sheet">
-                {/* Slot 1: Primary Bill */}
-                <div className="half-a4-slot slot-top">
-                    <CompactInvoiceSlot 
-                        bill={bill1} 
-                        shop={shop} 
-                        type={bill1?.type || 'SALE'} 
-                        products={products}
-                        slotNumber={1}
-                    />
-                </div>
-
-                {/* Middle Cut Line Divider (Only when not full-page fallback) */}
-                {!isLargeBill && (
+                    {/* Middle Cut Line Divider */}
                     <div className="half-a4-cut-divider">
                         <Scissors size={14} className="cis-scissors-icon" />
                         <span className="cis-cut-line"></span>
@@ -1129,65 +1119,66 @@ export const CompactInvoiceSheet = ({
                         <span className="cis-cut-line"></span>
                         <Scissors size={14} className="cis-scissors-icon right" />
                     </div>
-                )}
 
-                {/* Slot 2: Secondary Bill or Blank Paper-Saver Slot */}
-                {!isLargeBill && (
+                    {/* Slot 2: Secondary Paired Bill */}
                     <div className="half-a4-slot slot-bottom">
-                        {bill2 ? (
-                            <CompactInvoiceSlot 
-                                bill={bill2} 
-                                shop={shop} 
-                                type={bill2?.type || 'SALE'} 
-                                products={products}
-                                slotNumber={2}
-                                onRemove={onRemoveSecondBill}
-                            />
-                        ) : (
-                            <div className="half-a4-blank-slot">
-                                <div className="blank-slot-card no-print">
-                                    <div className="bsc-icon-wrap">
-                                        <Receipt size={24} />
-                                    </div>
-                                    <div className="bsc-title">Second Half-A4 Slot (Blank)</div>
-                                    <p className="bsc-desc">
-                                        Printing a single bill leaves this bottom half blank to save 50% paper.
-                                        You can also pair another bill below to print 2 bills on this single sheet!
-                                    </p>
-
-                                    {availableBills && availableBills.length > 0 && onSelectSecondBill && (
-                                        <div className="bsc-select-row">
-                                            <select 
-                                                className="bsc-select"
-                                                defaultValue=""
-                                                onChange={(e) => {
-                                                    if (e.target.value) {
-                                                        const found = availableBills.find(b => b._id === e.target.value);
-                                                        if (found) onSelectSecondBill(found);
-                                                    }
-                                                }}
-                                            >
-                                                <option value="">+ Pair Another Bill to Print 2-on-1...</option>
-                                                {availableBills
-                                                    .filter(b => b._id !== bill1?._id)
-                                                    .slice(0, 25)
-                                                    .map(b => (
-                                                        <option key={b._id} value={b._id}>
-                                                            #{b.invoiceNumber || b._id.slice(-6).toUpperCase()} — {b.customerName || 'Walk-in'} ({fmt(b.totalAmount)})
-                                                        </option>
-                                                    ))
-                                                }
-                                            </select>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="blank-slot-print-filler print-only">
-                                    {/* Intentionally left blank for paper printing */}
-                                </div>
-                            </div>
-                        )}
+                        <CompactInvoiceSlot 
+                            bill={bill2} 
+                            shop={shop} 
+                            type={bill2?.type || 'SALE'} 
+                            products={products}
+                            slotNumber={2}
+                            onRemove={onRemoveSecondBill}
+                            isSingleHalf={false}
+                        />
                     </div>
-                )}
+                </div>
+            </div>
+        );
+    }
+
+    // Single Half A4 Bill: genuine Half A4 invoice without blank second half slot
+    return (
+        <div className="a4-sheet-wrapper format-half_a4 single-bill">
+            {availableBills && availableBills.length > 0 && onSelectSecondBill && (
+                <div className="cis-pair-toolbar no-print">
+                    <div className="cis-pt-left">
+                        <Sparkles size={14} className="cis-pt-icon" />
+                        <span className="cis-pt-text">Optional 2-on-1 Eco Saver: Pair another bill to print 2 bills on a single A4 sheet</span>
+                    </div>
+                    <select 
+                        className="cis-pt-select"
+                        defaultValue=""
+                        onChange={(e) => {
+                            if (e.target.value) {
+                                const found = availableBills.find(b => b._id === e.target.value);
+                                if (found) onSelectSecondBill(found);
+                            }
+                        }}
+                    >
+                        <option value="">+ Pair Another Bill (2-on-1 A4 Sheet)...</option>
+                        {availableBills
+                            .filter(b => b._id !== bill1?._id)
+                            .slice(0, 25)
+                            .map(b => (
+                                <option key={b._id} value={b._id}>
+                                    #{b.invoiceNumber || b._id.slice(-6).toUpperCase()} — {b.customerName || 'Walk-in'} ({fmt(b.totalAmount)})
+                                </option>
+                            ))
+                        }
+                    </select>
+                </div>
+            )}
+
+            <div className="half-a4-single-sheet">
+                <CompactInvoiceSlot 
+                    bill={bill1} 
+                    shop={shop} 
+                    type={bill1?.type || 'SALE'} 
+                    products={products}
+                    slotNumber={1}
+                    isSingleHalf={true}
+                />
             </div>
         </div>
     );

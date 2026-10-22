@@ -1,5 +1,6 @@
 /**
  * ShopPulse — Unified GST Calculation & Tax Distribution Service
+ * (Updated: Half A4 & Gov Sales Support)
  * 
  * Reusable for:
  * - Regular retail sales

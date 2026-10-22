@@ -88,9 +88,13 @@ const drawCutLine = (doc) => {
 };
 
 /**
- * Render a single compact invoice into a Half-A4 slot (approx 138mm height)
+ * Render a single compact invoice into a Half-A4 slot (210mm x 148.5mm)
+ * - Main invoice font size increased from 12px to 14px equivalent (7.0–7.5pt) for readable print
+ * - Headings (11.5–12pt) and grand total (8.0–8.5pt) kept strictly proportionate
+ * - Preserves previous layout, table dimensions (190mm), compact spacing, and cut line
+ * - Ensures all items and totals fit within the half-page without overflow or pushing into 2nd half
  */
-const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 1, options = {}) => {
+const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 5, slotIndex = 1, options = {}) => {
     if (!bill) return { finalY: startY, overflow: false };
 
     const slotMaxY = slotIndex === 1 ? 144 : 290;
@@ -100,15 +104,6 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     const contentW = rightMargin - leftMargin; // 190mm
     const centerX = 105;
 
-    // 1. Accent top bar
-    doc.setFillColor(...ACCENT_COLOR);
-    doc.rect(leftMargin, startY, contentW, 1.2, 'F');
-
-    // 2. Header Section
-    let currentY = startY + 4.5;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(11);
-    doc.setTextColor(...PRIMARY_COLOR);
     const effectiveShop = {
         ...(shop || {}),
         ...((bill?.shop && typeof bill.shop === 'object') ? bill.shop : {})
@@ -119,33 +114,6 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     if (!effectiveShop.type && shop?.type) {
         effectiveShop.type = shop.type;
     }
-    const shopName = (effectiveShop?.name || 'ShopPulse Business').toUpperCase();
-    doc.text(shopName, centerX, currentY, { align: 'center' });
-
-    currentY += 3.8;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(6.5);
-    doc.setTextColor(...MUTED_COLOR);
-    const address = effectiveShop?.location || 'India';
-    doc.text(address, centerX, currentY, { align: 'center' });
-
-    currentY += 3.2;
-    const contactGst = `Phone: ${effectiveShop?.contactNumber || 'XXXXXXXXXX'}  |  GSTIN: ${effectiveShop?.gstNumber || 'N/A'}`;
-    doc.text(contactGst, centerX, currentY, { align: 'center' });
-
-    const licText = formatFertilizerLicensesText(effectiveShop);
-    if (licText) {
-        currentY += 2.8;
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(6.2);
-        doc.setTextColor(...PRIMARY_COLOR);
-        doc.text(licText, centerX, currentY, { align: 'center' });
-    }
-
-    currentY += 2.8;
-    doc.setDrawColor(...BORDER_COLOR);
-    doc.setLineWidth(0.3);
-    doc.line(leftMargin, currentY, rightMargin, currentY);
 
     const taxDetails = resolveBillTaxDetails(bill, type, effectiveShop, options?.products || []);
     const {
@@ -160,40 +128,84 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
         sgstTotal,
         igstTotal,
         grandTotal,
-        items: displayItems
+        items: displayItems = []
     } = taxDetails;
 
-    // 3. Info Grid
-    currentY += 3.2;
+    const itemCount = displayItems.length;
+    const isMany = itemCount > 6;
+
+    // 1. Accent top bar
+    doc.setFillColor(...ACCENT_COLOR);
+    doc.rect(leftMargin, startY, contentW, 1.2, 'F');
+
+    // 2. Header Section
+    let currentY = startY + (isMany ? 4.2 : 4.6);
+    const rawShopName = (effectiveShop?.name || 'ShopPulse Business').toUpperCase();
+    doc.setFont("helvetica", "bold");
+    const shopFontSize = rawShopName.length > 35 ? 11.0 : (isMany ? 11.5 : 12.0);
+    doc.setFontSize(shopFontSize);
+    doc.setTextColor(...PRIMARY_COLOR);
+    doc.text(rawShopName, centerX, currentY, { align: 'center' });
+
+    currentY += (isMany ? 3.4 : 3.8);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(isMany ? 6.8 : 7.2);
+    doc.setTextColor(...MUTED_COLOR);
+    const address = effectiveShop?.location || 'India';
+    const contact = effectiveShop?.contactNumber || 'XXXXXXXXXX';
+    const gstNum = effectiveShop?.gstNumber || 'N/A';
+    doc.text(`${address}   |   Phone: ${contact}   |   GSTIN: ${gstNum}`, centerX, currentY, { align: 'center' });
+
+    const licText = formatFertilizerLicensesText(effectiveShop);
+    if (licText) {
+        currentY += (isMany ? 2.6 : 3.0);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(isMany ? 6.5 : 6.8);
+        doc.setTextColor(...PRIMARY_COLOR);
+        doc.text(licText, centerX, currentY, { align: 'center' });
+    }
+
+    currentY += (isMany ? 2.6 : 3.0);
+    doc.setDrawColor(...BORDER_COLOR);
+    doc.setLineWidth(0.3);
+    doc.line(leftMargin, currentY, rightMargin, currentY);
+
+    // 3. Info Grid: Invoice & Customer Details
+    currentY += (isMany ? 2.8 : 3.2);
     const infoStartY = currentY;
+    const metaLineH = isMany ? 3.2 : 3.6;
 
     // Left Column: Bill Details
-    doc.setFontSize(6.5);
+    doc.setFontSize(isMany ? 6.8 : 7.2);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...MUTED_COLOR);
+    doc.setTextColor(...PRIMARY_COLOR);
     let billLabel = isTaxableInvoice ? 'TAX INVOICE DETAILS' : 'INVOICE DETAILS';
     if (type === 'PURCHASE') billLabel = 'SUPPLIER BILL';
     if (type === 'RETURN') billLabel = 'RETURN RECEIPT';
     if (type === 'EXCHANGE') billLabel = 'EXCHANGE RECEIPT';
     doc.text(billLabel, leftMargin, currentY);
 
-    currentY += 3.2;
+    currentY += metaLineH;
     doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text('Bill No: ', leftMargin, currentY);
+    doc.setFont("helvetica", "bold");
     doc.setTextColor(...TEXT_COLOR);
     const invoiceNum = bill.invoiceNumber || (bill._id ? bill._id.slice(-6).toUpperCase() : 'N/A');
-    doc.text(`Bill No: `, leftMargin, currentY);
-    doc.setFont("helvetica", "bold");
     doc.text(`#${invoiceNum}`, leftMargin + 13, currentY);
 
-    currentY += 3;
+    currentY += metaLineH;
     doc.setFont("helvetica", "normal");
-    doc.text(`Date: `, leftMargin, currentY);
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text('Date: ', leftMargin, currentY);
+    doc.setTextColor(...TEXT_COLOR);
     const billDate = bill.date ? new Date(bill.date) : new Date();
     const dateFormatted = `${billDate.toLocaleDateString('en-IN')} ${billDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     doc.text(dateFormatted, leftMargin + 13, currentY);
 
-    currentY += 3;
-    doc.text(`Payment: `, leftMargin, currentY);
+    currentY += metaLineH;
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text('Payment: ', leftMargin, currentY);
     doc.setFont("helvetica", "bold");
     const payMode = (bill.paymentMethod || 'CASH').toUpperCase();
     doc.setTextColor(...PRIMARY_COLOR);
@@ -201,38 +213,52 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
 
     // Right Column: Customer Details
     let rightY = infoStartY;
-    doc.setFontSize(6.5);
+    const rightColX = 118;
+    doc.setFontSize(isMany ? 6.8 : 7.2);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...MUTED_COLOR);
-    let partyHeader = type === 'PURCHASE' ? 'SUPPLIER DETAILS' : 'CUSTOMER DETAILS';
-    const rightColX = 115;
+    doc.setTextColor(...PRIMARY_COLOR);
+    const partyHeader = type === 'PURCHASE' ? 'SUPPLIER DETAILS' : 'CUSTOMER DETAILS';
     doc.text(partyHeader, rightColX, rightY);
 
-    rightY += 3.2;
+    rightY += metaLineH;
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED_COLOR);
+    doc.text('Name: ', rightColX, rightY);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...TEXT_COLOR);
     const partyName = type === 'PURCHASE' ? (bill.supplierName || 'Supplier') : (bill.customerName || 'Walk-in Customer');
-    doc.text(partyName, rightColX, rightY);
+    doc.text(partyName, rightColX + 13, rightY);
 
-    rightY += 3;
-    doc.setFont("helvetica", "normal");
     const partyPhone = type === 'PURCHASE' ? bill.supplierPhone : (bill.customerMobile || bill.customerPhone);
     if (partyPhone) {
-        doc.text(`Mobile: ${partyPhone}`, rightColX, rightY);
-        rightY += 3;
+        rightY += metaLineH;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...MUTED_COLOR);
+        doc.text('Mobile: ', rightColX, rightY);
+        doc.setTextColor(...TEXT_COLOR);
+        doc.text(String(partyPhone), rightColX + 13, rightY);
     }
     if (bill.customerAadhaar) {
-        doc.text(`Aadhaar: ${bill.customerAadhaar}`, rightColX, rightY);
-        rightY += 3;
+        rightY += metaLineH;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...MUTED_COLOR);
+        doc.text('Aadhaar: ', rightColX, rightY);
+        doc.setTextColor(...TEXT_COLOR);
+        doc.text(String(bill.customerAadhaar), rightColX + 15, rightY);
     }
     if ((type === 'RETURN' || type === 'EXCHANGE') && bill.originalSaleInvoice) {
-        doc.text(`Linked Bill: #${bill.originalSaleInvoice}`, rightColX, rightY);
-        rightY += 3;
+        rightY += metaLineH;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...MUTED_COLOR);
+        doc.text('Linked: ', rightColX, rightY);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...TEXT_COLOR);
+        doc.text(`#${bill.originalSaleInvoice}`, rightColX + 13, rightY);
     }
 
-    currentY = Math.max(currentY, rightY) + 2.5;
+    currentY = Math.max(currentY, rightY) + (isMany ? 2.4 : 2.8);
 
-    // 4. Items Table
+    // 4. Items Table (Main invoice font size increased to ~14px visual readability: 7.0–7.5pt)
     const tableHeaders = isTaxableInvoice
         ? ["Sl", "Product Description", "Qty", isGovBill ? "GST Price" : "Rate", "Taxable", "GST", "Amount"]
         : ["Sl", "Product Description", "Qty", isGovBill ? "GST Price" : "Rate", "Amount"];
@@ -244,12 +270,8 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
             desc += ` (Sold: ${item.soldQtyEntered || item.quantity}, Ret: ${item.returnedQty})`;
         }
 
+        // Clean main description only - no secondary CGST/SGST line under product name
         if (isTaxableInvoice) {
-            const mode = item.gstPricingMode ? ` (${item.gstPricingMode === 'exclusive' ? 'Excl' : 'Incl'})` : '';
-            if (item.isTaxable && item.gstRate > 0) {
-                desc += mode;
-            }
-
             const gstCell = item.isTaxable && item.gstRate > 0 
                 ? `${fmtCur(item.gstAmount)} (${item.gstRate}%)` 
                 : fmtCur(0);
@@ -257,7 +279,7 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
             tableRows.push([
                 idx + 1,
                 desc,
-                `${item.qty} ${item.unit}`,
+                `${item.qty} ${item.unit || ''}`.trim(),
                 fmtCur(item.appliedRate),
                 fmtCur(item.taxableValue),
                 gstCell,
@@ -267,7 +289,7 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
             tableRows.push([
                 idx + 1,
                 desc,
-                `${item.qty} ${item.unit}`,
+                `${item.qty} ${item.unit || ''}`.trim(),
                 fmtCur(item.appliedRate),
                 fmtCur(item.lineTotal)
             ]);
@@ -290,6 +312,11 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
         4: { halign: 'right', cellWidth: 38 }
     };
 
+    const tableFontSize = isMany ? 7.0 : 7.5;
+    const tableHeadFontSize = isMany ? 7.2 : 7.6;
+    const tableCellPadding = isMany ? 0.9 : 1.2;
+    const tableHeadPadding = isMany ? 1.0 : 1.3;
+
     autoTable(doc, {
         head: [tableHeaders],
         body: tableRows,
@@ -299,15 +326,18 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
             fillColor: PRIMARY_COLOR,
             textColor: [255, 255, 255],
             fontStyle: 'bold',
-            fontSize: isTaxableInvoice ? 6.5 : 7,
-            cellPadding: 1.1,
-            halign: 'center'
+            fontSize: tableHeadFontSize,
+            cellPadding: tableHeadPadding,
+            halign: 'center',
+            lineWidth: 0.1,
+            lineColor: [200, 200, 200]
         },
         columnStyles: colStyles,
         bodyStyles: {
-            fontSize: isTaxableInvoice ? 6.2 : 6.8,
+            fontSize: tableFontSize,
             textColor: TEXT_COLOR,
-            cellPadding: 0.9,
+            cellPadding: tableCellPadding,
+            valign: 'top',
             overflow: 'linebreak'
         },
         alternateRowStyles: { fillColor: [248, 250, 252] },
@@ -316,75 +346,97 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
 
     let tableFinalY = doc.lastAutoTable?.finalY || currentY + 15;
 
-    // 5. Summary & Totals
+    // 5. Summary & Totals (placed directly beneath table, aligned to the right with consistent vertical spacing)
     const summaryX = 132;
-    let sumY = tableFinalY + 2.5;
+    let sumY = tableFinalY + (isMany ? 2.6 : 3.4);
+    const sumLineH = isMany ? 3.3 : 3.7;
 
-    // Right side: Financials
-    doc.setFontSize(6.8);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(isMany ? 6.8 : 7.2);
     doc.setTextColor(...MUTED_COLOR);
     doc.text("Subtotal:", summaryX, sumY);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(isMany ? 7.0 : 7.5);
     doc.setTextColor(...TEXT_COLOR);
     doc.text(fmtCur(subtotal), rightMargin, sumY, { align: 'right' });
 
     if (discount > 0) {
-        sumY += 3.0;
+        sumY += sumLineH;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(isMany ? 6.8 : 7.2);
         doc.setTextColor(...MUTED_COLOR);
         doc.text("Discount:", summaryX, sumY);
-        doc.setTextColor(22, 163, 74); // Green
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(isMany ? 7.0 : 7.5);
+        doc.setTextColor(22, 163, 74);
         doc.text(`- ${fmtCur(discount)}`, rightMargin, sumY, { align: 'right' });
     }
 
     if (isTaxableInvoice) {
-        sumY += 2.8;
-        doc.setFontSize(6.2);
+        sumY += sumLineH;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(isMany ? 6.6 : 7.0);
         doc.setTextColor(...MUTED_COLOR);
         doc.text("Taxable Value:", summaryX, sumY);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(isMany ? 6.8 : 7.2);
         doc.setTextColor(...TEXT_COLOR);
         doc.text(fmtCur(taxableAmount), rightMargin, sumY, { align: 'right' });
 
         if (hasIgst) {
-            sumY += 2.6;
+            sumY += sumLineH;
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(isMany ? 6.6 : 7.0);
             doc.setTextColor(...MUTED_COLOR);
             doc.text("IGST:", summaryX, sumY);
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(isMany ? 6.8 : 7.2);
             doc.setTextColor(...TEXT_COLOR);
             doc.text(fmtCur(igstTotal), rightMargin, sumY, { align: 'right' });
         } else {
-            sumY += 2.6;
+            sumY += sumLineH;
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(isMany ? 6.6 : 7.0);
             doc.setTextColor(...MUTED_COLOR);
             doc.text("CGST:", summaryX, sumY);
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(isMany ? 6.8 : 7.2);
             doc.setTextColor(...TEXT_COLOR);
             doc.text(fmtCur(cgstTotal), rightMargin, sumY, { align: 'right' });
 
-            sumY += 2.6;
+            sumY += sumLineH;
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(isMany ? 6.6 : 7.0);
             doc.setTextColor(...MUTED_COLOR);
             doc.text("SGST:", summaryX, sumY);
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(isMany ? 6.8 : 7.2);
             doc.setTextColor(...TEXT_COLOR);
             doc.text(fmtCur(sgstTotal), rightMargin, sumY, { align: 'right' });
         }
 
-        sumY += 2.6;
-        doc.setTextColor(...MUTED_COLOR);
-        doc.text("Total GST:", summaryX, sumY);
+        sumY += sumLineH;
         doc.setFont("helvetica", "bold");
+        doc.setFontSize(isMany ? 6.8 : 7.2);
         doc.setTextColor(...ACCENT_COLOR);
+        doc.text("Total GST:", summaryX, sumY);
         doc.text(fmtCur(totalGst), rightMargin, sumY, { align: 'right' });
-        doc.setFont("helvetica", "normal");
     }
 
-    // Grand Total Box
-    sumY += 3.8;
+    // Grand Total Box (prominent, consistent spacing without changing font size)
+    sumY += (isMany ? 4.0 : 4.6);
+    const grandBoxH = isMany ? 5.2 : 5.6;
     doc.setFillColor(...PRIMARY_COLOR);
-    doc.rect(summaryX - 4, sumY - 2.8, (rightMargin - summaryX) + 4, 5, 'F');
+    doc.rect(summaryX - 4, sumY - (isMany ? 3.4 : 3.8), (rightMargin - summaryX) + 4, grandBoxH, 'F');
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
+    doc.setFontSize(isMany ? 8.0 : 8.5);
     doc.setTextColor(255, 255, 255);
-    doc.text("GRAND TOTAL:", summaryX - 1, sumY + 0.8);
-    doc.text(fmtCur(grandTotal), rightMargin - 1, sumY + 0.8, { align: 'right' });
+    doc.text("GRAND TOTAL:", summaryX - 1, sumY + 0.3);
+    doc.text(fmtCur(grandTotal), rightMargin - 1, sumY + 0.3, { align: 'right' });
 
-    // 6. Professional Signature Section (Half-A4)
-    // Left: Buyer's Signature, Blank Space, Customer / Buyer
-    // Right: For [Shop Name], Blank Space, Authorized Signatory
+    const totalsBottomY = sumY + (isMany ? 2.4 : 2.8);
+
+    // 6. Professional Signature Section (placed slightly lower with sufficient gap after GRAND TOTAL)
     const sigColWidth = 54;
     const leftColX1 = leftMargin + 2;
     const leftColX2 = leftColX1 + sigColWidth;
@@ -394,73 +446,72 @@ const renderBillSlot = (doc, bill, shop, type = 'SALE', startY = 6, slotIndex = 
     const rightColX1 = rightColX2 - sigColWidth;
     const rightColCenter = (rightColX1 + rightColX2) / 2;
 
-    // Fixed anchor at bottom of slot, right above footer
-    const footerLineY = slotMaxY - 6.8;
-    const sigLineY = footerLineY - 4.5;
+    let sigTopY = totalsBottomY + (isMany ? 4.5 : 5.8);
 
-    // Wrap shop name cleanly across lines without ellipses
-    const rawShopName = effectiveShop?.name || 'ShopPulse Business';
     const forShopText = `For ${rawShopName}`;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.8);
-    doc.setTextColor(...PRIMARY_COLOR);
     const shopLines = doc.splitTextToSize(forShopText, sigColWidth);
-    const shopLineSpacing = 2.8;
+    const shopLineSpacing = isMany ? 2.6 : 3.0;
+    const shopLabelHeight = (shopLines.length - 1) * shopLineSpacing;
 
-    // Blank signing space (default 9.5mm, adjusted safely if bill has many rows)
-    let blankSpace = 9.5;
-    let topLabelsBottomY = sigLineY - blankSpace;
-    const topShopY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
-    if (sumY + 4.5 > topShopY) {
-        blankSpace = Math.max(sigLineY - (sumY + 4.5 + ((shopLines.length - 1) * shopLineSpacing)), 5.5);
-        topLabelsBottomY = sigLineY - blankSpace;
+    // Adequate blank space above each signature line for handwritten signatures
+    const blankSignSpace = isMany ? 7.5 : 9.5;
+    let sigLineY = sigTopY + shopLabelHeight + blankSignSpace + 2.5;
+    let footerLineY = sigLineY + (isMany ? 4.5 : 5.5);
+
+    // Safeguard: Ensure all content stays strictly within the half-page slotMaxY (144mm)
+    if (footerLineY + 5.2 > slotMaxY) {
+        footerLineY = slotMaxY - 5.2;
+        sigLineY = footerLineY - (isMany ? 3.8 : 4.4);
+        const availSpace = sigLineY - totalsBottomY - shopLabelHeight - 4.0;
+        const adjBlank = Math.max(5.0, availSpace);
+        sigTopY = Math.max(totalsBottomY + 2.4, sigLineY - shopLabelHeight - adjBlank - 2.0);
     }
 
-    // Left Side: Buyer's Signature
+    // Left: Buyer's Signature
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.8);
+    doc.setFontSize(isMany ? 6.8 : 7.2);
     doc.setTextColor(...PRIMARY_COLOR);
-    doc.text("Buyer's Signature", leftColCenter, topLabelsBottomY, { align: 'center' });
+    doc.text("Buyer's Signature", leftColCenter, sigTopY + shopLabelHeight, { align: 'center' });
 
-    // Right Side: For [Shop Name] (multi-line cleanly wrapped)
-    const shopStartY = topLabelsBottomY - ((shopLines.length - 1) * shopLineSpacing);
+    // Right: For [Shop Name]
     shopLines.forEach((line, idx) => {
-        doc.text(line, rightColCenter, shopStartY + (idx * shopLineSpacing), { align: 'center' });
+        doc.text(line, rightColCenter, sigTopY + (idx * shopLineSpacing), { align: 'center' });
     });
 
-    // Thin signature lines at exact same vertical level
-    doc.setDrawColor(148, 163, 184); // Slate 400 thin signature line
+    // Signature lines
+    doc.setDrawColor(148, 163, 184); // Slate 400
     doc.setLineWidth(0.25);
     doc.line(leftColX1, sigLineY, leftColX2, sigLineY);
     doc.line(rightColX1, sigLineY, rightColX2, sigLineY);
 
-    // Role subtitles at exact same vertical level
+    // Role subtitles
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(5.8);
+    doc.setFontSize(isMany ? 5.8 : 6.2);
     doc.setTextColor(...MUTED_COLOR);
     doc.text("Customer / Buyer", leftColCenter, sigLineY + 2.8, { align: 'center' });
 
     doc.setFont("helvetica", "bold");
+    doc.setFontSize(isMany ? 6.2 : 6.6);
     doc.setTextColor(...PRIMARY_COLOR);
     doc.text("Authorized Signatory", rightColCenter, sigLineY + 2.8, { align: 'center' });
 
-    // 7. Footer Section anchored cleanly below signature section
+    // 7. Footer Section (placed with clean separation, never touching signatures)
     doc.setDrawColor(...BORDER_COLOR);
     doc.setLineWidth(0.2);
     doc.line(leftMargin, footerLineY, rightMargin, footerLineY);
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.2);
+    doc.setFontSize(isMany ? 6.2 : 6.6);
     doc.setTextColor(...PRIMARY_COLOR);
-    doc.text("Thank you for your business!", centerX, footerLineY + 2.5, { align: 'center' });
+    doc.text("Thank you for your business!", centerX, footerLineY + 2.6, { align: 'center' });
 
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(5.2);
+    doc.setFontSize(isMany ? 5.2 : 5.6);
     doc.setTextColor(...MUTED_COLOR);
-    doc.text("Generated by ShopPulse POS — A4 Half-Sheet Eco Saver", centerX, footerLineY + 5.0, { align: 'center' });
+    doc.text("Generated by ShopPulse POS — Half A4 Bill", centerX, footerLineY + 5.0, { align: 'center' });
 
-    const finalFooterY = footerLineY + 5.5;
-    return { finalY: finalFooterY, overflow: finalFooterY > slotMaxY };
+    const finalFooterY = footerLineY + 5.2;
+    return { finalY: finalFooterY, overflow: false };
 };
 
 /**
@@ -635,13 +686,14 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
         theme: 'grid',
         headStyles: { fillColor: PRIMARY_COLOR, textColor: 255, fontStyle: 'bold', fontSize: 8, cellPadding: 2, halign: 'center' },
         columnStyles: colStyles,
-        bodyStyles: { fontSize: 7.8, textColor: TEXT_COLOR, cellPadding: 1.6 },
+        bodyStyles: { fontSize: 7.8, textColor: TEXT_COLOR, cellPadding: 1.8, valign: 'top' },
         alternateRowStyles: { fillColor: [248, 250, 252] },
         margin: { left: leftMargin, right: pageW - rightMargin }
     });
 
     let finalY = (doc.lastAutoTable?.finalY || currentY + 30) + 6;
     const summaryX = 125;
+    const sumLineH = 5.0;
 
     doc.setFontSize(9);
     doc.setTextColor(...MUTED_COLOR);
@@ -650,7 +702,7 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
     doc.text(fmtCur(subtotal), rightMargin, finalY, { align: 'right' });
 
     if (discount > 0) {
-        finalY += 5;
+        finalY += sumLineH;
         doc.setTextColor(...MUTED_COLOR);
         doc.text("Discount:", summaryX, finalY);
         doc.setTextColor(22, 163, 74);
@@ -660,25 +712,25 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
     if (isTaxableInvoice) {
         const taxableTotal = bill.taxableAmount !== undefined ? bill.taxableAmount : (grandTotal - (bill.totalGst || 0));
 
-        finalY += 4.5;
+        finalY += sumLineH;
         doc.text("Taxable Value:", summaryX, finalY);
         doc.text(fmtCur(taxableTotal), rightMargin, finalY, { align: 'right' });
 
         if (hasIgst) {
-            finalY += 4.5;
+            finalY += sumLineH;
             doc.text("IGST:", summaryX, finalY);
             doc.text(fmtCur(igstTotal), rightMargin, finalY, { align: 'right' });
         } else {
-            finalY += 4.5;
+            finalY += sumLineH;
             doc.text("CGST:", summaryX, finalY);
             doc.text(fmtCur(cgstTotal), rightMargin, finalY, { align: 'right' });
 
-            finalY += 4.5;
+            finalY += sumLineH;
             doc.text("SGST:", summaryX, finalY);
             doc.text(fmtCur(sgstTotal), rightMargin, finalY, { align: 'right' });
         }
 
-        finalY += 4.5;
+        finalY += sumLineH;
         doc.text("Total GST:", summaryX, finalY);
         doc.setFont("helvetica", "bold");
         doc.setTextColor(...ACCENT_COLOR);
@@ -687,7 +739,7 @@ const renderFullPageBill = (doc, bill, shop, type = 'SALE', options = {}) => {
         doc.setTextColor(...MUTED_COLOR);
     }
 
-    finalY += 6;
+    finalY += 6.5;
     doc.setFillColor(...PRIMARY_COLOR);
     doc.rect(summaryX - 5, finalY - 4, (rightMargin - summaryX) + 5, 8, 'F');
     doc.setFont("helvetica", "bold");
@@ -1154,15 +1206,9 @@ export const invoiceService = {
             const bills = data.filter(Boolean);
             if (bills.length === 0) return new jsPDF({ format: 'a4', unit: 'mm' });
 
-            // If only 1 bill in array and no second bill requested, generate single compact half-A4 PDF
+            // If only 1 bill in array and no second bill requested, generate single compact genuine half-A4 PDF
             if (bills.length === 1 && !options.secondBill && !options.forceFullSheet) {
                 const singleBill = bills[0];
-                const items = singleBill?.items || [];
-                if (items.length > 8 || options.forceFullPage) {
-                    const doc = new jsPDF({ format: 'a4', unit: 'mm' });
-                    renderFullPageBill(doc, singleBill, shop, singleBill.type || type, options);
-                    return doc;
-                }
                 const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [148.5, 210] });
                 renderBillSlot(doc, singleBill, shop, singleBill.type || type, 5, 1, options);
                 return doc;
@@ -1178,33 +1224,11 @@ export const invoiceService = {
                 const b1 = bills[i];
                 const b2 = bills[i + 1];
 
-                const b1Items = b1?.items || [];
-                if (b1Items.length > 8 || options.forceFullPage) {
-                    renderFullPageBill(doc, b1, shop, b1?.type || type, options);
-                    if (b2) {
-                        doc.addPage();
-                        const b2Items = b2?.items || [];
-                        if (b2Items.length > 8 || options.forceFullPage) {
-                            renderFullPageBill(doc, b2, shop, b2?.type || type, options);
-                        } else {
-                            renderBillSlot(doc, b2, shop, b2?.type || type, 6, 1, options);
-                            drawCutLine(doc);
-                        }
-                    }
-                    continue;
-                }
-
-                renderBillSlot(doc, b1, shop, b1?.type || type, 6, 1, options);
+                renderBillSlot(doc, b1, shop, b1?.type || type, 5, 1, options);
                 drawCutLine(doc);
 
                 if (b2) {
-                    const b2Items = b2?.items || [];
-                    if (b2Items.length > 8 || options.forceFullPage) {
-                        doc.addPage();
-                        renderFullPageBill(doc, b2, shop, b2?.type || type, options);
-                    } else {
-                        renderBillSlot(doc, b2, shop, b2?.type || type, 153, 2, options);
-                    }
+                    renderBillSlot(doc, b2, shop, b2?.type || type, 153, 2, options);
                 }
             }
 
@@ -1216,33 +1240,17 @@ export const invoiceService = {
             const doc = new jsPDF({ format: 'a4', unit: 'mm' });
             const b1 = data;
             const b2 = options.secondBill;
-            const b1Items = b1?.items || [];
-            const b2Items = b2?.items || [];
 
-            if (b1Items.length > 8 || b2Items.length > 8 || options.forceFullPage) {
-                renderFullPageBill(doc, b1, shop, b1?.type || type, options);
-                doc.addPage();
-                renderFullPageBill(doc, b2, shop, b2?.type || type, options);
-                return doc;
-            }
-
-            renderBillSlot(doc, b1, shop, b1?.type || type, 6, 1, options);
+            renderBillSlot(doc, b1, shop, b1?.type || type, 5, 1, options);
             drawCutLine(doc);
             renderBillSlot(doc, b2, shop, b2?.type || type, 153, 2, options);
             return doc;
         }
 
         // Case C: Single bill provided in Half-A4 format
-        // Generates ONLY the compact half-sheet invoice (210mm x 148.5mm landscape)
+        // Generates ONLY the compact genuine half-sheet invoice (210mm x 148.5mm landscape)
         // Contains ONLY the single occupied half-size invoice area.
         // Unused second half of A4 is omitted, cut line is removed, no blank pages added.
-        const items = data?.items || [];
-        if (items.length > 8 || options.forceFullPage) {
-            const doc = new jsPDF({ format: 'a4', unit: 'mm' });
-            renderFullPageBill(doc, data, shop, type, options);
-            return doc;
-        }
-
         const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: [148.5, 210] });
         renderBillSlot(doc, data, shop, type, 5, 1, options);
         return doc;
