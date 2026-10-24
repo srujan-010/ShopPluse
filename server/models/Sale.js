@@ -137,6 +137,11 @@ const saleSchema = new mongoose.Schema({
         required: true,
         enum: ['Cash', 'UPI', 'Khata']
     },
+    khataId: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Khata',
+        default: null
+    },
     date: {
         type: Date,
         default: Date.now

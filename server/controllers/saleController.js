@@ -62,7 +62,11 @@ const resolvePaymentInfo = (tx, khataCustomerMap) => {
     if (method === 'KHATA') {
         let khata = null;
         if (khataCustomerMap) {
-            if (tx.customerMobile) {
+            if (tx.khataId) {
+                const kId = (tx.khataId._id || tx.khataId).toString();
+                khata = khataCustomerMap.get(kId);
+            }
+            if (!khata && tx.customerMobile) {
                 khata = khataCustomerMap.get(tx.customerMobile.toString().trim());
             }
             if (!khata && tx.customerName) {
@@ -133,15 +137,16 @@ exports.getSales = async (req, res) => {
         }
         
         const [sales, returns, exchanges, govSales, khataRecords] = await Promise.all([
-            Sale.find(query).populate('shop', 'name').lean(),
+            Sale.find(query).populate('shop', 'name').populate('khataId', 'customerName mobile outstandingDue').lean(),
             ReturnRecord.find(query).populate('shop', 'name').lean(),
             ExchangeRecord.find(query).populate('shop', 'name').lean(),
-            GovernmentSale.find(query).populate('shop', 'name').populate('items.product', 'name category isGstApplicable gstRate gstPricingMode gst governmentPrice sellPrice unit').lean(),
+            GovernmentSale.find(query).populate('shop', 'name').populate('khataId', 'customerName mobile outstandingDue').populate('items.product', 'name category isGstApplicable gstRate gstPricingMode gst governmentPrice sellPrice unit').lean(),
             Khata.find(query).lean()
         ]);
 
         const khataCustomerMap = new Map();
         (khataRecords || []).forEach(k => {
+            if (k._id) khataCustomerMap.set(k._id.toString(), k);
             if (k.mobile) khataCustomerMap.set(k.mobile.trim(), k);
             if (k.customerName) khataCustomerMap.set(k.customerName.toLowerCase().trim(), k);
         });
@@ -1460,6 +1465,7 @@ exports.getSaleById = async (req, res) => {
         // Try Sale first
         let transaction = await Sale.findById(id)
             .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
+            .populate('khataId', 'customerName mobile outstandingDue')
             .lean();
             
         if (transaction) {
@@ -1690,6 +1696,7 @@ exports.getSaleById = async (req, res) => {
         // Try GovernmentSale
         transaction = await GovernmentSale.findById(id)
             .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
+            .populate('khataId', 'customerName mobile outstandingDue')
             .lean();
 
         if (transaction) {
@@ -2265,3 +2272,333 @@ exports.processExchange = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Update customer name, mobile number, and payment method on an existing sale
+// @route   PUT /api/sales/:id/customer or PUT /api/sales/:id
+// @access  Private
+exports.updateSaleCustomer = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid sale ID' });
+        }
+
+        let { customerName, customerMobile, paymentMethod, khataCustomerId, isNewKhataCustomer } = req.body;
+
+        // Customer name is required
+        if (!customerName || typeof customerName !== 'string' || !customerName.trim()) {
+            return res.status(400).json({ success: false, message: 'Customer name is required' });
+        }
+        customerName = customerName.trim();
+
+        // Mobile is optional, but if provided, validate 10-digit Indian mobile number
+        let cleanMobile = '';
+        if (customerMobile && typeof customerMobile === 'string' && customerMobile.trim()) {
+            cleanMobile = customerMobile.replace(/\D/g, '').slice(-10);
+            if (cleanMobile.length !== 10) {
+                return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit Indian mobile number or leave blank' });
+            }
+        }
+
+        // Validate paymentMethod if provided
+        const validMethods = ['Cash', 'UPI', 'Khata'];
+        if (paymentMethod && !validMethods.includes(paymentMethod)) {
+            return res.status(400).json({ success: false, message: 'Invalid payment method. Supported methods are: Cash, UPI, Khata' });
+        }
+
+        // Find sale in Sale or GovernmentSale collection
+        let sale = await Sale.findById(id);
+        let isGovOnly = false;
+        if (!sale) {
+            const gov = await GovernmentSale.findById(id);
+            if (!gov) {
+                return res.status(404).json({ success: false, message: 'Sale not found' });
+            }
+            isGovOnly = true;
+            sale = gov;
+        }
+
+        // Shop-level access verification
+        const shop = await Shop.findById(sale.shop);
+        if (!shop) {
+            return res.status(404).json({ success: false, message: 'Associated shop not found' });
+        }
+
+        const isOwner = shop.owner.toString() === req.user.id || (sale.owner && sale.owner.toString() === req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ success: false, message: 'Not authorized to edit sales for this shop' });
+        }
+
+        const oldMobile = sale.customerMobile || '';
+        const oldMethod = sale.paymentMethod || 'Cash';
+        const targetMethod = paymentMethod || oldMethod;
+
+        // Locate existing Khata account linked to this sale (if any)
+        let oldKhata = null;
+        if (sale.khataId) {
+            oldKhata = await Khata.findById(sale.khataId);
+        }
+        if (!oldKhata) {
+            oldKhata = await Khata.findOne({ shop: sale.shop, 'transactions.saleId': sale._id });
+        }
+        if (!oldKhata && oldMethod === 'Khata' && oldMobile) {
+            oldKhata = await Khata.findOne({ shop: sale.shop, mobile: oldMobile });
+        }
+
+        let targetKhata = null;
+
+        // Handling Khata customer selection/creation when target method is Khata
+        if (targetMethod === 'Khata') {
+            if (!khataCustomerId && !cleanMobile && !oldMobile) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'A 10-digit mobile number is required when selecting Khata (Credit)'
+                });
+            }
+
+            if (khataCustomerId && khataCustomerId !== '__new__') {
+                if (!mongoose.Types.ObjectId.isValid(khataCustomerId)) {
+                    return res.status(400).json({ success: false, message: 'Invalid Khata customer ID' });
+                }
+                targetKhata = await Khata.findById(khataCustomerId);
+                if (!targetKhata) {
+                    return res.status(404).json({ success: false, message: 'Selected Khata customer account not found' });
+                }
+                // Validate selected account belongs to active shop
+                if (targetKhata.shop.toString() !== sale.shop.toString()) {
+                    return res.status(403).json({ success: false, message: 'Selected Khata account does not belong to this shop' });
+                }
+
+                // If mobile was explicitly updated, check duplicate in same shop
+                if (cleanMobile && cleanMobile !== targetKhata.mobile) {
+                    const duplicateKhata = await Khata.findOne({
+                        shop: sale.shop,
+                        mobile: cleanMobile,
+                        _id: { $ne: targetKhata._id }
+                    });
+                    if (duplicateKhata) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Mobile number ${cleanMobile} is already associated with another customer (${duplicateKhata.customerName}) in this shop`
+                        });
+                    }
+                    targetKhata.mobile = cleanMobile;
+                } else if (!cleanMobile) {
+                    cleanMobile = targetKhata.mobile;
+                }
+
+                if (customerName) {
+                    targetKhata.customerName = customerName;
+                } else {
+                    customerName = targetKhata.customerName;
+                }
+            } else if (isNewKhataCustomer || khataCustomerId === '__new__') {
+                if (!cleanMobile) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'A 10-digit mobile number is required to create a Khata account'
+                    });
+                }
+
+                // Check if account with this mobile already exists in the shop (avoid duplicates)
+                targetKhata = await Khata.findOne({ shop: sale.shop, mobile: cleanMobile });
+                if (targetKhata) {
+                    targetKhata.customerName = customerName;
+                } else {
+                    targetKhata = new Khata({
+                        shop: sale.shop,
+                        owner: sale.owner,
+                        customerName: customerName,
+                        mobile: cleanMobile,
+                        outstandingDue: 0,
+                        transactions: []
+                    });
+                }
+            } else if (oldKhata) {
+                // Preserved preselected Khata customer
+                targetKhata = oldKhata;
+                targetKhata.customerName = customerName;
+                if (cleanMobile) targetKhata.mobile = cleanMobile;
+            } else if (cleanMobile) {
+                // Match existing Khata account by mobile in this shop
+                const matchedExistingKhata = await Khata.findOne({ shop: sale.shop, mobile: cleanMobile });
+                if (matchedExistingKhata) {
+                    targetKhata = matchedExistingKhata;
+                    targetKhata.customerName = customerName;
+                } else {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Please select an existing Khata customer or choose Add New Khata Customer'
+                    });
+                }
+            } else {
+                // Switching from non-Khata to Khata without selecting or creating a customer
+                return res.status(400).json({
+                    success: false,
+                    message: 'Please select an existing Khata customer or choose Add New Khata Customer'
+                });
+            }
+        }
+
+        // Duplicate mobile check in same shop if changing mobile for an existing Khata customer
+        if (targetKhata && cleanMobile && cleanMobile !== targetKhata.mobile) {
+            const duplicateKhata = await Khata.findOne({
+                shop: sale.shop,
+                mobile: cleanMobile,
+                _id: { $ne: targetKhata._id }
+            });
+            if (duplicateKhata) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Mobile number ${cleanMobile} is already associated with another customer (${duplicateKhata.customerName}) in this shop`
+                });
+            }
+        }
+
+        // Determine due amount on the sale
+        const saleDueAmount = (sale.remainingAmount !== undefined && sale.remainingAmount !== null)
+            ? Number(sale.remainingAmount)
+            : (sale.paymentStatus === 'Paid' ? 0 : Math.max(0, Number(sale.totalAmount) - (Number(sale.paidAmount) || 0)));
+
+        // Handle Ledger Reversals & Postings
+        if (oldMethod === 'Khata' && targetMethod !== 'Khata') {
+            // Case 1: Switching from Khata to Cash/UPI -> Reverse due entry from oldKhata
+            if (oldKhata) {
+                const dueTxIndex = (oldKhata.transactions || []).findIndex(
+                    t => t.saleId && t.saleId.toString() === sale._id.toString() && t.type === 'due'
+                );
+                if (dueTxIndex !== -1) {
+                    const dueAmt = Number(oldKhata.transactions[dueTxIndex].amount) || 0;
+                    oldKhata.outstandingDue = Math.max(0, parseFloat((oldKhata.outstandingDue - dueAmt).toFixed(2)));
+                    oldKhata.transactions.splice(dueTxIndex, 1);
+                }
+                oldKhata.customerName = customerName;
+                if (cleanMobile) oldKhata.mobile = cleanMobile;
+                await oldKhata.save();
+            }
+            sale.khataId = null;
+        } else if (targetMethod === 'Khata' && targetKhata) {
+            // Case 2: Target is Khata
+            // If sale was previously associated with another Khata customer, reverse from old customer first
+            if (oldKhata && oldKhata._id.toString() !== targetKhata._id.toString()) {
+                const oldDueTxIndex = (oldKhata.transactions || []).findIndex(
+                    t => t.saleId && t.saleId.toString() === sale._id.toString() && t.type === 'due'
+                );
+                if (oldDueTxIndex !== -1) {
+                    const dueAmt = Number(oldKhata.transactions[oldDueTxIndex].amount) || 0;
+                    oldKhata.outstandingDue = Math.max(0, parseFloat((oldKhata.outstandingDue - dueAmt).toFixed(2)));
+                    oldKhata.transactions.splice(oldDueTxIndex, 1);
+                    await oldKhata.save();
+                }
+            }
+
+            // Reconcile due entry in targetKhata
+            const targetTxIndex = (targetKhata.transactions || []).findIndex(
+                t => t.saleId && t.saleId.toString() === sale._id.toString() && t.type === 'due'
+            );
+
+            if (saleDueAmount > 0) {
+                if (targetTxIndex !== -1) {
+                    // Update existing transaction and reconcile running balance
+                    const prevAmount = Number(targetKhata.transactions[targetTxIndex].amount) || 0;
+                    targetKhata.outstandingDue = Math.max(0, parseFloat((targetKhata.outstandingDue - prevAmount + saleDueAmount).toFixed(2)));
+                    targetKhata.transactions[targetTxIndex].amount = saleDueAmount;
+                    targetKhata.transactions[targetTxIndex].date = sale.date || new Date();
+                    targetKhata.transactions[targetTxIndex].note = `POS Bill #${sale.invoiceNumber || sale._id.toString().slice(-6).toUpperCase()}`;
+                    targetKhata.transactions[targetTxIndex].paymentMethod = 'Khata';
+                    targetKhata.transactions[targetTxIndex].isPOSSale = true;
+                } else {
+                    // Post new transaction
+                    targetKhata.transactions.push({
+                        type: 'due',
+                        amount: saleDueAmount,
+                        date: sale.date || new Date(),
+                        note: `POS Bill #${sale.invoiceNumber || sale._id.toString().slice(-6).toUpperCase()}`,
+                        saleId: sale._id,
+                        paymentMethod: 'Khata',
+                        isPOSSale: true,
+                        items: (sale.items || []).map(i => ({
+                            productName: i.productName,
+                            quantity: i.soldQtyEntered || i.quantity,
+                            unit: i.soldUnit || i.unit,
+                            price: i.pricePerBaseUnit || i.price
+                        }))
+                    });
+                    targetKhata.outstandingDue = parseFloat((targetKhata.outstandingDue + saleDueAmount).toFixed(2));
+                }
+            } else {
+                // Sale is fully paid (remainingAmount: 0); ensure no due debt is posted
+                if (targetTxIndex !== -1) {
+                    const prevAmount = Number(targetKhata.transactions[targetTxIndex].amount) || 0;
+                    targetKhata.outstandingDue = Math.max(0, parseFloat((targetKhata.outstandingDue - prevAmount).toFixed(2)));
+                    targetKhata.transactions.splice(targetTxIndex, 1);
+                }
+            }
+
+            await targetKhata.save();
+            sale.khataId = targetKhata._id;
+            customerName = targetKhata.customerName;
+            cleanMobile = targetKhata.mobile;
+        }
+
+        // Update the sale record - strictly preserving financial fields, dates, and inventory
+        sale.customerName = customerName;
+        sale.customerMobile = cleanMobile;
+        sale.paymentMethod = targetMethod;
+        await sale.save();
+
+        // Update linked GovernmentSale if any
+        if (!isGovOnly) {
+            const linkedGov = await GovernmentSale.findOne({
+                $or: [
+                    { linkedSaleId: sale._id },
+                    { shop: sale.shop, invoiceNumber: sale.invoiceNumber }
+                ]
+            });
+            if (linkedGov) {
+                linkedGov.customerName = customerName;
+                linkedGov.customerMobile = cleanMobile;
+                linkedGov.paymentMethod = targetMethod;
+                linkedGov.khataId = sale.khataId;
+                await linkedGov.save();
+            }
+        } else if (sale.linkedSaleId) {
+            const linkedMainSale = await Sale.findById(sale.linkedSaleId);
+            if (linkedMainSale) {
+                linkedMainSale.customerName = customerName;
+                linkedMainSale.customerMobile = cleanMobile;
+                linkedMainSale.paymentMethod = targetMethod;
+                linkedMainSale.khataId = sale.khataId;
+                await linkedMainSale.save();
+            }
+        }
+
+        // Update linked return and exchange records without touching financials
+        await ReturnRecord.updateMany(
+            { originalSale: sale._id },
+            { $set: { customerName, customerMobile: cleanMobile } }
+        );
+        await ExchangeRecord.updateMany(
+            { originalSale: sale._id },
+            { $set: { customerName, customerMobile: cleanMobile } }
+        );
+
+        // Populate shop info and khataId for consistent client response
+        const populatedSale = await (isGovOnly ? GovernmentSale : Sale).findById(sale._id)
+            .populate('shop', 'name location contactNumber email gstNumber upiId footerMessage address')
+            .populate('khataId', 'customerName mobile outstandingDue')
+            .lean();
+
+        res.status(200).json({
+            success: true,
+            data: populatedSale,
+            message: 'Sale details updated successfully'
+        });
+    } catch (error) {
+        console.error('Error updating sale details:', error);
+        res.status(500).json({ success: false, message: error.message || 'Internal server error while updating sale details' });
+    }
+};
+
+

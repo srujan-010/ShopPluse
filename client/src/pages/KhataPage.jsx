@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
     User, 
     Phone, 
@@ -7,14 +8,15 @@ import {
     ArrowDownCircle, 
     Search, 
     ChevronRight, 
-    ChevronLeft,
+    ChevronLeft, 
     X, 
-    FileText,
-    History,
-    ArrowUpCircle,
-    Receipt,
-    Filter,
-    Calendar
+    FileText, 
+    History, 
+    ArrowUpCircle, 
+    Receipt, 
+    Filter, 
+    Calendar,
+    Edit2
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { khataService, shopService, saleService } from '../services/api';
@@ -45,6 +47,15 @@ const KhataPage = () => {
     const [isNewAccountModalOpen, setIsNewAccountModalOpen] = useState(false);
     const [amountInput, setAmountInput] = useState('');
     const [noteInput, setNoteInput] = useState('');
+
+    // Edit Customer Modal State
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+    const [customerToEdit, setCustomerToEdit] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editMobile, setEditMobile] = useState('');
+    const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+    const [editError, setEditError] = useState('');
+    const [editDuplicateWarning, setEditDuplicateWarning] = useState('');
     
     // Ledger Filter & Search
     const [ledgerSearch, setLedgerSearch] = useState('');
@@ -78,7 +89,7 @@ const KhataPage = () => {
     }, [shopId]);
 
     // Lock body scroll when modal is open
-    useScrollLock(isTxnModalOpen || isInvoiceOpen || isPaymentModalOpen || isSaleModalOpen || isNewAccountModalOpen);
+    useScrollLock(isTxnModalOpen || isInvoiceOpen || isPaymentModalOpen || isSaleModalOpen || isNewAccountModalOpen || isEditModalOpen);
 
     const fetchInitialData = async () => {
         try {
@@ -210,6 +221,101 @@ const KhataPage = () => {
         }
     };
 
+    const handleOpenEditModal = (customer) => {
+        if (!customer) return;
+        setCustomerToEdit(customer);
+        setEditName(customer.customerName || '');
+        setEditMobile(customer.mobile || '');
+        setEditError('');
+        setEditDuplicateWarning('');
+        setIsEditModalOpen(true);
+    };
+
+    const handleCloseEditModal = () => {
+        if (isEditSubmitting) return;
+        setIsEditModalOpen(false);
+        setCustomerToEdit(null);
+        setEditName('');
+        setEditMobile('');
+        setEditError('');
+        setEditDuplicateWarning('');
+    };
+
+    const handleEditMobileChange = (val) => {
+        const clean = val.replace(/\D/g, '').slice(0, 10);
+        setEditMobile(clean);
+        setEditError('');
+        if (clean.length === 10 && customerToEdit && clean !== customerToEdit.mobile) {
+            const existing = customers.find(c => c._id !== customerToEdit._id && c.mobile === clean);
+            if (existing) {
+                setEditDuplicateWarning(`Warning: Mobile number ${clean} is already used by "${existing.customerName}" in this shop.`);
+            } else {
+                setEditDuplicateWarning('');
+            }
+        } else {
+            setEditDuplicateWarning('');
+        }
+    };
+
+    const handleSaveCustomerEdit = async () => {
+        if (!customerToEdit) return;
+        const trimmedName = editName.trim();
+        const cleanMobile = editMobile.replace(/\D/g, '').slice(-10);
+
+        if (!trimmedName) {
+            setEditError('Customer name is required.');
+            return;
+        }
+        if (cleanMobile.length !== 10) {
+            setEditError('Please enter a valid 10-digit mobile number.');
+            return;
+        }
+
+        // Warn/prevent if duplicate in current shop
+        const existing = customers.find(c => c._id !== customerToEdit._id && c.mobile === cleanMobile);
+        if (existing) {
+            setEditError(`Mobile number ${cleanMobile} is already associated with another customer (${existing.customerName}) in this shop.`);
+            return;
+        }
+
+        if (isEditSubmitting) return;
+
+        try {
+            setIsEditSubmitting(true);
+            setEditError('');
+            const res = await khataService.updateCustomer(customerToEdit._id, trimmedName, cleanMobile);
+            const updatedCustomer = res.data?.data;
+
+            if (updatedCustomer) {
+                // Update local state immediately without losing any balance or transactions
+                setCustomers(prev => prev.map(c => c._id === updatedCustomer._id ? {
+                    ...c,
+                    customerName: updatedCustomer.customerName,
+                    mobile: updatedCustomer.mobile
+                } : c));
+
+                if (selectedCustomer && selectedCustomer._id === updatedCustomer._id) {
+                    setSelectedCustomer(prev => ({
+                        ...prev,
+                        customerName: updatedCustomer.customerName,
+                        mobile: updatedCustomer.mobile
+                    }));
+                }
+            }
+
+            setIsEditModalOpen(false);
+            setCustomerToEdit(null);
+            showToast('Customer details updated successfully.', 'success');
+            fetchInitialData();
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Failed to update customer details.';
+            setEditError(msg);
+            showToast(msg, 'error');
+        } finally {
+            setIsEditSubmitting(false);
+        }
+    };
+
     const handleViewBill = async (saleId) => {
         if (!saleId) return;
         
@@ -318,7 +424,21 @@ const KhataPage = () => {
                                     {filteredCustomers.map(c => (
                                         <div key={c._id} className="khata-mobile-card" onClick={() => fetchDetails(c._id)}>
                                             <div className="kmc-info">
-                                                <strong>{c.customerName}</strong>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <strong>{c.customerName}</strong>
+                                                    <button 
+                                                        type="button" 
+                                                        className="kmc-pencil-btn" 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleOpenEditModal(c);
+                                                        }}
+                                                        title="Edit Customer Details"
+                                                        aria-label="Edit customer details"
+                                                    >
+                                                        <Edit2 size={13} />
+                                                    </button>
+                                                </div>
                                                 <span>{c.mobile}</span>
                                             </div>
                                             <div className="kmc-due">
@@ -347,11 +467,43 @@ const KhataPage = () => {
                                         <tbody>
                                             {filteredCustomers.map(c => (
                                                 <tr key={c._id} onClick={() => fetchDetails(c._id)} className="khata-tr">
-                                                    <td><strong>{c.customerName}</strong></td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <strong>{c.customerName}</strong>
+                                                            <button 
+                                                                type="button" 
+                                                                className="kmc-pencil-btn" 
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleOpenEditModal(c);
+                                                                }}
+                                                                title="Edit Customer Details"
+                                                                aria-label="Edit customer details"
+                                                            >
+                                                                <Edit2 size={13} />
+                                                            </button>
+                                                        </div>
+                                                    </td>
                                                     <td>{c.mobile}</td>
                                                     <td>{c.lastPaymentDate ? new Date(c.lastPaymentDate).toLocaleDateString() : 'No payment yet'}</td>
                                                     <td><strong className={c.outstandingDue > 0 ? 'text-danger' : ''}>₹{c.outstandingDue.toLocaleString()}</strong></td>
-                                                    <td><button className="khata-btn-row">Manage</button></td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                                            <button className="khata-btn-row">Manage</button>
+                                                            <button 
+                                                                type="button" 
+                                                                className="khata-btn-row btn-edit-cell"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleOpenEditModal(c);
+                                                                }}
+                                                                title="Edit Customer Details"
+                                                            >
+                                                                <Edit2 size={12} />
+                                                                <span>Edit</span>
+                                                            </button>
+                                                        </div>
+                                                    </td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -371,8 +523,20 @@ const KhataPage = () => {
                                 <ChevronLeft size={24} />
                             </button>
                             <div className="kdv2-customer-info">
-                                <h3>{selectedCustomer.customerName}</h3>
-                                <span>{selectedCustomer.mobile}</span>
+                                <div className="kdv2-name-row">
+                                    <h3>{selectedCustomer.customerName}</h3>
+                                    <button 
+                                        type="button" 
+                                        className="btn-edit-customer-pill" 
+                                        onClick={() => handleOpenEditModal(selectedCustomer)}
+                                        title="Edit Customer Details"
+                                        aria-label="Edit customer details"
+                                    >
+                                        <Edit2 size={13} />
+                                        <span>Edit Details</span>
+                                    </button>
+                                </div>
+                                <span className="kdv2-mobile-text">{selectedCustomer.mobile}</span>
                             </div>
                             <div className="kdv2-due-summary">
                                 <span className="kdv2-due-label">Outstanding</span>
@@ -497,82 +661,76 @@ const KhataPage = () => {
             )}
 
             {/* Invoice Preview Overlay */}
-            <AnimatePresence>
-                {isInvoiceOpen && (
-                    <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="invoice-preview-screen"
-                    >
-                        <div className="ips-top-bar no-print">
-                            <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>
-                                <ChevronLeft size={20} />
-                                <span>Back</span>
-                            </button>
-                            <div className="ips-title-area">
-                                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
-                                    View Bill
-                                </h2>
-                                <div style={{ marginTop: '4px' }}>
-                                    <PrintFormatSelector 
-                                        value={activePrintFormat}
-                                        onChange={(fmt) => setPrintFormatOverride(fmt)}
-                                        savedDefault={shop?.defaultPrintFormat || 'full_a4'}
-                                        shopId={shopId || shop?._id}
-                                        onShopUpdate={(updated) => {
-                                            setShop(updated);
-                                            setPrintFormatOverride(null);
-                                        }}
-                                        mode="pills"
-                                        showPrinterTip={false}
-                                    />
-                                </div>
-                            </div>
-                            <div style={{ width: 60 }} />
-                        </div>
-
-                        {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
-                            <div className="ips-printer-tip-bar no-print">
-                                <span>
-                                    <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
-                                </span>
-                            </div>
-                        )}
-
-                        <div className="ips-content">
-                            {invoiceLoading ? (
-                                <div className="khata-loader"><div className="spinner"></div></div>
-                            ) : !selectedSaleForInvoice ? (
-                                <div className="ips-error">Bill details could not be found.</div>
-                            ) : (
-                                <CompactInvoiceSheet 
-                                    bill1={selectedSaleForInvoice}
-                                    shop={shop}
-                                    format={activePrintFormat}
+            {isInvoiceOpen && typeof document !== 'undefined' && createPortal(
+                <div className="invoice-preview-screen">
+                    <div className="ips-top-bar no-print">
+                        <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>
+                            <ChevronLeft size={20} />
+                            <span>Back</span>
+                        </button>
+                        <div className="ips-title-area">
+                            <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
+                                View Bill
+                            </h2>
+                            <div style={{ marginTop: '4px' }}>
+                                <PrintFormatSelector 
+                                    value={activePrintFormat}
+                                    onChange={(fmt) => setPrintFormatOverride(fmt)}
+                                    savedDefault={shop?.defaultPrintFormat || 'full_a4'}
+                                    shopId={shopId || shop?._id}
+                                    onShopUpdate={(updated) => {
+                                        setShop(updated);
+                                        setPrintFormatOverride(null);
+                                    }}
+                                    mode="pills"
+                                    showPrinterTip={false}
                                 />
-                            )}
+                            </div>
                         </div>
+                        <div style={{ width: 60 }} />
+                    </div>
 
-                        <div className="ips-actions-bar no-print">
-                            <button className="ips-btn ips-wa" onClick={handleShareWhatsApp}>WhatsApp</button>
-                            <button className="ips-btn ips-pdf" onClick={handleDownloadPDF}>
-                                Download PDF ({getFormatOption(activePrintFormat).name})
-                            </button>
-                            <button 
-                                className="ips-btn ips-print" 
-                                onClick={() => {
-                                    applyPrintPageStyles(activePrintFormat);
-                                    window.print();
-                                }}
-                            >
-                                Print ({getFormatOption(activePrintFormat).name})
-                            </button>
-                            <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>Close</button>
+                    {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
+                        <div className="ips-printer-tip-bar no-print">
+                            <span>
+                                <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
+                            </span>
                         </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    )}
+
+                    <div className="ips-content">
+                        {invoiceLoading ? (
+                            <div className="khata-loader"><div className="spinner"></div></div>
+                        ) : !selectedSaleForInvoice ? (
+                            <div className="ips-error">Bill details could not be found.</div>
+                        ) : (
+                            <CompactInvoiceSheet 
+                                bill1={selectedSaleForInvoice}
+                                shop={shop}
+                                format={activePrintFormat}
+                            />
+                        )}
+                    </div>
+
+                    <div className="ips-actions-bar no-print">
+                        <button className="ips-btn ips-wa" onClick={handleShareWhatsApp}>WhatsApp</button>
+                        <button className="ips-btn ips-pdf" onClick={handleDownloadPDF}>
+                            Download PDF ({getFormatOption(activePrintFormat).name})
+                        </button>
+                        <button 
+                            className="ips-btn ips-print" 
+                            onClick={() => {
+                                applyPrintPageStyles(activePrintFormat);
+                                window.print();
+                            }}
+                        >
+                            Print ({getFormatOption(activePrintFormat).name})
+                        </button>
+                        <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setPrintFormatOverride(null); }}>Close</button>
+                    </div>
+                </div>,
+                document.body
+            )}
 
             {/* Transaction Details Bottom Sheet */}
             <AnimatePresence>
@@ -826,6 +984,102 @@ const KhataPage = () => {
                                     </span>
                                 ) : (
                                     'Add Due Credit'
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Edit Customer Details Modal */}
+            {isEditModalOpen && customerToEdit && (
+                <div className="modal-overlay">
+                    <div className="modal-backdrop" onClick={handleCloseEditModal}></div>
+                    <div className="modal-content ecm-content">
+                        <div className="ecm-top-row">
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#101828' }}>Edit Customer Details</h3>
+                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#667085' }}>Update customer name and mobile number</p>
+                            </div>
+                            <button 
+                                type="button" 
+                                className="ecm-close-btn" 
+                                onClick={handleCloseEditModal}
+                                disabled={isEditSubmitting}
+                                aria-label="Close modal"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="ecm-fields">
+                            <div className="ecm-field-group">
+                                <label className="ecm-label">Customer Name <span style={{ color: '#D92D20' }}>*</span></label>
+                                <input 
+                                    type="text" 
+                                    className="ecm-input"
+                                    placeholder="Enter customer full name" 
+                                    value={editName} 
+                                    onChange={(e) => {
+                                        setEditName(e.target.value);
+                                        setEditError('');
+                                    }} 
+                                    disabled={isEditSubmitting}
+                                    autoFocus
+                                />
+                            </div>
+
+                            <div className="ecm-field-group">
+                                <label className="ecm-label">Mobile Number (10 digits) <span style={{ color: '#D92D20' }}>*</span></label>
+                                <div className="ecm-phone-row">
+                                    <span className="ecm-phone-prefix">+91</span>
+                                    <input 
+                                        type="tel" 
+                                        className="ecm-phone-input"
+                                        placeholder="10-digit mobile number" 
+                                        value={editMobile} 
+                                        onChange={(e) => handleEditMobileChange(e.target.value)} 
+                                        disabled={isEditSubmitting}
+                                        maxLength={10}
+                                    />
+                                </div>
+                            </div>
+
+                            {editDuplicateWarning && (
+                                <div className="ecm-warning-box">
+                                    <span>{editDuplicateWarning}</span>
+                                </div>
+                            )}
+
+                            {editError && (
+                                <div className="ecm-error-box">
+                                    <span>{editError}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="modal-actions" style={{ marginTop: '8px' }}>
+                            <button 
+                                type="button" 
+                                className="btn-cancel" 
+                                onClick={handleCloseEditModal} 
+                                disabled={isEditSubmitting}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                type="button" 
+                                className="btn-confirm" 
+                                onClick={handleSaveCustomerEdit} 
+                                disabled={isEditSubmitting}
+                            >
+                                {isEditSubmitting ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <span className="spinner-mini"></span>
+                                        <span>Saving Changes...</span>
+                                    </span>
+                                ) : (
+                                    'Save Changes'
                                 )}
                             </button>
                         </div>
@@ -1292,29 +1546,7 @@ const KhataPage = () => {
                 .ips-btn:active { transform: scale(0.96); }
 
                 @media print {
-                    .ips-top-bar, .ips-actions-bar {
-                        display: none !important;
-                    }
-                    .invoice-preview-screen {
-                        position: absolute;
-                        inset: 0;
-                        background: white;
-                    }
-                    .ips-content {
-                        background: white;
-                        padding: 0;
-                        overflow: visible;
-                    }
-                    .printable-invoice-sheet {
-                        box-shadow: none;
-                        border: none;
-                        padding: 0;
-                        max-width: 100%;
-                    }
-                    .pis-items-table-v2 {
-                        display: table !important;
-                    }
-                    .pis-items-mobile-list {
+                    .ips-top-bar, .ips-actions-bar, .ips-printer-tip-bar {
                         display: none !important;
                     }
                 }
@@ -1361,6 +1593,184 @@ const KhataPage = () => {
                 }
                 @keyframes spin {
                     to { transform: rotate(360deg); }
+                }
+
+                /* Edit Customer Styles */
+                .kdv2-name-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    flex-wrap: wrap;
+                }
+                .btn-edit-customer-pill {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 5px;
+                    height: 26px;
+                    padding: 0 10px;
+                    background: #EFF6FF;
+                    border: 1px solid #BFDBFE;
+                    border-radius: 99px;
+                    color: #1E6BFF;
+                    font-size: 11.5px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                }
+                .btn-edit-customer-pill:hover {
+                    background: #DBEAFE;
+                    border-color: #93C5FD;
+                    color: #1D4ED8;
+                }
+                .btn-edit-customer-pill:active {
+                    transform: scale(0.96);
+                }
+                .kdv2-mobile-text {
+                    font-size: 13px;
+                    color: #667085;
+                    font-weight: 600;
+                    margin-top: 2px;
+                    display: block;
+                }
+                .kmc-pencil-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 24px;
+                    height: 24px;
+                    background: #F1F5F9;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 6px;
+                    color: #475569;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                    padding: 0;
+                }
+                .kmc-pencil-btn:hover {
+                    background: #EFF6FF;
+                    border-color: #BFDBFE;
+                    color: #1E6BFF;
+                }
+                .btn-edit-cell {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                    color: #1E6BFF !important;
+                    border-color: #BFDBFE !important;
+                    background: #F8FAFC !important;
+                }
+                .btn-edit-cell:hover {
+                    background: #EFF6FF !important;
+                }
+                .ecm-content {
+                    max-width: 440px !important;
+                    padding: 24px !important;
+                }
+                .ecm-top-row {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    gap: 12px;
+                }
+                .ecm-close-btn {
+                    background: #F1F5F9;
+                    border: none;
+                    border-radius: 50%;
+                    width: 32px;
+                    height: 32px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #64748B;
+                    cursor: pointer;
+                    transition: background 0.15s;
+                }
+                .ecm-close-btn:hover {
+                    background: #E2E8F0;
+                    color: #1E293B;
+                }
+                .ecm-fields {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 14px;
+                    margin: 8px 0;
+                }
+                .ecm-field-group {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                .ecm-label {
+                    font-size: 12.5px;
+                    font-weight: 700;
+                    color: #344054;
+                }
+                .ecm-input {
+                    height: 44px;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    padding: 0 14px;
+                    font-size: 14px;
+                    outline: none;
+                    transition: border-color 0.15s;
+                }
+                .ecm-input:focus {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.1);
+                }
+                .ecm-phone-row {
+                    display: flex;
+                    align-items: center;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    overflow: hidden;
+                    background: white;
+                    transition: border-color 0.15s;
+                }
+                .ecm-phone-row:focus-within {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.1);
+                }
+                .ecm-phone-prefix {
+                    background: #F8FAFC;
+                    color: #64748B;
+                    font-size: 13.5px;
+                    font-weight: 700;
+                    padding: 0 12px;
+                    height: 44px;
+                    display: flex;
+                    align-items: center;
+                    border-right: 1.5px solid #E2E8F0;
+                    user-select: none;
+                }
+                .ecm-phone-input {
+                    flex: 1;
+                    height: 44px;
+                    border: none !important;
+                    outline: none !important;
+                    padding: 0 12px !important;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                .ecm-warning-box {
+                    background: #FFFBEB;
+                    border: 1px solid #FCD34D;
+                    color: #B45309;
+                    padding: 9px 12px;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    line-height: 1.4;
+                }
+                .ecm-error-box {
+                    background: #FEF3F2;
+                    border: 1px solid #FECDCA;
+                    color: #B42318;
+                    padding: 9px 12px;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    line-height: 1.4;
                 }
             `}</style>
             <MessageModal 

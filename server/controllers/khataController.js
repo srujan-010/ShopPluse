@@ -1,4 +1,7 @@
 const Khata = require('../models/Khata');
+const Shop = require('../models/Shop');
+const Sale = require('../models/Sale');
+const GovernmentSale = require('../models/GovernmentSale');
 const mongoose = require('mongoose');
 
 // @desc    Get all Khata customers for a shop
@@ -104,3 +107,113 @@ exports.addKhataSale = async (req, res) => {
         res.status(400).json({ success: false, message: error.message });
     }
 };
+
+// @desc    Update existing Khata customer's name and mobile number
+// @route   PUT /api/khata/:id
+// @access  Private
+exports.updateKhataCustomer = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid customer account ID' });
+        }
+
+        let { customerName, mobile } = req.body;
+
+        if (!customerName || typeof customerName !== 'string' || !customerName.trim()) {
+            return res.status(400).json({ success: false, message: 'Customer name is required' });
+        }
+        customerName = customerName.trim();
+
+        if (!mobile || typeof mobile !== 'string' || !mobile.trim()) {
+            return res.status(400).json({ success: false, message: 'Mobile number is required' });
+        }
+        const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+        if (cleanMobile.length !== 10) {
+            return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit Indian mobile number' });
+        }
+
+        const khataRecord = await Khata.findById(id);
+        if (!khataRecord) {
+            return res.status(404).json({ success: false, message: 'Khata customer account not found' });
+        }
+
+        // Shop-level access verification
+        const shop = await Shop.findById(khataRecord.shop);
+        if (!shop) {
+            return res.status(404).json({ success: false, message: 'Associated shop not found' });
+        }
+
+        const isOwner = shop.owner.toString() === req.user.id || (khataRecord.owner && khataRecord.owner.toString() === req.user.id);
+        const isAdmin = req.user.role === 'admin';
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ success: false, message: 'Not authorized to edit customer details for this shop' });
+        }
+
+        // Warn/prevent if the new mobile number is already associated with another customer in the same shop
+        const oldMobile = khataRecord.mobile;
+        if (cleanMobile !== oldMobile) {
+            const duplicate = await Khata.findOne({
+                shop: khataRecord.shop,
+                mobile: cleanMobile,
+                _id: { $ne: khataRecord._id }
+            });
+            if (duplicate) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Mobile number ${cleanMobile} is already associated with another customer (${duplicate.customerName}) in this shop`
+                });
+            }
+        }
+
+        // Update ONLY name and mobile - strictly preserving outstanding balance and complete transaction history
+        khataRecord.customerName = customerName;
+        khataRecord.mobile = cleanMobile;
+        await khataRecord.save();
+
+        // Update customer references in linked historical sales without altering transaction amounts or dates
+        try {
+            const linkedSaleIds = (khataRecord.transactions || []).map(t => t.saleId).filter(Boolean);
+            const saleFilter = {
+                $or: [
+                    { _id: { $in: linkedSaleIds } },
+                    { shop: khataRecord.shop, customerMobile: oldMobile }
+                ]
+            };
+            await Sale.updateMany(saleFilter, {
+                $set: {
+                    customerName: customerName,
+                    customerMobile: cleanMobile
+                }
+            });
+
+            await GovernmentSale.updateMany(
+                { shop: khataRecord.shop, customerMobile: oldMobile },
+                {
+                    $set: {
+                        customerName: customerName,
+                        customerMobile: cleanMobile
+                    }
+                }
+            );
+        } catch (linkErr) {
+            console.warn('Could not update customer references on historical sales:', linkErr.message);
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Customer details updated successfully',
+            data: khataRecord
+        });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                message: 'This mobile number is already associated with another customer in this shop'
+            });
+        }
+        console.error('Error in updateKhataCustomer:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error while updating customer details' });
+    }
+};
+

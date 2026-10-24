@@ -1,5 +1,5 @@
 const express = require('express');
-const { getSales, createSale, getStats, getReports, getSalesHistory, getAggregatedSummaries, getSaleById, processReturn, processExchange } = require('../controllers/saleController');
+const { getSales, createSale, getStats, getReports, getSalesHistory, getAggregatedSummaries, getSaleById, processReturn, processExchange, updateSaleCustomer } = require('../controllers/saleController');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -23,8 +23,11 @@ router.get('/summaries', getAggregatedSummaries);
 router.post('/:id/return', processReturn);
 router.post('/:id/exchange', processExchange);
 
+router.put('/:id/customer', updateSaleCustomer);
+
 router.route('/:id')
-    .get(getSaleById);
+    .get(getSaleById)
+    .put(updateSaleCustomer);
 
 router.route('/')
     .get(getSales)

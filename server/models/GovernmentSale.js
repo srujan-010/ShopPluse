@@ -111,6 +111,11 @@ const governmentSaleSchema = new mongoose.Schema({
         required: true,
         enum: ['Cash', 'UPI', 'Khata']
     },
+    khataId: {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Khata',
+        default: null
+    },
     paidAmount: {
         type: Number,
         default: 0

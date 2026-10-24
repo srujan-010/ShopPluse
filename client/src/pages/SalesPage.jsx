@@ -15,10 +15,18 @@ import {
     ArrowUpRight,
     Wallet,
     CreditCard,
-    QrCode
+    QrCode,
+    Edit2,
+    Info,
+    AlertTriangle,
+    UserCheck,
+    UserPlus,
+    Check
 } from 'lucide-react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { saleService, shopService } from '../services/api';
+import { saleService, shopService, khataService } from '../services/api';
+import { offlineDB } from '../services/offlineDB';
+import { useToast } from '../context/ToastContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useScrollLock } from '../hooks/useScrollLock';
 
@@ -30,6 +38,7 @@ const SalesPage = () => {
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedSale, setSelectedSale] = useState(null);
+    const { showToast } = useToast();
     const [periodFilter, setPeriodFilter] = useState('today');
     const getLocalToday = () => {
         const d = new Date();
@@ -37,7 +46,171 @@ const SalesPage = () => {
     };
     const [customDate, setCustomDate] = useState(getLocalToday());
 
-    useScrollLock(!!selectedSale);
+    // Edit Customer Modal States
+    const [isEditCustModalOpen, setIsEditCustModalOpen] = useState(false);
+    const [saleToEditCust, setSaleToEditCust] = useState(null);
+    const [editCustName, setEditCustName] = useState('');
+    const [editCustMobile, setEditCustMobile] = useState('');
+    const [editPaymentMethod, setEditPaymentMethod] = useState('Cash');
+    const [khataCustomers, setKhataCustomers] = useState([]);
+    const [isKhataLoading, setIsKhataLoading] = useState(false);
+    const [selectedKhataId, setSelectedKhataId] = useState('');
+    const [khataSearchQuery, setKhataSearchQuery] = useState('');
+    const [showPaymentConfirm, setShowPaymentConfirm] = useState(false);
+    const [isEditCustSubmitting, setIsEditCustSubmitting] = useState(false);
+    const [editCustError, setEditCustError] = useState('');
+
+    useScrollLock(!!selectedSale || isEditCustModalOpen);
+
+    const handleOpenEditCustomer = async (sale) => {
+        if (!sale) return;
+        setSaleToEditCust(sale);
+        setEditCustName(sale.customerName || '');
+        const cleanMob = (sale.customerMobile || '').replace(/\D/g, '').slice(-10);
+        setEditCustMobile(cleanMob);
+        const currentMethod = sale.paymentMethod || 'Cash';
+        setEditPaymentMethod(currentMethod);
+        setShowPaymentConfirm(false);
+        setEditCustError('');
+        setKhataSearchQuery('');
+        setIsEditCustModalOpen(true);
+
+        const sId = shopId || (sale.shop?._id || sale.shop);
+        if (sId) {
+            setIsKhataLoading(true);
+            try {
+                const res = await khataService.getCustomers(sId);
+                const list = res.data?.data || [];
+                setKhataCustomers(list);
+
+                if (currentMethod === 'Khata') {
+                    const saleKhataIdStr = (sale.khataId?._id || sale.khataId)?.toString();
+                    let matched = null;
+                    if (saleKhataIdStr) {
+                        matched = list.find(c => c._id?.toString() === saleKhataIdStr);
+                    }
+                    if (!matched && cleanMob) {
+                        matched = list.find(c => c.mobile === cleanMob);
+                    }
+                    if (!matched && sale._id) {
+                        matched = list.find(c => (c.transactions || []).some(t => t.saleId && t.saleId.toString() === sale._id.toString()));
+                    }
+                    if (matched) {
+                        setSelectedKhataId(matched._id);
+                    } else {
+                        setSelectedKhataId('__new__');
+                    }
+                } else {
+                    setSelectedKhataId('');
+                }
+            } catch (err) {
+                console.error('Failed to load Khata customers:', err);
+                setKhataCustomers([]);
+            } finally {
+                setIsKhataLoading(false);
+            }
+        }
+    };
+
+    const handleSaveCustomerEdit = async () => {
+        if (!saleToEditCust) return;
+
+        const trimmedName = editCustName.trim();
+        if (!trimmedName) {
+            setEditCustError('Customer name is required');
+            return;
+        }
+
+        let cleanMobile = '';
+        if (editCustMobile && editCustMobile.trim()) {
+            cleanMobile = editCustMobile.replace(/\D/g, '').slice(-10);
+            if (cleanMobile.length !== 10) {
+                setEditCustError('Please enter a valid 10-digit Indian mobile number or leave blank');
+                return;
+            }
+        }
+
+        if (editPaymentMethod === 'Khata') {
+            if (!selectedKhataId) {
+                setEditCustError('Please select a Khata customer or choose "Add New Khata Customer"');
+                return;
+            }
+            if (selectedKhataId === '__new__' && !cleanMobile) {
+                setEditCustError('A 10-digit mobile number is required to create a new Khata account');
+                return;
+            }
+        }
+
+        // Show confirmation step if payment method changed or Khata customer changed
+        const isMethodChanged = editPaymentMethod !== saleToEditCust.paymentMethod;
+        const oldKhataIdStr = (saleToEditCust.khataId?._id || saleToEditCust.khataId)?.toString();
+        const isKhataCustomerChanged = editPaymentMethod === 'Khata' && oldKhataIdStr && selectedKhataId && selectedKhataId !== '__new__' && oldKhataIdStr !== selectedKhataId;
+
+        if ((isMethodChanged || isKhataCustomerChanged) && !showPaymentConfirm) {
+            setShowPaymentConfirm(true);
+            return;
+        }
+
+        try {
+            setIsEditCustSubmitting(true);
+            setEditCustError('');
+
+            const khataCustomerId = (editPaymentMethod === 'Khata' && selectedKhataId !== '__new__') ? selectedKhataId : null;
+            const isNewKhataCustomer = (editPaymentMethod === 'Khata' && selectedKhataId === '__new__');
+
+            const res = await saleService.updateCustomer(
+                saleToEditCust._id, 
+                trimmedName, 
+                cleanMobile, 
+                editPaymentMethod, 
+                khataCustomerId, 
+                isNewKhataCustomer
+            );
+            const updated = res.data?.data;
+
+            setSelectedSale(prev => {
+                if (!prev) return null;
+                return {
+                    ...prev,
+                    customerName: updated?.customerName || trimmedName,
+                    customerMobile: updated?.customerMobile || cleanMobile,
+                    paymentMethod: editPaymentMethod,
+                    khataId: updated?.khataId || (khataCustomerId ? { _id: khataCustomerId, customerName: trimmedName, mobile: cleanMobile } : null)
+                };
+            });
+
+            setSales(prevSales => prevSales.map(s => {
+                if (s._id === saleToEditCust._id || (s.invoiceNumber && s.invoiceNumber === saleToEditCust.invoiceNumber)) {
+                    return {
+                        ...s,
+                        customerName: updated?.customerName || trimmedName,
+                        customerMobile: updated?.customerMobile || cleanMobile,
+                        paymentMethod: editPaymentMethod,
+                        khataId: updated?.khataId || null
+                    };
+                }
+                return s;
+            }));
+
+            if (updated) {
+                await offlineDB.saveSale(updated).catch(() => {});
+            }
+
+            showToast('Sale details updated successfully', 'success');
+            setIsEditCustModalOpen(false);
+            setSaleToEditCust(null);
+            setShowPaymentConfirm(false);
+            setSelectedKhataId('');
+            setKhataSearchQuery('');
+            fetchSales();
+        } catch (err) {
+            const msg = err.response?.data?.message || err.message || 'Failed to update customer details';
+            setEditCustError(msg);
+            setShowPaymentConfirm(false);
+        } finally {
+            setIsEditCustSubmitting(false);
+        }
+    };
 
     useEffect(() => {
         fetchSales();
@@ -98,6 +271,14 @@ const SalesPage = () => {
     const totalItemsSold = filteredSales.reduce((sum, sale) => {
         return sum + (sale.items || []).reduce((iSum, item) => iSum + (item.soldQtyEntered || item.quantity || 0), 0);
     }, 0);
+
+    const filteredKhataCustomers = khataCustomers.filter(c => {
+        if (!khataSearchQuery.trim()) return true;
+        const q = khataSearchQuery.toLowerCase().trim();
+        return (c.customerName || '').toLowerCase().includes(q) || (c.mobile || '').includes(q);
+    });
+
+    const selectedKhataCustomerObj = khataCustomers.find(c => c._id === selectedKhataId);
 
     return (
         <div className="premium-sales-v2">
@@ -274,8 +455,22 @@ const SalesPage = () => {
                             <div className="m-scroll-v2">
                                 <div className="bill-meta-strip-v2">
                                     <div className="bm-item-v2">
-                                        <span>Customer</span>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                            <span>Customer</span>
+                                            <button 
+                                                type="button" 
+                                                className="btn-edit-sale-cust-mini"
+                                                onClick={() => handleOpenEditCustomer(selectedSale)}
+                                                title="Edit Customer Details"
+                                            >
+                                                <Edit2 size={11} />
+                                                <span>Edit</span>
+                                            </button>
+                                        </div>
                                         <strong>{selectedSale.customerName || 'Walk-in Customer'}</strong>
+                                        {selectedSale.customerMobile && (
+                                            <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>{selectedSale.customerMobile}</span>
+                                        )}
                                     </div>
                                     <div className="bm-item-v2">
                                         <span>Time</span>
@@ -313,6 +508,370 @@ const SalesPage = () => {
                 )}
             </AnimatePresence>
 
+            {/* Edit Customer Details Modal */}
+            <AnimatePresence>
+                {isEditCustModalOpen && saleToEditCust && (
+                    <div className="ecm-overlay" onClick={() => !isEditCustSubmitting && setIsEditCustModalOpen(false)}>
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                            transition={{ duration: 0.2 }}
+                            className="ecm-modal-box"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="ecm-modal-header">
+                                <div className="ecm-header-text">
+                                    <div className="ecm-icon-wrap">
+                                        <Edit2 size={18} color="#1E6BFF" />
+                                    </div>
+                                    <div>
+                                        <h3>Edit Customer Details</h3>
+                                        <p>
+                                            Bill #{saleToEditCust.invoiceNumber || saleToEditCust._id?.slice(-6).toUpperCase()} • {new Date(saleToEditCust.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        </p>
+                                    </div>
+                                </div>
+                                <button 
+                                    type="button" 
+                                    className="ecm-close-btn" 
+                                    onClick={() => !isEditCustSubmitting && setIsEditCustModalOpen(false)}
+                                    title="Close"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="ecm-modal-body">
+                                {editCustError && (
+                                    <div className="ecm-error-banner">
+                                        <Info size={16} />
+                                        <span>{editCustError}</span>
+                                    </div>
+                                )}
+
+                                {saleToEditCust.paymentMethod === 'Khata' ? (
+                                    <div className="ecm-khata-info-banner">
+                                        <Info size={16} />
+                                        <span>
+                                            <strong>Khata Bill:</strong> Updating customer details preserves all outstanding balances, payments, and ledger history.
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <div className="ecm-walkin-info-banner">
+                                        <Info size={16} />
+                                        <span>
+                                            <strong>Direct Sale:</strong> Correcting customer details updates this invoice without creating an unwanted Khata account.
+                                        </span>
+                                    </div>
+                                )}
+
+                                <div className="ecm-form-group">
+                                    <label className="ecm-label">
+                                        Customer Name <span className="req">*</span>
+                                    </label>
+                                    <input 
+                                        type="text" 
+                                        className="ecm-input" 
+                                        placeholder="e.g. Ramesh Kumar"
+                                        value={editCustName}
+                                        onChange={(e) => {
+                                            setEditCustName(e.target.value);
+                                            if (editCustError) setEditCustError('');
+                                        }}
+                                        autoFocus
+                                    />
+                                    <span className="ecm-helper-text">
+                                        Replace "Walk-in Customer" with the actual customer name.
+                                    </span>
+                                </div>
+
+                                <div className="ecm-form-group">
+                                    <label className="ecm-label">
+                                        Mobile Number <span className="opt">(Optional)</span>
+                                    </label>
+                                    <div className="ecm-phone-input-wrap">
+                                        <span className="ecm-phone-prefix">+91</span>
+                                        <input 
+                                            type="tel" 
+                                            className="ecm-phone-input" 
+                                            placeholder="10-digit mobile number"
+                                            maxLength={10}
+                                            value={editCustMobile}
+                                            onChange={(e) => {
+                                                const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                                                setEditCustMobile(val);
+                                                if (editCustError) setEditCustError('');
+                                            }}
+                                        />
+                                    </div>
+                                    <span className="ecm-helper-text">
+                                        Leave blank if customer did not provide a mobile number (required for Khata).
+                                    </span>
+                                </div>
+
+                                <div className="ecm-form-group">
+                                    <label className="ecm-label">
+                                        Payment Method <span className="req">*</span>
+                                    </label>
+                                    <select 
+                                        className="ecm-select"
+                                        value={editPaymentMethod}
+                                        onChange={(e) => {
+                                            setEditPaymentMethod(e.target.value);
+                                            setShowPaymentConfirm(false);
+                                            if (editCustError) setEditCustError('');
+                                        }}
+                                    >
+                                        <option value="Cash">Cash</option>
+                                        <option value="UPI">UPI</option>
+                                        <option value="Khata">Khata (Credit)</option>
+                                    </select>
+                                    <span className="ecm-helper-text">
+                                        Currently saved: <strong>{saleToEditCust.paymentMethod}</strong>
+                                    </span>
+                                </div>
+
+                                {editPaymentMethod === 'Khata' && (
+                                    <div className="ecm-form-group">
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                            <label className="ecm-label" style={{ margin: 0 }}>
+                                                Select Khata Customer <span className="req">*</span>
+                                            </label>
+                                            {selectedKhataId && selectedKhataId !== '__new__' && (
+                                                <button 
+                                                    type="button" 
+                                                    className="ecm-link-btn"
+                                                    onClick={() => {
+                                                        setSelectedKhataId('__new__');
+                                                        setKhataSearchQuery('');
+                                                    }}
+                                                >
+                                                    <UserPlus size={13} />
+                                                    <span>+ Add New Customer</span>
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {isKhataLoading ? (
+                                            <div className="ecm-khata-loading">
+                                                <span className="spinner-mini"></span>
+                                                <span>Loading Khata accounts for this shop...</span>
+                                            </div>
+                                        ) : selectedKhataId === '__new__' ? (
+                                            <div className="ecm-new-khata-card">
+                                                <div className="ecm-new-khata-header">
+                                                    <div className="ecm-new-khata-title">
+                                                        <UserPlus size={16} />
+                                                        <strong>Creating New Khata Account</strong>
+                                                    </div>
+                                                    {khataCustomers.length > 0 && (
+                                                        <button 
+                                                            type="button" 
+                                                            className="ecm-link-btn"
+                                                            onClick={() => {
+                                                                setSelectedKhataId('');
+                                                                setKhataSearchQuery('');
+                                                            }}
+                                                        >
+                                                            Choose Existing Account
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <p className="ecm-new-khata-desc">
+                                                    Enter the customer name and 10-digit mobile number above. A new Khata ledger will be established for this customer.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="ecm-khata-picker">
+                                                <div className="ecm-khata-search-wrap">
+                                                    <Search size={14} className="ecm-search-icon" />
+                                                    <input
+                                                        type="text"
+                                                        className="ecm-khata-search-input"
+                                                        placeholder="Search customer by name or 10-digit mobile..."
+                                                        value={khataSearchQuery}
+                                                        onChange={(e) => setKhataSearchQuery(e.target.value)}
+                                                    />
+                                                    {khataSearchQuery && (
+                                                        <button 
+                                                            type="button" 
+                                                            className="ecm-search-clear"
+                                                            onClick={() => setKhataSearchQuery('')}
+                                                        >
+                                                            ×
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                <div className="ecm-khata-list-box">
+                                                    {filteredKhataCustomers.length === 0 ? (
+                                                        <div className="ecm-khata-empty">
+                                                            <p>
+                                                                {khataCustomers.length === 0 
+                                                                    ? 'No Khata accounts exist in this shop yet.' 
+                                                                    : `No Khata accounts match "${khataSearchQuery}".`}
+                                                            </p>
+                                                            <button
+                                                                type="button"
+                                                                className="ecm-btn-add-new-khata"
+                                                                onClick={() => {
+                                                                    setSelectedKhataId('__new__');
+                                                                    setKhataSearchQuery('');
+                                                                }}
+                                                            >
+                                                                <UserPlus size={13} />
+                                                                <span>Add New Khata Customer</span>
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <div className="ecm-khata-options">
+                                                                {filteredKhataCustomers.map(cust => {
+                                                                    const isSelected = selectedKhataId === cust._id;
+                                                                    return (
+                                                                        <div
+                                                                            key={cust._id}
+                                                                            className={`ecm-khata-option ${isSelected ? 'selected' : ''}`}
+                                                                            onClick={() => {
+                                                                                setSelectedKhataId(cust._id);
+                                                                                setEditCustName(cust.customerName);
+                                                                                setEditCustMobile(cust.mobile);
+                                                                                if (editCustError) setEditCustError('');
+                                                                            }}
+                                                                        >
+                                                                            <div className="ecm-khata-opt-main">
+                                                                                <span className="ecm-khata-opt-name">{cust.customerName}</span>
+                                                                                <span className="ecm-khata-opt-mobile">+91 {cust.mobile}</span>
+                                                                            </div>
+                                                                            <div className="ecm-khata-opt-due">
+                                                                                <span className="ecm-due-label">Due:</span>
+                                                                                <span className="ecm-due-amt">₹{(cust.outstandingDue || 0).toFixed(2)}</span>
+                                                                                {isSelected && <Check size={16} className="ecm-check-icon" />}
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <div 
+                                                                className="ecm-khata-option ecm-add-new-option"
+                                                                onClick={() => {
+                                                                    setSelectedKhataId('__new__');
+                                                                    setKhataSearchQuery('');
+                                                                }}
+                                                            >
+                                                                <UserPlus size={14} />
+                                                                <span>+ Add New Khata Customer</span>
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                </div>
+
+                                                {selectedKhataCustomerObj && (
+                                                    <div className="ecm-selected-khata-summary">
+                                                        <div className="ecm-sel-label">Selected Khata Account</div>
+                                                        <div className="ecm-sel-body">
+                                                            <div className="ecm-sel-avatar">{selectedKhataCustomerObj.customerName?.charAt(0)?.toUpperCase() || 'K'}</div>
+                                                            <div className="ecm-sel-info">
+                                                                <strong>{selectedKhataCustomerObj.customerName}</strong>
+                                                                <span>+91 {selectedKhataCustomerObj.mobile} • Outstanding Due: ₹{(selectedKhataCustomerObj.outstandingDue || 0).toFixed(2)}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {editPaymentMethod !== saleToEditCust.paymentMethod && (
+                                    <div className="ecm-method-change-note">
+                                        <Info size={15} />
+                                        <span>
+                                            Changing method from <strong>{saleToEditCust.paymentMethod}</strong> to <strong>{editPaymentMethod}</strong>. Invoice numbers, sale totals, GST, and inventory are strictly preserved.
+                                        </span>
+                                    </div>
+                                )}
+
+                                {showPaymentConfirm && (
+                                    <div className="ecm-confirm-box">
+                                        <div className="ecm-confirm-title">
+                                            <AlertTriangle size={18} color="#D97706" />
+                                            <span>Confirm Payment Method / Khata Account Update</span>
+                                        </div>
+                                        <p>
+                                            {editPaymentMethod === 'Khata' ? (
+                                                <>
+                                                    Change payment method for Bill #{saleToEditCust.invoiceNumber || saleToEditCust._id?.slice(-6).toUpperCase()} to <strong>Khata (Credit)</strong> for customer <strong>{selectedKhataCustomerObj ? selectedKhataCustomerObj.customerName : editCustName.trim()}</strong>?
+                                                    {saleToEditCust.remainingAmount > 0 && (
+                                                        <span> An outstanding balance of <strong>₹{saleToEditCust.remainingAmount.toFixed(2)}</strong> will be recorded in their Khata ledger.</span>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    Change payment method for Bill #{saleToEditCust.invoiceNumber || saleToEditCust._id?.slice(-6).toUpperCase()} from <strong>{saleToEditCust.paymentMethod}</strong> to <strong>{editPaymentMethod}</strong>?
+                                                    {saleToEditCust.paymentMethod === 'Khata' && (
+                                                        <span> Any corresponding due entry in the customer's Khata ledger will be safely reversed.</span>
+                                                    )}
+                                                </>
+                                            )}
+                                        </p>
+                                        <div className="ecm-confirm-actions">
+                                            <button 
+                                                type="button" 
+                                                className="ecm-btn-confirm-cancel" 
+                                                onClick={() => setShowPaymentConfirm(false)}
+                                            >
+                                                Review Details
+                                            </button>
+                                            <button 
+                                                type="button" 
+                                                className="ecm-btn-confirm-yes" 
+                                                onClick={handleSaveCustomerEdit}
+                                                disabled={isEditCustSubmitting}
+                                            >
+                                                {isEditCustSubmitting ? 'Saving...' : 'Yes, Confirm & Save'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="ecm-modal-footer">
+                                <button 
+                                    type="button" 
+                                    className="ecm-btn-cancel" 
+                                    onClick={() => {
+                                        setIsEditCustModalOpen(false);
+                                        setShowPaymentConfirm(false);
+                                    }}
+                                    disabled={isEditCustSubmitting}
+                                >
+                                    Cancel
+                                </button>
+                                {!showPaymentConfirm && (
+                                    <button 
+                                        type="button" 
+                                        className="ecm-btn-save" 
+                                        onClick={handleSaveCustomerEdit}
+                                        disabled={isEditCustSubmitting}
+                                    >
+                                        {isEditCustSubmitting ? (
+                                            <span className="ecm-spinner-wrap">
+                                                <span className="spinner-mini"></span>
+                                                <span>Saving Changes...</span>
+                                            </span>
+                                        ) : (
+                                            'Save Changes'
+                                        )}
+                                    </button>
+                                )}
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
             <style jsx="true">{`
                 .mobile-only-ledger { display: flex; }
                 .desktop-only-ledger { display: none; }
@@ -332,6 +891,609 @@ const SalesPage = () => {
                 .td-bold-amt { font-weight: 900; color: #101828; font-size: 16px; }
 
                 .premium-sales-v2 { display: flex; flex-direction: column; gap: 32px; padding-bottom: 40px; }
+
+                .btn-edit-sale-cust-mini {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 3px;
+                    height: 20px;
+                    padding: 0 6px;
+                    background: #EFF6FF;
+                    border: 1px solid #BFDBFE;
+                    border-radius: 99px;
+                    color: #1E6BFF;
+                    font-size: 10.5px;
+                    font-weight: 700;
+                    cursor: pointer;
+                }
+                .btn-edit-sale-cust-mini:hover {
+                    background: #DBEAFE;
+                }
+
+                .ecm-overlay {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 6000;
+                    background: rgba(15, 23, 42, 0.65);
+                    backdrop-filter: blur(6px);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 16px;
+                }
+                .ecm-modal-box {
+                    background: #ffffff;
+                    width: 100%;
+                    max-width: 460px;
+                    border-radius: 18px;
+                    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+                    overflow: hidden;
+                    display: flex;
+                    flex-direction: column;
+                    border: 1px solid #E2E8F0;
+                }
+                .ecm-modal-header {
+                    padding: 20px 24px;
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: space-between;
+                    border-bottom: 1px solid #F1F5F9;
+                    background: #FAFBFD;
+                }
+                .ecm-header-text {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+                .ecm-icon-wrap {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 10px;
+                    background: #EFF6FF;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                    border: 1px solid #DBEAFE;
+                }
+                .ecm-header-text h3 {
+                    margin: 0;
+                    font-size: 17px;
+                    font-weight: 800;
+                    color: #0F172A;
+                }
+                .ecm-header-text p {
+                    margin: 2px 0 0 0;
+                    font-size: 12.5px;
+                    color: #64748B;
+                    font-weight: 600;
+                }
+                .ecm-close-btn {
+                    background: #F1F5F9;
+                    border: none;
+                    border-radius: 50%;
+                    width: 32px;
+                    height: 32px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #64748B;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                }
+                .ecm-close-btn:hover {
+                    background: #E2E8F0;
+                    color: #0F172A;
+                }
+                .ecm-modal-body {
+                    padding: 20px 24px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 16px;
+                }
+                .ecm-error-banner {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 10px 14px;
+                    background: #FEF2F2;
+                    border: 1px solid #FECDCA;
+                    border-radius: 10px;
+                    color: #B42318;
+                    font-size: 12.5px;
+                    font-weight: 600;
+                }
+                .ecm-khata-info-banner {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 10px 14px;
+                    background: #EFF6FF;
+                    border: 1px solid #BFDBFE;
+                    border-radius: 10px;
+                    color: #1E40AF;
+                    font-size: 12.5px;
+                    line-height: 1.4;
+                }
+                .ecm-walkin-info-banner {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 10px 14px;
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 10px;
+                    color: #475569;
+                    font-size: 12.5px;
+                    line-height: 1.4;
+                }
+                .ecm-form-group {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                .ecm-label {
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #334155;
+                }
+                .ecm-label .req {
+                    color: #E11D48;
+                    margin-left: 2px;
+                }
+                .ecm-label .opt {
+                    color: #94A3B8;
+                    font-weight: 500;
+                    font-size: 11.5px;
+                    margin-left: 4px;
+                }
+                .ecm-input {
+                    height: 44px;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    padding: 0 14px;
+                    font-size: 14px;
+                    outline: none;
+                    transition: all 0.15s ease;
+                    font-weight: 600;
+                    color: #0F172A;
+                }
+                .ecm-input:focus {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.12);
+                }
+                .ecm-phone-input-wrap {
+                    display: flex;
+                    align-items: center;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    overflow: hidden;
+                    background: white;
+                    transition: all 0.15s ease;
+                }
+                .ecm-phone-input-wrap:focus-within {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.12);
+                }
+                .ecm-phone-prefix {
+                    background: #F8FAFC;
+                    color: #64748B;
+                    font-size: 13.5px;
+                    font-weight: 700;
+                    padding: 0 12px;
+                    height: 44px;
+                    display: flex;
+                    align-items: center;
+                    border-right: 1.5px solid #E2E8F0;
+                    user-select: none;
+                }
+                .ecm-phone-input {
+                    flex: 1;
+                    height: 44px;
+                    border: none !important;
+                    outline: none !important;
+                    padding: 0 12px !important;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: #0F172A;
+                }
+                .ecm-helper-text {
+                    font-size: 11.5px;
+                    color: #94A3B8;
+                    font-weight: 500;
+                }
+                .ecm-modal-footer {
+                    padding: 16px 24px;
+                    border-top: 1px solid #F1F5F9;
+                    background: #FAFBFD;
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    gap: 10px;
+                }
+                .ecm-btn-cancel {
+                    height: 42px;
+                    padding: 0 18px;
+                    background: white;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 10px;
+                    font-size: 13.5px;
+                    font-weight: 700;
+                    color: #475569;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                }
+                .ecm-btn-cancel:hover {
+                    background: #F8FAFC;
+                    border-color: #94A3B8;
+                }
+                .ecm-btn-save {
+                    height: 42px;
+                    padding: 0 22px;
+                    background: #1E6BFF;
+                    border: none;
+                    border-radius: 10px;
+                    font-size: 13.5px;
+                    font-weight: 700;
+                    color: white;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    box-shadow: 0 2px 6px rgba(30, 107, 255, 0.25);
+                }
+                .ecm-btn-save:hover:not(:disabled) {
+                    background: #1958DB;
+                }
+                .ecm-btn-save:disabled {
+                    opacity: 0.65;
+                    cursor: not-allowed;
+                }
+                .ecm-spinner-wrap {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .ecm-select {
+                    height: 44px;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    padding: 0 14px;
+                    font-size: 14px;
+                    outline: none;
+                    transition: all 0.15s ease;
+                    font-weight: 600;
+                    color: #0F172A;
+                    background: white;
+                    cursor: pointer;
+                }
+                .ecm-select:focus {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.12);
+                }
+                .ecm-method-change-note {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    padding: 10px 14px;
+                    background: #FFFBEB;
+                    border: 1px solid #FCD34D;
+                    border-radius: 10px;
+                    color: #B45309;
+                    font-size: 12px;
+                    line-height: 1.4;
+                }
+                .ecm-confirm-box {
+                    padding: 14px 16px;
+                    background: #FFFDF5;
+                    border: 1.5px solid #F59E0B;
+                    border-radius: 12px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .ecm-confirm-title {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    color: #B45309;
+                    font-size: 13.5px;
+                    font-weight: 800;
+                }
+                .ecm-confirm-box p {
+                    margin: 0;
+                    font-size: 12.5px;
+                    color: #475569;
+                    line-height: 1.4;
+                }
+                .ecm-confirm-actions {
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    gap: 10px;
+                    margin-top: 4px;
+                }
+                .ecm-btn-confirm-cancel {
+                    height: 36px;
+                    padding: 0 14px;
+                    background: white;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 8px;
+                    font-size: 12.5px;
+                    font-weight: 700;
+                    color: #475569;
+                    cursor: pointer;
+                }
+                .ecm-btn-confirm-cancel:hover {
+                    background: #F8FAFC;
+                }
+                .ecm-btn-confirm-yes {
+                    height: 36px;
+                    padding: 0 16px;
+                    background: #D97706;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 12.5px;
+                    font-weight: 700;
+                    color: white;
+                    cursor: pointer;
+                    box-shadow: 0 2px 4px rgba(217, 119, 6, 0.25);
+                }
+                .ecm-btn-confirm-yes:hover:not(:disabled) {
+                    background: #B45309;
+                }
+                .ecm-btn-confirm-yes:disabled {
+                    opacity: 0.65;
+                    cursor: not-allowed;
+                }
+                .ecm-link-btn {
+                    background: none;
+                    border: none;
+                    padding: 0;
+                    color: #1E6BFF;
+                    font-size: 12px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                    text-decoration: underline;
+                }
+                .ecm-link-btn:hover {
+                    color: #1958DB;
+                }
+                .ecm-khata-loading {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 12px 14px;
+                    background: #F8FAFC;
+                    border: 1.5px dashed #CBD5E1;
+                    border-radius: 10px;
+                    color: #64748B;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                .ecm-new-khata-card {
+                    padding: 12px 14px;
+                    background: #F0FDF4;
+                    border: 1.5px solid #86EFAC;
+                    border-radius: 10px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                }
+                .ecm-new-khata-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+                .ecm-new-khata-title {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    color: #15803D;
+                    font-size: 13px;
+                    font-weight: 800;
+                }
+                .ecm-new-khata-desc {
+                    margin: 0;
+                    font-size: 12px;
+                    color: #166534;
+                    line-height: 1.4;
+                }
+                .ecm-khata-picker {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+                .ecm-khata-search-wrap {
+                    display: flex;
+                    align-items: center;
+                    border: 1.5px solid #D0D5DD;
+                    border-radius: 10px;
+                    padding: 0 12px;
+                    background: white;
+                    height: 38px;
+                    gap: 8px;
+                    transition: all 0.15s ease;
+                }
+                .ecm-khata-search-wrap:focus-within {
+                    border-color: #1E6BFF;
+                    box-shadow: 0 0 0 3px rgba(30, 107, 255, 0.12);
+                }
+                .ecm-search-icon {
+                    color: #94A3B8;
+                    flex-shrink: 0;
+                }
+                .ecm-khata-search-input {
+                    flex: 1;
+                    border: none !important;
+                    outline: none !important;
+                    font-size: 13px;
+                    color: #0F172A;
+                    padding: 0 !important;
+                    font-weight: 500;
+                }
+                .ecm-search-clear {
+                    background: none;
+                    border: none;
+                    font-size: 16px;
+                    color: #94A3B8;
+                    cursor: pointer;
+                    padding: 0 4px;
+                    line-height: 1;
+                }
+                .ecm-khata-list-box {
+                    max-height: 175px;
+                    overflow-y: auto;
+                    border: 1.5px solid #E2E8F0;
+                    border-radius: 10px;
+                    background: #FAFBFD;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .ecm-khata-options {
+                    display: flex;
+                    flex-direction: column;
+                }
+                .ecm-khata-option {
+                    padding: 8px 12px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    border-bottom: 1px solid #F1F5F9;
+                    cursor: pointer;
+                    transition: background 0.12s ease;
+                }
+                .ecm-khata-option:hover {
+                    background: #F1F5F9;
+                }
+                .ecm-khata-option.selected {
+                    background: #EFF6FF;
+                    border-color: #BFDBFE;
+                }
+                .ecm-khata-opt-main {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 1px;
+                }
+                .ecm-khata-opt-name {
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #0F172A;
+                }
+                .ecm-khata-opt-mobile {
+                    font-size: 11.5px;
+                    color: #64748B;
+                    font-weight: 500;
+                }
+                .ecm-khata-opt-due {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                .ecm-due-label {
+                    font-size: 11px;
+                    color: #64748B;
+                }
+                .ecm-due-amt {
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #B45309;
+                }
+                .ecm-check-icon {
+                    color: #1E6BFF;
+                }
+                .ecm-add-new-option {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    color: #1E6BFF;
+                    font-size: 12px;
+                    font-weight: 700;
+                    background: white;
+                    border-top: 1px solid #E2E8F0;
+                    border-bottom: none;
+                }
+                .ecm-add-new-option:hover {
+                    background: #EFF6FF;
+                }
+                .ecm-khata-empty {
+                    padding: 14px;
+                    text-align: center;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .ecm-khata-empty p {
+                    margin: 0;
+                    font-size: 12px;
+                    color: #64748B;
+                }
+                .ecm-btn-add-new-khata {
+                    height: 30px;
+                    padding: 0 12px;
+                    background: #1E6BFF;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 11.5px;
+                    font-weight: 700;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    cursor: pointer;
+                }
+                .ecm-selected-khata-summary {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    padding: 8px 12px;
+                    background: #EFF6FF;
+                    border: 1px solid #BFDBFE;
+                    border-radius: 8px;
+                }
+                .ecm-sel-label {
+                    font-size: 10.5px;
+                    font-weight: 700;
+                    color: #1E40AF;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                }
+                .ecm-sel-body {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                .ecm-sel-avatar {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 50%;
+                    background: #1E6BFF;
+                    color: white;
+                    font-weight: 800;
+                    font-size: 12px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+                .ecm-sel-info {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 1px;
+                }
+                .ecm-sel-info strong {
+                    font-size: 12.5px;
+                    color: #1E3A8A;
+                }
+                .ecm-sel-info span {
+                    font-size: 11px;
+                    color: #3B82F6;
+                }
                 
                 /* Header */
                 .sales-header-v2 { display: flex; flex-direction: column; gap: 20px; }

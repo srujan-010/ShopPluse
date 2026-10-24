@@ -1049,6 +1049,16 @@ export const CompactInvoiceSheet = ({
     // Apply dynamic print styles whenever format or bill2 changes
     useEffect(() => {
         applyPrintPageStyles(activeFormat, { hasSecondBill: Boolean(bill2) });
+        if (typeof document !== 'undefined') {
+            document.body.classList.add('has-invoice-open');
+            document.body.setAttribute('data-invoice-modal-open', 'true');
+        }
+        return () => {
+            if (typeof document !== 'undefined') {
+                document.body.classList.remove('has-invoice-open');
+                document.body.removeAttribute('data-invoice-modal-open');
+            }
+        };
     }, [activeFormat, bill2]);
 
     // Format 1: Full A4
@@ -1179,6 +1189,15 @@ export const CompactInvoiceSheet = ({
                     slotNumber={1}
                     isSingleHalf={true}
                 />
+
+                {/* Scissor cut guide at the bottom boundary of the top half */}
+                <div className="half-a4-cut-divider cis-single-cut-divider">
+                    <Scissors size={14} className="cis-scissors-icon" />
+                    <span className="cis-cut-line"></span>
+                    <span className="cis-cut-label">Cut Along This Line (Half-A4)</span>
+                    <span className="cis-cut-line"></span>
+                    <Scissors size={14} className="cis-scissors-icon right" />
+                </div>
             </div>
         </div>
     );

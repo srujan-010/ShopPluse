@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
     Search, 
     Calendar, 
@@ -862,90 +863,84 @@ const GovSalesLogPage = () => {
             )}
 
             {/* Standard Invoice Preview Overlay (Matching Sales Log) */}
-            <AnimatePresence>
-                {isInvoiceOpen && (
-                    <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        className="invoice-preview-screen"
-                    >
-                        <div className="ips-top-bar no-print">
-                            <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
-                                <ChevronLeft size={20} />
-                                <span>Back</span>
-                            </button>
-                            <div className="ips-title-area">
-                                <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
-                                    View Bill
-                                </h2>
-                                <div style={{ marginTop: '4px' }}>
-                                    <PrintFormatSelector 
-                                        value={activePrintFormat}
-                                        onChange={(fmt) => setPrintFormatOverride(fmt)}
-                                        savedDefault={shop?.defaultPrintFormat || 'full_a4'}
-                                        shopId={shopId || shop?._id}
-                                        onShopUpdate={(updated) => {
-                                            setShop(updated);
-                                            setPrintFormatOverride(null);
-                                        }}
-                                        mode="pills"
-                                        showPrinterTip={false}
-                                    />
-                                </div>
-                            </div>
-                            <div style={{ width: 60 }} />
-                        </div>
-
-                        {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
-                            <div className="ips-printer-tip-bar no-print">
-                                <Info size={14} />
-                                <span>
-                                    <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
-                                </span>
-                            </div>
-                        )}
-
-                        <div className="ips-content">
-                            {!selectedSaleForInvoice ? (
-                                <div className="ips-error">Bill details could not be found.</div>
-                            ) : (
-                                <CompactInvoiceSheet 
-                                    bill1={selectedSaleForInvoice}
-                                    bill2={secondSaleForInvoice}
-                                    shop={shop}
-                                    products={products}
-                                    format={activePrintFormat}
-                                    availableBills={sales}
-                                    onSelectSecondBill={(second) => setSecondSaleForInvoice(second)}
-                                    onRemoveSecondBill={() => setSecondSaleForInvoice(null)}
+            {isInvoiceOpen && typeof document !== 'undefined' && createPortal(
+                <div className="invoice-preview-screen">
+                    <div className="ips-top-bar no-print">
+                        <button className="ips-back-btn" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
+                            <ChevronLeft size={20} />
+                            <span>Back</span>
+                        </button>
+                        <div className="ips-title-area">
+                            <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#071B44' }}>
+                                View Bill
+                            </h2>
+                            <div style={{ marginTop: '4px' }}>
+                                <PrintFormatSelector 
+                                    value={activePrintFormat}
+                                    onChange={(fmt) => setPrintFormatOverride(fmt)}
+                                    savedDefault={shop?.defaultPrintFormat || 'full_a4'}
+                                    shopId={shopId || shop?._id}
+                                    onShopUpdate={(updated) => {
+                                        setShop(updated);
+                                        setPrintFormatOverride(null);
+                                    }}
+                                    mode="pills"
+                                    showPrinterTip={false}
                                 />
-                            )}
+                            </div>
                         </div>
+                        <div style={{ width: 60 }} />
+                    </div>
 
-                        <div className="ips-actions-bar no-print">
-                            <button className="ips-btn ips-wa" onClick={() => handleShareWhatsApp()}>
-                                WhatsApp
-                            </button>
-                            <button className="ips-btn ips-pdf" onClick={() => handleDownloadPDF()}>
-                                Download PDF {secondSaleForInvoice && activePrintFormat === 'half_a4' ? '(2-on-1)' : ''}
-                            </button>
-                            <button 
-                                className="ips-btn ips-print" 
-                                onClick={() => {
-                                    applyPrintPageStyles(activePrintFormat, { hasSecondBill: Boolean(secondSaleForInvoice) });
-                                    window.print();
-                                }}
-                            >
-                                Print ({getFormatOption(activePrintFormat).name})
-                            </button>
-                            <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
-                                Close
-                            </button>
+                    {(activePrintFormat === 'thermal_58' || activePrintFormat === 'thermal_80') && (
+                        <div className="ips-printer-tip-bar no-print">
+                            <Info size={14} />
+                            <span>
+                                <strong>Thermal Print Notice:</strong> In the browser print dialog, set Paper Size to {activePrintFormat === 'thermal_58' ? '58mm Roll' : '80mm Roll'} and Margins to None/Minimum.
+                            </span>
                         </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    )}
+
+                    <div className="ips-content">
+                        {!selectedSaleForInvoice ? (
+                            <div className="ips-error">Bill details could not be found.</div>
+                        ) : (
+                            <CompactInvoiceSheet 
+                                bill1={selectedSaleForInvoice}
+                                bill2={secondSaleForInvoice}
+                                shop={shop}
+                                products={products}
+                                format={activePrintFormat}
+                                availableBills={sales}
+                                onSelectSecondBill={(second) => setSecondSaleForInvoice(second)}
+                                onRemoveSecondBill={() => setSecondSaleForInvoice(null)}
+                            />
+                        )}
+                    </div>
+
+                    <div className="ips-actions-bar no-print">
+                        <button className="ips-btn ips-wa" onClick={() => handleShareWhatsApp()}>
+                            WhatsApp
+                        </button>
+                        <button className="ips-btn ips-pdf" onClick={() => handleDownloadPDF()}>
+                            Download PDF {secondSaleForInvoice && activePrintFormat === 'half_a4' ? '(2-on-1)' : ''}
+                        </button>
+                        <button 
+                            className="ips-btn ips-print" 
+                            onClick={() => {
+                                applyPrintPageStyles(activePrintFormat, { hasSecondBill: Boolean(secondSaleForInvoice) });
+                                window.print();
+                            }}
+                        >
+                            Print ({getFormatOption(activePrintFormat).name})
+                        </button>
+                        <button className="ips-btn ips-close" onClick={() => { setIsInvoiceOpen(false); setSecondSaleForInvoice(null); setPrintFormatOverride(null); }}>
+                            Close
+                        </button>
+                    </div>
+                </div>,
+                document.body
+            )}
 
             {/* Historical Audit & Reconcile Modal */}
             <AnimatePresence>
@@ -1672,32 +1667,7 @@ const GovSalesLogPage = () => {
                 .ips-close { background: white; color: #344054; border: 1.5px solid #D0D5DD; }
 
                 @media print {
-                    .ips-top-bar, .ips-actions-bar {
-                        display: none !important;
-                    }
-                    .invoice-preview-screen {
-                        position: absolute;
-                        inset: 0;
-                        background: white;
-                    }
-                    .ips-content {
-                        background: white;
-                        padding: 0;
-                        overflow: visible;
-                    }
-                    .printable-invoice-sheet {
-                        box-shadow: none;
-                        border: none;
-                        padding: 0;
-                        max-width: 100%;
-                        min-height: auto;
-                        border-radius: 0;
-                        font-family: 'Courier New', Courier, monospace;
-                    }
-                    .pis-items-table-v2 {
-                        display: table !important;
-                    }
-                    .pis-items-mobile-list {
+                    .ips-top-bar, .ips-actions-bar, .ips-printer-tip-bar {
                         display: none !important;
                     }
                 }

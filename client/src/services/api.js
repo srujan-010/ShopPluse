@@ -1139,6 +1139,30 @@ export const saleService = {
             console.error('saleService.processExchange failed:', err);
             throw err;
         }
+    },
+    updateCustomer: async (id, customerName, customerMobile, paymentMethod, khataCustomerId, isNewKhataCustomer) => {
+        try {
+            let payload = {};
+            if (typeof customerName === 'object' && customerName !== null) {
+                payload = customerName;
+            } else {
+                payload = { 
+                    customerName, 
+                    customerMobile, 
+                    paymentMethod, 
+                    khataCustomerId, 
+                    isNewKhataCustomer 
+                };
+            }
+            const res = await api.put(`/api/sales/${id}/customer`, payload);
+            if (res.data?.data) {
+                await offlineDB.saveSale(res.data.data).catch(() => {});
+            }
+            return res;
+        } catch (err) {
+            console.error('saleService.updateCustomer failed:', err);
+            throw err;
+        }
     }
 };
 
@@ -1174,6 +1198,18 @@ export const khataService = {
             return await api.post('/api/khata/sale', { shopId, customerName, mobile, amount, note });
         } catch (err) {
             console.error('khataService.addSale failed:', err);
+            throw err;
+        }
+    },
+    updateCustomer: async (id, customerName, mobile) => {
+        try {
+            const res = await api.put(`/api/khata/${id}`, { customerName, mobile });
+            if (res?.data?.data) {
+                await offlineDB.saveKhata(res.data.data);
+            }
+            return res;
+        } catch (err) {
+            console.error('khataService.updateCustomer failed:', err);
             throw err;
         }
     }

@@ -34,7 +34,7 @@ export const PRINT_FORMAT_OPTIONS = [
         description: 'Eco-saver layout rendering a genuine Half A4 invoice. Optionally pair another bill to print 2 bills on one A4 sheet with a scissor cutting guide.',
         badge: 'Half A4',
         category: 'A4 Paper',
-        printerTip: 'In the browser print dialog, select Paper Size: A5 (Landscape) or 210×148mm (Half A4), Margins: Minimum.',
+        printerTip: 'In the browser print dialog, select Destination: Your A4 Printer, Paper Size: A4, Margins: Minimum or None.',
     },
     {
         id: 'thermal_58',
@@ -72,11 +72,9 @@ export const applyPrintPageStyles = (formatId, options = {}) => {
     let pageCss = '';
     switch (formatId) {
         case 'half_a4':
-            if (options?.hasSecondBill) {
-                pageCss = '@page { size: A4 portrait; margin: 4mm 6mm; }';
-            } else {
-                pageCss = '@page { size: 210mm 148.5mm; margin: 3mm 5mm; }';
-            }
+            // Both single Half-A4 and paired 2-on-1 Half-A4 bills print on standard A4 paper (210 × 297 mm)
+            // Single bill sits in the top half (210 × 148.5 mm), leaving the lower half blank to cut & save paper
+            pageCss = '@page { size: A4 portrait; margin: 4mm 5mm; }';
             break;
         case 'thermal_58':
             pageCss = '@page { size: 58mm auto; margin: 2mm 2mm; }';
@@ -97,7 +95,10 @@ export const applyPrintPageStyles = (formatId, options = {}) => {
         document.head.appendChild(styleTag);
     }
     styleTag.innerHTML = pageCss;
-    document.body.setAttribute('data-print-format', formatId || 'full_a4');
+    document.body?.setAttribute('data-print-format', formatId || 'full_a4');
+    document.body?.setAttribute('data-single-bill', (!options?.hasSecondBill && formatId === 'half_a4') ? 'true' : 'false');
+    document.body?.setAttribute('data-invoice-modal-open', 'true');
+    document.body?.classList?.add?.('has-invoice-open');
 };
 
 export default {

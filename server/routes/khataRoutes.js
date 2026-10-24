@@ -3,7 +3,8 @@ const {
     getKhataCustomers, 
     getKhataDetails, 
     receiveKhataPayment,
-    addKhataSale
+    addKhataSale,
+    updateKhataCustomer
 } = require('../controllers/khataController');
 const { protect } = require('../middleware/auth');
 
@@ -13,6 +14,7 @@ router.use(protect);
 
 router.get('/', getKhataCustomers);
 router.get('/:id', getKhataDetails);
+router.put('/:id', updateKhataCustomer);
 router.post('/:id/pay', receiveKhataPayment);
 router.post('/sale', addKhataSale);
 
